@@ -62,6 +62,7 @@ EXEMPT_CONSTANTS = {
     'knowledge.NOTHING': 'результат инструмента для модели',
     'chat.DUPLICATE': 'результат инструмента для модели',
     'chat.HISTORY_CUT': 'пометка выжимки результата инструмента для модели',
+    'chat.RESULT_IMAGES_NOTE': 'пометка картинок результата инструмента для модели',
     'chat_system.MEMORY_HEAD': 'заголовок памяти для модели',
     'chat_tools.TODO_SAVED': 'результат инструмента для модели',
     'chat_tools.MEMORY_SAVED': 'результат инструмента для модели',

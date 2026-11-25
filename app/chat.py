@@ -244,6 +244,10 @@ REFUSED = "[вложение «{}» не передано: на это сооб�
 UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
 #: пометка вместо картинки сверх предела подключения (`profiles.max_images`): {} — предел
 DROPPED = "[фото убрано из контекста: модель принимает не больше {} картинок на запрос]"
+#: картинки из результатов MCP (спека 2026-11-25 п. 39): вложениями ответа — не больше RESULT_IMAGES_MAX на ответ;
+#: модели, принимающей изображения (`_sees_images`), — сообщением user с пометкой RESULT_IMAGES_NOTE после круга
+RESULT_IMAGES_MAX = 16
+RESULT_IMAGES_NOTE = "[изображения из результата инструмента]"
 #: подключение через Cleaner: вложенные картинки не отправляются (картинки истории — пометкой CLEANER_DROPPED)
 CLEANER_IMAGES = "Через Cleaner картинки не отправляются: уберите вложение-картинку"
 #: пометка вместо картинки истории в ходе через Cleaner (`_max_images` — NO_IMAGES)
@@ -714,6 +718,19 @@ def _max_images(conn: Connection, model: str) -> int:
     """Картинок на запрос хода: подключение через Cleaner — ни одной (NO_IMAGES: картинки истории — пометкой
     CLEANER_DROPPED), иначе предел профиля модели (`profiles.max_images`)."""
     return NO_IMAGES if conn.routed else profiles.max_images(conn, model)
+
+
+def _sees_images(conn: "Connection | None", model: str) -> bool:
+    """Модель хода принимает изображения из результатов инструментов: не через Cleaner (картинки он не очищает) и
+    `vision` у модели — в перечне srvllm (`capabilities.CATALOG_CAPS`) или в паспорте подключения; не известно — нет."""
+    if conn is None or conn.cleaner or conn.routed:
+        return False
+    if conn.kind == "srvllm" and "vision" in capabilities.CATALOG_CAPS.get(model, ()):
+        return True
+    passport = connections.passport_of(conn) or {}
+    return any(isinstance(m, dict) and m.get("id") == model
+               and any(isinstance(c, dict) and c.get("name") == "vision" for c in m.get("caps") or ())
+               for m in passport.get("models") or ())
 
 
 def _refused_turns(rows, model: "str | None") -> set[str]:
@@ -1284,6 +1301,8 @@ class StreamTask:
     part: int | None = None
     part_deadline: float = math.inf
     long: bool = False
+    #: id media картинок результатов MCP идущего круга — модели одним сообщением после всех `tool` (`_flush_images`)
+    round_images: list = field(default_factory=list)
 
     def metrics(self) -> dict:
         """Токены и время ответа — для `_finish` и события `done`."""
@@ -1822,7 +1841,9 @@ class StreamTask:
                     self._protect()
             elif (c.name == "run_part" and self.part is None and not self.builtin_off
                     and chat_tools.parts_offered(self.chat_id)):
+                held, self.round_images = self.round_images, []   # картинки части — в её запросе, не в круге хода
                 step = await chat_parts.run(self, c)
+                self.round_images = held
             elif c.name in chat_tools.NAMES and not self.builtin_off:
                 # событие на каждый шаг встроенного, как у MCP: счётчик вызовов строки состояния «Чата» (п. 16)
                 self.put("tool", {"kind": chat_tools.KIND_OF[c.name], "label": c.name})
@@ -1847,9 +1868,60 @@ class StreamTask:
                 self.known |= web.found_links(step)
             if "error" not in step and step["kind"] != "duplicate":   # ошибка — не результат: повтор исполнится
                 self.seen.add(key)
+            images = step.pop("images", None)       # картинки результата MCP — файлами, не base64 в шаге
+            if images:
+                await self._result_images(step, images)
             self._step(step)
             self.messages.append({"role": "tool", "tool_call_id": c.id, "content": _for_model(step)})
+        await self._flush_images()
         return None
+
+    async def _result_images(self, step: dict, images: list) -> None:
+        """Картинки результата MCP (`mcp_client.Tools.call`, ключ `images`) — вложениями ответа (`attachments`,
+        `<инструмент>-<n>.png`), не больше RESULT_IMAGES_MAX на ответ; негодная — мимо. `step["pictures"]` — сколько
+        сохранено. Модели, что видит картинки (`_sees_images`), id файлов копятся в `round_images`."""
+        saved = 0
+        stem = re.sub(r"[^\w.-]", "_", str(step.get("tool") or "mcp"))[:60]
+        sees = _sees_images(self.conn, self.model)
+        for data, _ in images:
+            have = state.DB.execute("SELECT count(*) FROM attachments WHERE message_id = ?",
+                                    (self.message_id,)).fetchone()[0]
+            if have >= RESULT_IMAGES_MAX:
+                break
+            try:
+                picture = await asyncio.to_thread(normalize_image, base64.b64decode(data, validate=True))
+            except ValueError:                      # не base64 (binascii.Error) или не картинка (UploadError)
+                continue
+            name = f"{stem}-{have + 1}.png"
+            try:
+                media_id = await media.save_async(self.user_id, picture, "image/png", name, thumb=True)
+            except (OSError, media.StorageError) as e:
+                log.warning("чат %s: картинка результата не сохранена (%s)", self.chat_id[:8], type(e).__name__)
+                break
+            state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, chars, created)"
+                             " VALUES (?, ?, ?, 'image', ?, ?, 0, ?)",
+                             (uuid.uuid4().hex, self.user_id, self.message_id, name, media_id, clock.NOW()))
+            saved += 1
+            if sees:
+                self.round_images.append(media_id)
+        step["pictures"] = saved
+        log.info("чат %s: ответ %s — картинок результата %d", self.chat_id[:8], self.message_id[:8], saved)
+
+    async def _flush_images(self) -> None:
+        """Картинки результатов круга (`round_images`) — модели одним сообщением user после всех `tool` круга, в
+        пределах `_max_images`; шара недоступна — картинки мимо, ответ идёт."""
+        if not self.round_images:
+            return
+        ids, self.round_images = self.round_images, []
+        self.messages.append({"role": "user", "content": [{"type": "text", "text": RESULT_IMAGES_NOTE},
+                                                          *({"type": "image_url", "media_id": i} for i in ids)]})
+        try:
+            self.messages = await fill_photos(self.chat_id, self.user_id, self.messages, self.photos)
+        except OSError as e:
+            self.messages.pop()
+            log.warning("чат %s: картинки результата не прочитались (%s)", self.chat_id[:8], type(e).__name__)
+            return
+        _cap_images(self.messages, _max_images(self.conn, self.model))
 
     def _url_refused(self, c: ToolCall, kind: str) -> dict:
         """Шаг-отказ mcp_client.URL_REFUSED вызову со ссылкой в аргументах после защищённого источника."""
@@ -1886,6 +1958,7 @@ class StreamTask:
         r = self.resume
         self.rounds, self.seen = r["rounds"], set(r["seen"])
         self.parts, self.part_round = r.get("parts", 0), r.get("part_round", False)
+        self.round_images = list(r.get("images") or [])   # картинки результатов круга до паузы (`_flush_images`)
         if self.parts > 0:
             chat_parts.extend(self)
         try:

@@ -29,9 +29,10 @@ def tool(name, **extra):
     return {"name": name, "description": f"desc {name}", "inputSchema": {"type": "object"}, **extra}
 
 
-def server(studio, path="/mcp", *, tools=None, instructions=None, prompts=None, hang=False, fail=()):
+def server(studio, path="/mcp", *, tools=None, instructions=None, prompts=None, hang=False, fail=(), results=None):
     """Мок MCP на `path`: вызовы — в возвращаемом списке; `hang` — каждый запрос висит 5 с (настоящих);
-    `fail` — методы, которые один раз отвечают 500; инструмент `gone` отвечает «нет такого инструмента»."""
+    `fail` — методы, которые один раз отвечают 500; инструмент `gone` отвечает «нет такого инструмента»;
+    `results` — результат `tools/call` по имени инструмента (иначе текст `result-<имя>`)."""
     calls, fail = [], list(fail)
     tools = [tool("lookup")] if tools is None else tools
 
@@ -63,6 +64,8 @@ def server(studio, path="/mcp", *, tools=None, instructions=None, prompts=None, 
         elif params.get("name") == "gone":
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"],
                                              "error": {"code": -32602, "message": "Unknown tool: gone"}})
+        elif results and params.get("name") in results:
+            result = results[params["name"]]
         else:
             result = {"content": [{"type": "text", "text": f"result-{params.get('name')}"}]}
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result},

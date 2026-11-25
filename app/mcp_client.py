@@ -21,6 +21,7 @@ import httpx
 
 import access
 import cleaner_route
+import image_upload
 import mcp_sources
 import security
 import state
@@ -576,6 +577,11 @@ TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
 #: заметка хода (шаг `note`, не ошибка): {0} — предел инструментов запроса (`profiles.max_tools`) или списка сервера
 TRIMMED = "Инструментов MCP больше {0} — часть этого сервера не предложена модели"
+#: картинок из результата инструмента (блоки `image`) — во временный ключ шага `images` (chat.StreamTask._result_images)
+RESULT_IMAGES = 4
+RESULT_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
+RESULT_IMAGE_CHARS = (image_upload.MAX_UPLOAD + 2) // 3 * 4     # base64 картинки до image_upload.MAX_UPLOAD
+ONLY_IMAGES = "Инструмент MCP вернул изображение"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 #: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
 #: URL_RE — явные адреса: любая схема `x://`, `www.`, адрес без схемы `//host`, IPv4 (и с портом или путём:
@@ -815,6 +821,12 @@ class Tools:
                 mcp_sources.forget(session.sid)
             if result.get("structuredContent") is not None:
                 text += "\n" + json.dumps(result["structuredContent"], ensure_ascii=True)
+            images = [(block["data"], block["mimeType"]) for block in result.get("content", [])
+                      if isinstance(block, dict) and block.get("type") == "image" and isinstance(block.get("data"), str)
+                      and block.get("mimeType") in RESULT_IMAGE_TYPES and len(block["data"]) <= RESULT_IMAGE_CHARS]
+            images = [] if result.get("isError") else images[:RESULT_IMAGES]
+            if images and not text:
+                text = ONLY_IMAGES
             if not text:
                 text = "Инструмент MCP вернул результат без текста"
             step["error" if result.get("isError") else "text"] = text[:60_000]
@@ -828,6 +840,8 @@ class Tools:
                     files = [entry]
             if files:                         # файлы под ответом: маршрут скачивания сверит сервер и отпечаток
                 step |= {"sid": session.sid, "stamp": mcp_sources.stamp(session.stamp), "files": files}
+            if images:                        # base64 — не в шаг: ход снимет ключ до записи (_result_images)
+                step["images"] = images
         except HTTPException as exc:
             step["error"] = exc.detail["message"]
         except (ValueError, TypeError):

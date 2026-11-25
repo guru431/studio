@@ -137,7 +137,9 @@ def _candidates(task) -> list[dict]:
     for r in state.DB.execute(
             "SELECT a.id, a.name, a.media_id, a.message_id, m.mime, m.size FROM attachments a"
             " JOIN messages g ON g.id = a.message_id JOIN media m ON m.id = a.media_id AND m.user_id = a.user_id"
-            " WHERE g.chat_id = ? AND a.user_id = ? ORDER BY a.created DESC, a.rowid DESC",
+            " WHERE g.chat_id = ? AND a.user_id = ?"
+            " AND g.role = 'user'"           # картинки результатов MCP (вложения ответа) серверам не уходят
+            " ORDER BY a.created DESC, a.rowid DESC",
             (task.chat_id, task.user_id)):
         if r["message_id"] in refused:
             continue

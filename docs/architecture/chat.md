@@ -428,6 +428,21 @@ Studio проксирует файлы через исходное подклю�
 и текущим настройкам подключения. Раздел показывает текст и компактные встроенные
 медиа MCP. Результаты доступны в текущей вкладке Studio в пределах срока хранения у MCP-сервера.
 
+**Картинки из результатов MCP** (спека 2026-11-25-studio-skills-status-local-models, п. 39). `mcp_client.Tools.call`
+берёт из результата (не ошибки) блоки `image` типов `mcp_client.RESULT_IMAGE_TYPES` не длиннее
+`mcp_client.RESULT_IMAGE_CHARS` знаков base64, первые `mcp_client.RESULT_IMAGES` (4), во временный ключ шага `images`;
+результат из одних картинок — текст `mcp_client.ONLY_IMAGES`. `chat.StreamTask._calls` снимает ключ до записи шага
+(base64 — ни в `messages.tools`, ни в журнал) и зовёт `chat.StreamTask._result_images`: `normalize_image` в потоке
+(негодная — мимо), файл PNG с миниатюрой и строка `attachments` ответа (`kind` image, имя `<инструмент>-<n>.png`) — не
+больше `chat.RESULT_IMAGES_MAX` (16) на ответ; шаг `mcp` получает `pictures`. Под ответом они — его `attachments`.
+Модели, что видит картинки (`chat._sees_images`: не через Cleaner, `vision` в `capabilities.CATALOG_CAPS` srvllm или в
+паспорте подключения; не известно — нет), id файлов копятся в `round_images` и после всех `tool` круга уходят одним
+сообщением user с пометкой `chat.RESULT_IMAGES_NOTE` (`chat.StreamTask._flush_images`: `fill_photos`, затем
+`_cap_images` по `_max_images`; шара недоступна — картинки мимо, ответ идёт). Пауза хранит их в payload (`images`),
+продолжение возвращает. Следующим ходам они не идут: `compose` читает вложения только у сообщений пользователя, и
+`mcp_files._candidates` серверам MCP вложения ответов не отдаёт. Часть (`run_part`) копит свои картинки отдельно от
+круга хода. Журнал — `чат …: ответ … — картинок результата N`.
+
 ## Пауза хода: подтверждение и вопросы (спека 2026-11-21-studio-source-capabilities-design, п. 5 и 17, шаг схемы 58)
 
 - **Встроенные инструменты** — `chat_tools.specs`: в каждом ходе через сервер, кроме Cleaner, рядом с «Интернетом»

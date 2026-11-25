@@ -309,6 +309,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Неверный список выключенных MCP": "Invalid list of disabled MCP connections",
   "Неверные аргументы инструмента MCP": "Invalid MCP tool arguments",
   "Инструмент MCP вернул результат без текста": "MCP tool returned a result without text",
+  "Инструмент MCP вернул изображение": "MCP tool returned an image",
   "Неверные аргументы или результат MCP": "Invalid MCP arguments or result",
   "Такого раздела MCP нет": "No such MCP section",
   "Результат MCP недоступен": "MCP result unavailable",
