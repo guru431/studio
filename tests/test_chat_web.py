@@ -553,6 +553,15 @@ def test_last_round_of_only_calls_is_an_error_not_an_empty_answer(studio):
     assert answer["status"] == "error" and len(steps_of(answer["id"])) == chat.TOOL_ROUNDS
 
 
+def test_tool_calls_ending_without_calls_or_text_is_an_error(studio):
+    """`finish_reason: tool_calls` без вызовов и без текста — ошибка NO_ANSWER, а не пустой готовый ответ."""
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"text": [], "ending": "tool_calls"}]
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("error", {"message": chat.NO_ANSWER})
+    assert len(studio.gw.chat_requests) == 1 and messages(studio, cid)[1]["status"] == "error"
+
+
 def test_stop_during_a_tool_keeps_the_done_steps(studio, monkeypatch):
     killed = []
 

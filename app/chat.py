@@ -2069,10 +2069,12 @@ class StreamTask:
         """Ответ модели до конца; итог — слова ошибки или None. Конец — `[DONE]` или `finish_reason`:
         поток, кончившийся без них (обрыв, HTML с кодом 200, пустой ответ), — ошибка, а не готовый
         ответ. Предел длины модели допускает ограниченное продолжение. При исчерпании попыток, объёма (ANSWER_MAX)
-        или срока (STREAM_TOTAL_SEC) прочитанное сохраняется с пометкой. С `tools` — круги: модель кончила вызовами
-        (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после tool_rounds кругов
-        запрос без tools. Срок — один на весь ответ: проверяется и перед каждым кругом и вызовом. Последний
-        круг кончился вызовами, которые уже не исполнялись, без текста — ошибка NO_ANSWER, а не пустой ответ."""
+        или срока (STREAM_TOTAL_SEC) прочитанное сохраняется с пометкой. С `tools` — круги: круг принёс
+        структурные вызовы и кончился любым признаком, кроме `length` и обрыва (None), — студия их исполняет и
+        зовёт модель снова; текстовый `<tool_call>` разбирается только у локальной модели и не через Cleaner; после
+        tool_rounds кругов запрос без tools. Срок — один на весь ответ: проверяется и перед каждым кругом и вызовом.
+        Последний круг кончился вызовами, которые уже не исполнялись, или `finish_reason: tool_calls` без вызовов —
+        и без текста: ошибка NO_ANSWER, а не пустой ответ."""
         if self.conn.cleaner:
             try:
                 async with asyncio.timeout(STREAM_TOTAL_SEC):
@@ -2199,7 +2201,7 @@ class StreamTask:
             return CUT_OFF
         if ending == "stop" and retries and not self.content.strip():
             return NO_ANSWER
-        if calls and ending != "length" and not text.strip():
+        if (calls or ending == "tool_calls") and ending != "length" and not text.strip():
             return NO_ANSWER
         if ending == "length":
             self.content += CUT_LENGTH
