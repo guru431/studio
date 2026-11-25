@@ -17,7 +17,7 @@ def test_summary_mark_stands_after_the_summarized_part_and_shows_the_text(browse
     login = f"summary-{width}"
     live.add_user(login)
     mobile = width == 320
-    live.gw.chat_script = [["Ответ-1"], ["Ответ-2"], ["Итог первого хода."]]
+    live.gw.chat_script = [["Ответ-1"], ["Ответ-2"], ["Итог первого хода."], ["Ответ-3"], ["Итог-2"], ["Ответ-4"]]
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
             ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(mobile),
@@ -37,7 +37,21 @@ def test_summary_mark_stands_after_the_summarized_part_and_shows_the_text(browse
             ("eval", "fits", f"{NO_OVERFLOW} && {MARK}.getBoundingClientRect().right <= innerWidth"),
             ("click", "#messages .msg-summary-show"),
             ("wait", "document.querySelector('#chat-summary-dialog[open] .summary-text')"),
-            ("eval", "text", "document.querySelector('#chat-summary-dialog .summary-text').textContent")],
+            ("eval", "text", "document.querySelector('#chat-summary-dialog .summary-text').textContent"),
+            ("click", "#chat-summary-dialog .dialog-close"),
+            ("wait", "!document.querySelector('#chat-summary-dialog')"),
+            # удалён ход внутри пересказа — пересказ сброшен, отметка уходит без перезагрузки страницы
+            ("click", "#messages .msg.user:first-child .msg-delete-turn"), ("click", ".msg-delete-confirm"),
+            ("wait", f"!{MARK} && {ANSWERS} === 1"),
+            ("type", "#chat-input", "Вопрос-3"), ("press", "Enter"),
+            ("wait", f"{ANSWERED} && {ANSWERS} === 2"),
+            ("eval", "compact2", f"""(async () => {{ const m = {API};
+              const out = await m.api('POST', '/api/chats/' + location.hash.split('/')[2] + '/compact');
+              return out.summary_upto; }})()"""),
+            # пересказ сохранён, пока диалог открыт: отметку приносит перечитывание после конца следующего хода
+            ("type", "#chat-input", "Вопрос-4"), ("press", "Enter"),
+            ("wait", f"{ANSWERED} && {ANSWERS} === 3 && {MARK}"),
+            ("eval", "before2", f"{MARK}.previousElementSibling.dataset.id")],
             width=width, mobile=mobile)
     finally:
         live.gw.chat_script = []
@@ -47,3 +61,4 @@ def test_summary_mark_stands_after_the_summarized_part_and_shows_the_text(browse
     assert values["before"] == values["compact"]           # отметка — сразу за последним пересказанным
     assert values["fits"] is True              # NO_OVERFLOW и правый край .msg-summary не дальше innerWidth
     assert values["text"] == "Итог первого хода." and not problems(r), r.get("log")
+    assert values["before2"] == values["compact2"]
