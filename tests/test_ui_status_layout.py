@@ -63,7 +63,7 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
             page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
             more = page.locator('#code-status-more')
             if width == 600:
-                assert page.locator('.code-chat-actions > button:not([hidden])').count() == 2
+                assert page.locator('.code-chat-actions > button:not([hidden])').count() == 3   # с лупой поиска (code-find.js)
             if more.is_visible():
                 more.tap() if width < 760 and engine != 'firefox' else more.click()
                 panel = page.locator('#code-status-menu:popover-open')
