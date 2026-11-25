@@ -172,6 +172,55 @@ def test_queue_pauses_when_the_send_is_uncertain(browser, live):           # Rev
     assert not problems(r), problems(r)
 
 
+def test_cleaner_preview_return_pauses_the_queue_with_words(browser, live):
+    """Диалог с предпросмотром Cleaner: сообщение очереди открывает «Что получит модель»; «Вернуться» — очередь на
+    паузе со словами, сообщение остаётся в очереди, ход не уходит. Признак `cleaner` диалога и предпросмотр — подменой
+    ответов в странице (сам Cleaner здесь не нужен)."""
+    live.add_user("queue-cleaner")
+    before = len(live.gw.chat_requests)
+    live.gw.chat_hold = held_until("go-cleaner")
+    fake = """(() => { const real = window.fetch;
+      window.fetch = async (url, opts) => {
+        const path = String(url);
+        if (window.fakeCleaner && /\\/cleaner-preview$/.test(path)) {
+          window.previews = (window.previews || 0) + 1;
+          return new Response(JSON.stringify({ messages: [{ role: 'user', content: 'Второй' }], counts: {},
+            deliverable: true, ticket: 't', destination: null }), { headers: { 'content-type': 'application/json' } });
+        }
+        const response = await real(url, opts);
+        if (window.fakeCleaner && (!opts?.method || opts.method === 'GET') && /\\/api\\/chats\\/[0-9a-f]+$/.test(path)
+            && response.ok) {
+          const data = await response.json();
+          data.chat.cleaner = true;
+          return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
+        }
+        return response; };
+      return true; })()"""
+    resume = "[...document.querySelectorAll('#code-queue > button')].find(b => b.textContent === 'Продолжить очередь')"
+    back = ("[...document.querySelectorAll('#cleaner-preview-dialog button')]"
+            ".find(b => b.textContent === 'Вернуться')")
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-cleaner"),
+            ("eval", "fake", fake),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("type", "#chat-input", "Второй"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            ("eval", "on", "window.fakeCleaner = true"),
+            release("go-cleaner"),
+            ("wait", "document.querySelector('#cleaner-preview-dialog[open]')"),
+            ("eval", "back", f"{back}.click(); true"),
+            ("wait", f"{resume} && {ERROR}"),
+            pause(500),
+            ("eval", "paused", f"[{QUEUED}, {ERROR}, {USERS}, window.previews]")])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    words = "Сообщение из очереди не отправлено — «Продолжить очередь» снова покажет, что получит модель"
+    assert v["paused"] == [["Второй"], words, ["Первый"], 1]
+    assert len(live.gw.chat_requests) == before + 1
+    assert not problems(r), problems(r)
+
+
 def test_uncertain_message_returns_to_the_draft_with_its_receipt(browser, live):   # Review Focus 4
     """Закрытие страницы при сообщении очереди с неизвестным исходом: текст — в черновик с квитанцией (id сообщения);
     после перезагрузки Enter отправляет его тем же `request_id` — сервер принимает его один раз."""

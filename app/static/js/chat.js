@@ -2851,6 +2851,10 @@ function build(view, ctx) {
           dialog.addEventListener('close', () => resolve(accepted ? shown.ticket : null), { once: true });
         });
       } while (retry && chatId === id);
+      // «Вернуться» у сообщения очереди: очередь встаёт на паузу (chat-queue.js) — со словами, почему
+      if (queuing && !cleanerTicket && chatId === id) {
+        notice.textContent = tr("Сообщение из очереди не отправлено — «Продолжить очередь» снова покажет, что получит модель");
+      }
       if (!cleanerTicket || chatId !== id || (!regenerate && input.value !== text)) return;
     }
     const before = chat.messages;
