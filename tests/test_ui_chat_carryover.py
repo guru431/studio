@@ -270,6 +270,33 @@ def test_closed_page_returns_the_queue_to_the_draft(browser, live):        # Rev
     assert not problems(r), problems(r)
 
 
+def test_locked_page_keeps_the_queue_out_of_the_drafts(browser, live):
+    """Блокировка стирает черновики: закрытие запертой страницы очередь в хранилище не пишет; после отпирания (с
+    <html> снят `shrouded`) — снова пишет."""
+    live.add_user("queue-lock")
+    live.gw.chat_hold = held_until("go-lock")
+    hide = ("eval", "hide", "window.dispatchEvent(new Event('pagehide')); true")
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-lock"),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("type", "#chat-input", "Тайное"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            ("eval", "lock", "document.dispatchEvent(new Event('studio-locked'));"
+                             " document.documentElement.classList.add('shrouded'); true"),
+            hide, pause(100),
+            ("eval", "locked", f"[{draft_of(CHAT)}, sessionStorage.getItem('studio-chat-drafts')]"),
+            ("eval", "unlock", "document.documentElement.classList.remove('shrouded'); true"), pause(100),
+            ("type", "#chat-input", "Открытое"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            hide,
+            ("eval", "opened", draft_of(CHAT)),
+            release("go-lock"), ("wait", ANSWERED)])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["locked"] == [None, None] and v["opened"] == "Открытое"
+    assert not problems(r), problems(r)
+
+
 def test_draft_stays_with_its_dialog(browser, live):
     live.add_user("drafts")
     def to(expr):

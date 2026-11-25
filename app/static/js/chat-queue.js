@@ -15,6 +15,14 @@ import { queueView } from './code-queue.js';
 export const QUEUE_MAX = 5;
 const queues = new Map();        // id диалога → { items: [{ id, text, version, sending, uncertain }], paused }
 let current = null;              // вид на экране: { paint() }
+/* Блокировка стирает черновики (dialog-drafts.js): до отпирания (с <html> снят `shrouded`, lock.js) очередь в
+ * хранилище не пишется — она остаётся в памяти и уходит после отпирания, а закрытие запертой страницы её не сохраняет,
+ * как и текст поля на экране. */
+let locked = false;
+document.addEventListener('studio-locked', () => { locked = true; });
+new MutationObserver(() => {
+  if (!document.documentElement.classList.contains('shrouded')) locked = false;
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
 function entryOf(id) {
   if (!queues.has(id)) queues.set(id, { items: [], paused: false });
@@ -28,7 +36,7 @@ function forget(id) {
 
 window.addEventListener('pagehide', () => {
   const drafts = draftStore(CHAT_DRAFTS);
-  for (const [id, entry] of queues) {
+  for (const [id, entry] of locked ? [] : queues) {
     // уходящее (`sending`) не возвращаем: сервер мог его принять — в черновике оно ушло бы второй раз
     const kept = entry.items.filter((item) => !item.sending);
     if (!kept.length) continue;
