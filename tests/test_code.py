@@ -103,6 +103,8 @@ BODIES = {
     ("PUT", "/api/code/agents/1/projects/1/files/upload"): None,
     ("POST", "/api/code/agents/1/projects/1/files/download"): {"path": "a.txt"},
     ("POST", "/api/code/agents/1/projects/1/files/search"): {"path": "", "query": "a"},
+    ("GET", "/api/code/agents/1/projects/1/skills"): None,
+    ("POST", "/api/code/agents/1/projects/1/skills/text"): {"name": "a", "folder": ".agents/skills"},
     ("POST", "/api/code/agents/1/projects/1/read"): {"path": ""},
     ("PUT", "/api/code/agents/1/projects/1/file"): {"path": "a", "text": "", "version": "v"},
     ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},

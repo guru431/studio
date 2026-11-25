@@ -867,6 +867,54 @@ async def file_search(aid: int, pid: str, body: FileSearch, request: Request):
     return {"items": items, "complete": data.get("complete") is True, "more": data.get("more") is True}
 
 
+#: имя навыка проекта (`skills.NAME` моста), папки (`skills.FOLDERS`), предел текста — `limits.SKILL_MAX` моста
+SKILL_NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+SKILL_FOLDERS = (".agents/skills", ".claude/skills")
+SKILL_TEXT_MAX = 64 * 1024
+SKILLS_MAX = 100                 # строк списка навыков проекта
+SKILL_DESCRIPTION_MAX = 200
+
+
+@router.get("/agents/{aid}/projects/{pid}/skills")
+async def project_skills(aid: int, pid: str, request: Request):
+    """Навыки папки проекта без текста (мост 0.48.0, `hello.skills`): имя, описание, папка. Старому мосту просьба
+    не уходит — 409 `unsupported`; участнику и наблюдателю — как чтение проекта. В журнал — только код отказа."""
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "skills")
+    data = await ask(request, aid, "skills", project=pid)
+    items = []
+    for row in data.get("items") if isinstance(data.get("items"), list) else ():
+        if (not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                or re.fullmatch(SKILL_NAME, row["name"]) is None or row.get("folder") not in SKILL_FOLDERS):
+            continue
+        description = row.get("description")
+        items.append({"name": row["name"], "folder": row["folder"],
+                      "description": description[:SKILL_DESCRIPTION_MAX] if isinstance(description, str) else ""})
+    return {"items": items[:SKILLS_MAX], "truncated": data.get("truncated") is True or len(items) > SKILLS_MAX}
+
+
+class ProjectSkill(BaseModel):
+    name: str = Field(pattern=SKILL_NAME)
+    folder: Literal[".agents/skills", ".claude/skills"]
+
+
+@router.post("/agents/{aid}/projects/{pid}/skills/text")
+async def project_skill_text(aid: int, pid: str, body: ProjectSkill, request: Request):
+    """Текст навыка проекта без заголовка: имя — телом POST (строку запроса пишет журнал Apache); текст длиннее
+    `SKILL_TEXT_MAX` — 502 `bridge`. Текст сервер передаёт странице и не хранит."""
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "skills")
+    data = await ask(request, aid, "skill", project=pid, name=body.name, folder=body.folder)
+    text = data.get("text")
+    if not isinstance(text, str) or len(text) > SKILL_TEXT_MAX:
+        error = _refuse(502, "bridge", ODD)
+        _warn(request, aid, "skill", error)
+        raise error
+    return {"text": text}
+
+
 @router.post("/agents/{aid}/projects/{pid}/search")
 async def chat_search(aid: int, pid: str, body: DiscoveryQuery, request: Request):
     own_agent(request, aid)
