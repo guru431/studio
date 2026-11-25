@@ -94,6 +94,48 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
     assert not problems(result), problems(result)
 
 
+def test_separate_copy_takes_the_skill_and_the_quote(browser, live):
+    """«Запустить в отдельной копии»: навык и цитата уходят в ход копии, как при отправке здесь; чип снят."""
+    login = "code-skills-copy"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Копия", messages=[
+        {"id": "m-0", "role": "user", "text": "Что в проекте?", "steps": [], "time": 0},
+        {"id": "m-1", "role": "assistant", "text": "Три файла.", "steps": [], "time": 0}])})
+    machine.worktrees = True
+    machine.script = [{"k": "text", "text": "Принято"}, {"k": "done", "status": "done"}]
+    aid, server = code_online(live, login, machine)
+    quote = """(() => { const m = [...document.querySelectorAll('#code-feed .code-msg.assistant')].at(-1);
+      const b = m.getBoundingClientRect(); m.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true,
+        clientX: b.left + 10, clientY: b.top + 10 }));
+      [...document.querySelectorAll('#msg-menu [role=menuitem]')].find((i) => i.textContent === 'Цитировать').click();
+      return !document.querySelector('#code-quote').hidden; })()"""
+    source = f"#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "mine", MINE),
+            *code_chat(aid, CODE_CHAT_A),
+            ("wait", "document.querySelector('#code-feed').textContent.includes('Три файла.')"),
+            ("eval", "quoted", quote), *pick("/Мой"), ("type", "#code-text", "Почини"),
+            ("click", "#code-branch-actions"), ("click", "#code-busy-copy"),
+            ("wait", f"!location.hash.includes('{pid('alpha')}/') && {IDLE}"
+                     " && document.querySelector('#code-feed')?.textContent.includes('Принято')"),
+            ("eval", "copy", "[...document.querySelectorAll('#code-feed .code-msg.user')].map(m =>"
+                             " [m.querySelector('.code-user-skill')?.textContent, m.querySelector('.code-user-text').textContent])"),
+            ("eval", "back", f"location.hash = '{source}'"),
+            ("wait", f"location.hash === '{source}' && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("eval", "left", f"[!{CHIP} || {CHIP}.hidden, document.querySelector('#code-quote').hidden,"
+                             " document.querySelector('#code-text').value]")], width=1280)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    [turn] = code_requests(machine, "turn")
+    assert turn["text"] == "Текст навыка\n\n> Три файла.\n\nПочини"
+    assert turn["project"] != pid("alpha")
+    assert values["copy"] == [["Навык: Мой навык", "> Три файла.\n\nПочини"]]
+    assert values["left"] == [True, True, ""]
+    assert not problems(result), problems(result)
+
+
 def test_old_bridge_has_library_skills_only(browser, live):                       # Review Focus 1
     login = "code-skills-old-bridge"
     live.add_user(login)

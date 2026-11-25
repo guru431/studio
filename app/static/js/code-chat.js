@@ -386,15 +386,26 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let branchPopup = null;
   let copying = false;
   const othersRunning = () => codeActivity(aid).filter((item) => item.project === pid && item.chat !== chat && item.running).length;
+  /** Задание копии — как при отправке здесь: цитата в начале поля, текст навыка (из этого проекта) перед ним; лента
+   * копии узнаёт навык по `skills.label` (тексты навыков — на модуль) и показывает «Навык: имя». */
   async function runInCopy() {
-    const value = text.value;
-    if (!value.trim() || images.length || busyCopy.disabled) return;
+    if (!text.value.trim() || images.length || busyCopy.disabled) return;
+    quote.fold();
+    const typed = text.value;
     copying = true;
     updateControls();
     showStatus(tr("Создаю отдельную копию…"), false);
     try {
+      const lead = await skills.lead();
+      if (!alive || text.value !== typed) { if (alive) showStatus(''); return; }   // поле успели изменить
+      const value = lead ? [lead.text, typed].filter((s) => s.trim()).join('\n\n') : typed;
+      if (value.length > 100000) {
+        showStatus(tr("Навык вместе с уточнением длиннее 100 000 знаков"));
+        return;
+      }
       await separateCopy(value);
-      if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }   // текст ушёл в чат копии
+      if (lead) skills.clear();
+      if (text.value === typed) { text.value = ''; drafts.delete(draftKey); autosize(); }   // текст ушёл в чат копии
       if (alive) showStatus('');
     } catch (err) {
       if (!alive) return;
