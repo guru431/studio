@@ -216,6 +216,8 @@ PROTECTED_OUT = "в этом диалоге сработал защищённы�
 #: окно HTML и SVG ответа (chat_preview) в таком диалоге — 409 `protected`: песочница закрывает не все пути скрипта
 PROTECTED_PREVIEW = "в этом диалоге сработал защищённый источник — HTML и SVG из ответа здесь не открываются"
 NO_THINKING = "эта модель не умеет рассуждать по кнопке"   # PATCH {thinking: true} не у роли local-* srvllm — 409
+#: PATCH {effort: уровень} у подключения без `profiles.effort_ok` — 409 `no_effort`
+NO_EFFORT = "у этого подключения уровень рассуждения не выбирается"
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
 # памяти (проба 2026-10-21, спека раздел 8). Последняя фраза — против «я заглянула в интернет» без вызова: на
 # диалоге, где модель уже так ответила, вызов поиска на «какой курс доллара» — 10 из 12 вместо 5 из 12 (2026-10-22)
@@ -289,6 +291,7 @@ class ChatPatch(BaseModel):
     model: str | None = Field(None, max_length=MODEL_MAX)
     web: bool | None = None              # кнопка «Интернет»; null — не трогать
     thinking: bool | None = None         # кнопка «Рассуждение»; null — не трогать
+    effort: Literal["low", "medium", "high"] | None = None   # уровень рассуждения (profiles.EFFORTS); null — «как у модели»
     role_id: str | None = Field(None, max_length=64)   # роль диалога (roles.py); null — без роли
 
 
@@ -454,6 +457,9 @@ def _chat_view(user_id: int, row) -> dict:
         row["id"], row["web_consent"])
     out["thinking"] = bool(row["thinking"])
     out["thinking_ok"] = out["local"]
+    # уровень рассуждения диалога и выбирается ли он у подключения (profiles.effort_ok)
+    out["effort"] = row["effort"]
+    out["effort_ok"] = conn is not None and profiles.effort_ok(conn)
     # MCP: `mcp_ids` — действующий набор (явные и общие по умолчанию), `mcp_off` — выключенные общие,
     # `mcp_tools_off` / `mcp_tools_on` — выключенные и явно включённые инструменты {sid: [имена]}
     out["mcp_ids"] = mcp_sources.dialog_servers(user_id, row, conn)
@@ -2664,6 +2670,14 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         if body.thinking and not _thinking_ok(uid, conn_id, model):
             raise HTTPException(409, {"code": "no_thinking", "message": NO_THINKING})
         changes["thinking"] = int(body.thinking)
+    if "effort" in sent:
+        # по подключению, каким оно станет; null — сброс. Смена подключения или модели уровень не сбрасывает:
+        # непринимающему подключению он не уходит (profiles.effort_params)
+        row = _chat_row(uid, chat_id)
+        conn = _chat_connection(uid, changes.get("connection_id", row["connection_id"]))
+        if body.effort is not None and (conn is None or not profiles.effort_ok(conn)):
+            raise HTTPException(409, {"code": "no_effort", "message": NO_EFFORT})
+        changes["effort"] = body.effort
     if "role_id" in sent:
         if body.role_id is not None and roles.get(uid, body.role_id) is None:
             raise HTTPException(404, roles.GONE)
@@ -3608,6 +3622,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         profiled = conn if conn.proxied or not conn.shared else None
         system = chat_system.base(uid, profiled, _role(uid, fresh["role_id"]))
         params = profiles.request_params(profiled, model) if profiled is not None else {}
+        params |= profiles.effort_params(conn, fresh["effort"])   # уровень — настройка диалога, не профиля
         kinds = (web.tools_for(conn, web.has_exa_key(uid))
                  if fresh["web"] and not fresh["protected_used"] and not conn.cleaner else [])
         mcp_ids = mcp_sources.dialog_servers(uid, fresh, conn)

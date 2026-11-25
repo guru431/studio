@@ -13,6 +13,8 @@
   отказа (`REJECTED`) — слова `REFUSED` (`refusal`).
 - Параметры на модель (`model_params`, спека п. 35): те же поля для одной модели подключения, поверх параметров
   подключения (`model_params()`); пустой набор модели не хранится.
+- Уровень рассуждения (`effort_ok`, `effort_params`, спека 2026-11-25 п. 40) — настройка диалога (`chats.effort`), не
+  профиля: уходит только провайдерам EFFORT_PROVIDERS, мимо Cleaner.
 - Журнал — только id: ни текста, ни параметров, ни подсказок.
 """
 import json
@@ -37,6 +39,11 @@ REFUSED = "подключение не принимает параметр «{0}
 #: признаки отказа по параметру в ответе 400 (в нижнем регистре): OpenAI, vLLM/pydantic, LiteLLM
 REJECTED = ("unknown", "unsupported", "unrecognized", "not supported", "extra fields not permitted",
             "extra inputs are not permitted", "unexpected keyword")
+#: уровень рассуждения диалога (`chats.effort`, спека 2026-11-25 п. 40) — только провайдерам EFFORT_PROVIDERS
+EFFORTS = ("low", "medium", "high")
+EFFORT_PROVIDERS = ("openai", "openrouter")
+#: отказ сервиса по параметру уровня (`reasoning_effort`, `reasoning`) — вместо REFUSED
+EFFORT_REFUSED = "модель не принимает уровень рассуждения — выберите «Как у модели»"
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/connections")
@@ -165,6 +172,21 @@ def request_params(conn: connections.Connection, model: "str | None" = None) -> 
     return out
 
 
+def effort_ok(conn: connections.Connection) -> bool:
+    """Уровень рассуждения выбирается: профиль провайдера в EFFORT_PROVIDERS, не Cleaner и не через Cleaner."""
+    return not conn.cleaner and not conn.routed and capabilities.profile(conn) in EFFORT_PROVIDERS
+
+
+def effort_params(conn: connections.Connection, level: "str | None") -> dict:
+    """Уровень диалога для тела `chat/completions`: `openai` — `reasoning_effort`, `openrouter` — `reasoning.effort`;
+    без уровня или без `effort_ok` — {}."""
+    if level is None or not effort_ok(conn):
+        return {}
+    if capabilities.profile(conn) == "openai":
+        return {"reasoning_effort": level}
+    return {"reasoning": {"effort": level}}
+
+
 def max_images(conn: connections.Connection, model: "str | None" = None) -> int:
     """Картинок на весь запрос к подключению: `max_images` профиля (модели, иначе подключения), иначе
     DEFAULT_MAX_IMAGES."""
@@ -197,11 +219,13 @@ def suggestions_of(conn: connections.Connection) -> list:
 
 def refusal(text: str, params: dict) -> "str | None":
     """Слова отказа, если ответ 400 называет отправленный параметр профиля вместе с признаком отказа
-    (`REJECTED`); иначе None. Одного имени мало: ошибка длины контекста vLLM называет `max_tokens`."""
+    (`REJECTED`); иначе None. Одного имени мало: ошибка длины контекста vLLM называет `max_tokens`. Параметр уровня
+    рассуждения (`reasoning_effort`, `reasoning`) — слова EFFORT_REFUSED: он не из профиля, а из выбора диалога."""
     lowered = text.lower()
     if not any(marker in lowered for marker in REJECTED):
         return None
-    return next((REFUSED.format(name) for name in params if name in lowered), None)
+    return next((EFFORT_REFUSED if name in ("reasoning_effort", "reasoning") else REFUSED.format(name)
+                 for name in params if name in lowered), None)
 
 
 # ---- API своего профиля ---------------------------------------------------------

@@ -315,6 +315,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
                          gen_sec=None if message["gen_ms"] is None else message["gen_ms"] / 1000,
                          spent_ms=message["total_ms"] or 0,
                          resume={"kind": pending["kind"], "action": body.action, "answer": answer, **payload})
+    st.params = st.params | profiles.effort_params(conn, fresh["effort"])   # уровень рассуждения диалога, как create_turn
     chat.STREAMS[mid] = st
     st.task = asyncio.create_task(st.run())
     return chat._EventStream(st, st.user_message_id or "", getattr(request.state, "digest", None))

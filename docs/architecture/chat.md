@@ -592,6 +592,16 @@ Studio проксирует файлы через исходное подклю�
 зациклилась»; пределы — на весь ответ, модели рассуждение назад не уходит. В ссылку «Поделиться» рассуждение входит
 только по выбору (`chat_shares.RefreshIn.reasoning`), в экспорт — всегда (sharing-export.md).
 
+**Уровень рассуждения** (спека 2026-11-25 п. 40) — `chats.effort` (`low` / `medium` / `high`, null — «как у модели»):
+выбирается только у подключения с `profiles.effort_ok` — профиль провайдера (`capabilities.profile`) из
+`profiles.EFFORT_PROVIDERS`, не Cleaner и не «Через Cleaner»; вид диалога — `effort`, `effort_ok`, подключение в списке —
+`effort` (выбор у нового диалога). `PATCH {effort}` проверяется по подключению, каким оно станет: иначе 409 `no_effort`
+(`chat.NO_EFFORT`); смена подключения или модели уровень не сбрасывает — непринимающему он просто не уходит.
+Параметр (`profiles.effort_params`: `openai` — `reasoning_effort`, `openrouter` — `reasoning.effort`) — уровень
+диалога, а не профиля: `create_turn` прибавляет его к снимку параметров хода по подключению диалога (прямому — в
+`params` для страницы, и у общего подключения), продолжение после паузы (`chat_pending`) — тот же. Отказ сервиса
+400, называющий `reasoning_effort` или `reasoning`, — слова `profiles.EFFORT_REFUSED`, а не `REFUSED` профиля.
+
 ## «Интернет» (спека 2026-10-21-studio-chat-internet, шаг схемы 14) — `web`
 
 Поиск и страницы Exa — `EXA_URL` через `state.HTTP`, не `upstream`; субтитры YouTube — `yt-dlp` образа Docker (версия

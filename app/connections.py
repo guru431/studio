@@ -286,6 +286,7 @@ def out(conn: Connection, passport: bool = True) -> dict:
     # profiles импортирует capabilities → images, а тот при загрузке берёт `connections.Connection`
     import profiles
     item["suggestions"] = profiles.suggestions_of(conn)
+    item["effort"] = profiles.effort_ok(conn)    # выбор уровня рассуждения у нового диалога (спека п. 40)
     if not inherited:                            # текст и параметры общего профиля пользователю не видны
         item["profile_set"] = profiles.is_set(conn)
     if conn.shared:
