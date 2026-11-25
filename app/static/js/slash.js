@@ -6,7 +6,8 @@ import { tr } from './i18n.js';
  * слово, отбор — вхождение в имя без учёта регистра, порядок — как отдал `items()`. `items()` зовётся раз на открытие
  * и отдаёт `[{kind: 'skill' | 'project' | 'command', id, name, description}]`; отказ — словами в строке статуса.
  * Клавиши ловятся раньше `enterSends` и `fileHints` (захват, `stopImmediatePropagation`): ↓ ↑ по кругу, Enter и Tab —
- * взять, Esc — закрыть и не открывать, пока начало поля подходит. Взять — убрать «/слово» из поля и отдать строку
+ * взять (до ответа `items()` — первую строку после ответа; строк нет — ничего), Esc — закрыть и не открывать,
+ * пока начало поля подходит. Взять — убрать «/слово» из поля и отдать строку
  * `onPick` (команду хозяин вставит сам).
  * skillChip(host, { changed }) — чип «Навык: имя» с крестиком; крестик снимает навык и зовёт `changed()`. */
 import { el, words } from './ui.js';
@@ -30,6 +31,7 @@ export function slashMenu(field, { items, onPick, host = null }) {
   let selected = 0;
   let generation = 0;
   let controls = null;    // прежний aria-controls поля (подсказки файлов «Агентов»)
+  let deferred = false;   // Enter или Tab до ответа items(): взять первую строку после загрузки
 
   function query() {
     if (field.selectionStart !== field.selectionEnd) return null;
@@ -40,6 +42,7 @@ export function slashMenu(field, { items, onPick, host = null }) {
     generation += 1;
     all = null;
     rows = [];
+    deferred = false;
     menu.hidden = true;
     if (!open) return;
     open = false;
@@ -104,8 +107,16 @@ export function slashMenu(field, { items, onPick, host = null }) {
     if (mine !== generation) return;
     all = Array.isArray(got) ? got : [];
     const current = query();
-    if (current === null) close();
-    else filter(current);
+    if (current === null) {
+      close();
+      return;
+    }
+    filter(current);
+    // Отложенный Enter: строк нет («Ничего не найдено») — меню остаётся открытым, без выбора и без отправки.
+    if (deferred) {
+      deferred = false;
+      if (rows.length) pick(0);
+    }
   }
 
   function pick(index) {
@@ -120,6 +131,13 @@ export function slashMenu(field, { items, onPick, host = null }) {
 
   function keydown(event) {
     if (!open || event.isComposing) return;
+    if (all === null && (event.key === 'Enter' || event.key === 'Tab')) {
+      // список ещё грузится: не отправка — выбор первой строки после ответа items()
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      deferred = true;
+      return;
+    }
     const move = rows.length > 0 && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(event.key);
     if (event.key !== 'Escape' && !move) return;
     event.preventDefault();

@@ -64,8 +64,24 @@ SCRIPT = """(async () => {
   const escaped = [menu.hidden, field.value];
   await type('/раз'); out.escaped = [...escaped, menu.hidden];
   await type(''); await type('/'); out.reopened = !menu.hidden && rows().length === 4;
-  view.unmount(); form.remove();
+  view.unmount();
   out.removed = !document.querySelector('#slash-menu');
+  // items() с задержкой: Enter до ответа — не отправка; после ответа — первая строка, а без строк — ничего
+  let release;
+  window.picked = null;
+  const late = slashMenu(field, { items: () => new Promise(r => { release = () => r(ITEMS); }),
+    onPick: (item) => { window.picked = item; } });
+  const lateMenu = document.querySelector('#slash-menu');
+  await type(''); await type('/раз'); await key('Enter');
+  const waiting = [window.sent, window.picked, field.value, lateMenu.hidden];
+  release(); await frames();
+  out.late = [...waiting, window.picked ? [window.picked.kind, window.picked.id] : null, field.value, window.sent];
+  window.picked = null;
+  await type(''); await type('/zzz'); await key('Enter');
+  release(); await frames();
+  out.none = [window.sent, window.picked, field.value, lateMenu.hidden,
+    lateMenu.querySelector('[role=status]').textContent.length > 0];
+  late.unmount(); form.remove();
   return out; })()"""
 
 
@@ -85,3 +101,7 @@ def test_slash_menu_filters_picks_and_fits(browser, live, width, lang):
     assert v["cleared"] == [True, None] and v["changed"] >= 1, v
     assert v["escaped"] == [True, "/ра", True] and v["reopened"] is True, v
     assert v["removed"] is True, v
+    # Enter, пока items() не ответил: [отправлено, выбрано, поле, меню скрыто], затем выбор после ответа
+    assert v["late"] == [0, None, "/раз", False, ["skill", "s1"], "", 0], v
+    # после ответа строк нет: ни отправки, ни выбора, текст цел, меню открыто со словами «Ничего не найдено»
+    assert v["none"] == [0, None, "/zzz", False, True], v
