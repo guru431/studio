@@ -70,6 +70,26 @@ def test_turn_check_counts_tool_descriptions(studio):                           
     assert sse(turn(studio, cid, "Привет"))[-1] == ("done", {"status": "done"})
 
 
+def test_turn_without_a_known_window_skips_tool_descriptions(studio, monkeypatch):
+    """Окно модели не известно (`limit` None) — проверки окна нет, и ход не ждёт каталоги MCP (`_turn_specs`)."""
+    gw = add_gateway(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    asked, real = [], chat._turn_specs
+
+    async def spy(uid, row, conn, model):
+        asked.append(model)
+        return await real(uid, row, conn, model)
+    monkeypatch.setattr(chat, "_turn_specs", spy)
+    assert limit_of(studio, cid) is None
+    asked.clear()                                                          # оценка (`/estimate`) зовёт всегда
+    assert sse(turn(studio, cid, "Привет"))[-1] == ("done", {"status": "done"})
+    assert asked == []
+    window(studio, 65536, model="gemma4-abl")
+    assert sse(turn(studio, cid, "Ещё"))[-1] == ("done", {"status": "done"})
+    assert asked == ["gemma4-abl"]
+
+
 def test_context_refusal_retries_once_with_compaction_then_refuses_in_words(studio):   # п. 31(г)
     add_gateway(studio); cid = new_chat(studio)
     studio.gw.chat_script = [["Ответ-1"], ["Ответ-2"]]

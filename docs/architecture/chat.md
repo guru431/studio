@@ -710,7 +710,7 @@ Studio проксирует файлы через исходное подклю�
   отбором `mcp_client.Tools.discover` с пределом подключения, холодный кэш — не дольше `mcp_sources.DEFAULT_WAIT_SEC`,
   как `mcp_client.web_tools`, — и встроенные (`chat_tools.specs`; не принятые шлюзом недавно — без них). `limit` —
   `chat.model_window` или null. Знания (поиск) не считаются — это оценка; проверка 413 хода (`create_turn`) считает те
-  же описания (`_turn_specs` до транзакции). Знаков на токен — `chat.ratio` (`model_facts.ratio`, иначе
+  же описания (`_turn_specs` до транзакции; окно не известно — проверки нет, каталоги не запрашиваются). Знаков на токен — `chat.ratio` (`model_facts.ratio`, иначе
   `chat.DEFAULT_RATIO` (3.0)); окно `chat.model_window` — ручное `context_window` профиля (модели, иначе подключения),
   иначе список моделей шлюза (оно же — в `model_facts.window`), иначе, если список не прочитан, запомненное, иначе
   `chat.CONTEXT`. Отказ шлюза 400 по длине (`chat.CONTEXT_REFUSED`) — один повтор с принудительным пересказом всего

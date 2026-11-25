@@ -3613,9 +3613,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     remote = await cleaner_route.context(conn, "chat", chat_id) if conn.routed else None
     limit = await model_window(conn, model)
     # описания инструментов хода — в проверку окна (п. 31(в)); каталоги MCP — из кэша (холодный — не дольше
-    # mcp_sources.DEFAULT_WAIT_SEC)
+    # mcp_sources.DEFAULT_WAIT_SEC); окно не известно — проверки нет, и ждать каталоги незачем
     rate = ratio(conn, model)
-    spec = spec_tokens(await _turn_specs(uid, row, conn, model), rate) if conn.proxied and not conn.cleaner else 0
+    spec = (spec_tokens(await _turn_specs(uid, row, conn, model), rate)
+            if limit is not None and conn.proxied and not conn.cleaner else 0)
     operations.check(uid)
     receipt = _turn_receipt(chat_id, body.request_id, body)
     if receipt is not None:

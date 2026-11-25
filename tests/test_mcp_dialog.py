@@ -122,9 +122,8 @@ def test_shared_server_on_by_default(studio):
     studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Готово"]]
     assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
     assert offered(studio.gw.chat_requests[0]) == ["Shared tools: lookup"]
-    # каталог — проверкой окна хода (`chat._turn_specs`, холодный кэш), вызов — ходом из кэша
-    assert methods(calls) == ["initialize", "notifications/initialized", "tools/list", "close",
-                              "initialize", "notifications/initialized", "tools/call", "close"]
+    # окно модели не известно — проверки окна нет (`chat._turn_specs` не зовётся): каталог и вызов — одна сессия хода
+    assert methods(calls) == ["initialize", "notifications/initialized", "tools/list", "tools/call", "close"]
 
 
 def test_turned_off_server_not_polled(studio):
@@ -235,7 +234,7 @@ def test_second_turn_without_tools_list(studio):
 
 
 def test_cache_reset_by_edit_and_failure_not_cached(studio):
-    sid, calls, _ = setup(studio, fail=["tools/list"] * 2)          # и проверка окна хода, и сам ход
+    sid, calls, _ = setup(studio, fail=["tools/list"])              # сам ход: окно не известно — проверки окна нет
     cid = new_chat(studio)
     studio.gw.chat_script = [["Раз"]]
     sse(turn(studio, cid))
