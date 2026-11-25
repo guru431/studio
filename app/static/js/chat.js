@@ -1026,6 +1026,7 @@ function build(view, ctx) {
       input.value = text;
       autosize();
       ring.schedule();
+      if (!editing) dialogDrafts.typed(chatId);    // программная вставка — тоже черновик (возврат из bfcache)
       return;
     }
     prefill = { id, text };
@@ -1643,6 +1644,7 @@ function build(view, ctx) {
   function putAsk(question) {
     if (!input.value.trim()) input.value = question;
     else if (question) input.value = `${input.value.trimEnd()}\n\n${question}`;
+    if (!editing) dialogDrafts.typed(chatId);      // программная вставка — тоже черновик (возврат из bfcache)
   }
 
   async function fromTranscript(tid, ask) {
@@ -2500,6 +2502,7 @@ function build(view, ctx) {
         input.value = prefill.text;
         autosize();
         ring.schedule();
+        dialogDrafts.typed(id);                      // и в его черновик: возврат из bfcache его не сотрёт
       }
     } catch (err) {
       if (prefill?.id === id) prefill = null;       // текст openWith не ждёт следующего открытия этого диалога
@@ -3011,9 +3014,13 @@ function build(view, ctx) {
   window.addEventListener('focus', resume);
   document.addEventListener('visibilitychange', resume);
   /* страница вернулась из bfcache: `pagehide` дописал очередь к черновику (chat-queue.js) — поле показывает его, иначе
-     первое нажатие перезаписало бы черновик прежним текстом поля */
+     первое нажатие перезаписало бы черновик прежним текстом поля. Поле занято правкой сообщения или уходящим сообщением
+     очереди — черновик вернётся в поле, когда они кончатся (`closeEdit`, `unqueueField`) */
   const restored = (event) => {
-    if (event.persisted && alive && chatId !== undefined && !editing && !queuing) dialogDrafts.enter(chatId);
+    if (!event.persisted || !alive || chatId === undefined) return;
+    if (editing) editing.previous = dialogDrafts.text(chatId);
+    else if (queuing && !queuing.back) queuing.typed = dialogDrafts.text(chatId);
+    else dialogDrafts.enter(chatId);
   };
   window.addEventListener('pageshow', restored);
   const tick = setInterval(() => {

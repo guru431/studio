@@ -15,6 +15,10 @@ export function chatDrafts(input, { autosize }) {
     store.save(keyOf(id), text, old?.receipt && old.text === text ? old.receipt : undefined);
   };
   return {
+    /** Черновик диалога `id` (или ''). */
+    text(id) {
+      return store.saved()[keyOf(id)]?.text || '';
+    },
     /** Открыт диалог `id`: в поле — его черновик (или пусто). */
     enter(id) {
       input.value = store.saved()[keyOf(id)]?.text || '';

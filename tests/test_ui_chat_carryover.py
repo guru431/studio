@@ -428,7 +428,11 @@ def test_arrows_expand_all_and_fork_button(browser, live, width):
             ("eval", "old", f"window.oldChat = {CHAT}"),
             ("eval", "fork", "document.querySelectorAll('#messages .msg.user')[1].querySelector('.msg-fork').click(); true"),
             ("wait", f"{CHAT} && {CHAT} !== window.oldChat && {USERS}.length === 1 && {FIELD} === 'Вопрос 2'"),
-            ("eval", "forked", f"[{USERS}, {FIELD}, {ERROR}]")],
+            ("eval", "forked", f"[{USERS}, {FIELD}, {ERROR}]"),
+            # текст ветки (openWith) — и в черновике: возврат из bfcache его не стирает
+            ("eval", "bfcache", "window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));"
+                                " window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));"
+                                f" {FIELD}")],
             width=width, mobile=mobile)
     finally:
         live.gw.chat_script = []
@@ -436,7 +440,7 @@ def test_arrows_expand_all_and_fork_button(browser, live, width):
     v = r["values"]
     assert v["ids"] == ["chat-message-up", "chat-toggle-steps", "chat-message-down"]
     assert v["up"] == "Вопрос 3" and v["clear"] is True and v["fits"] is True
-    assert v["forked"] == [["Вопрос 1"], "Вопрос 2", ""]
+    assert v["forked"] == [["Вопрос 1"], "Вопрос 2", ""] and v["bfcache"] == "Вопрос 2"
     assert not problems(r), problems(r)
 
 
