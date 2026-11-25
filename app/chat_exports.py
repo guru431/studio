@@ -165,12 +165,16 @@ def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
         for step in message.get("steps", []):
             tool = step.get("tool")
             tool = server_word(tool, lang) if isinstance(tool, str) else tool      # как страница: message(s.tool)
-            parts.extend([("md", "### " + html.escape(_plain(step.get("name") or tool or word("Команда", lang)))),
-                          ("md", _fenced(step.get("input", ""))), ("md", _fenced(step.get("text", "")))])
+            parts.append(("md", "### " + html.escape(_plain(step.get("name") or tool or word("Команда", lang)))))
+            if "input" in step:                           # у шага Open WebUI входа нет — без пустого блока
+                parts.append(("md", _fenced(step["input"])))
+            parts.append(("md", _fenced(step.get("text", ""))))
         if message.get("reasoning"):
             parts.extend([("md", "### " + word("Рассуждение", lang)), ("md", _fenced(message["reasoning"]))])
         for item in message.get("attachments", []) + message.get("images", []):
             parts.append(("md", word("Вложение: {}", lang, html.escape(_plain(item.get("name", word("Файл", lang)))))))
+        for name in message.get("files", []):              # Open WebUI: имена файлов, сами файлы — там
+            parts.append(("md", word("Вложение: {}", lang, html.escape(_plain(name)))))
     return parts
 
 

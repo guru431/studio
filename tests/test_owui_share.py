@@ -73,6 +73,13 @@ def test_owui_export_gives_markdown_and_follows_the_section_lock(setup):
     r = s.c.post(f"{BASE}/{aid}/chats/{chat}/export", json={"format": "md", "title": "Talk", "lang": "ru"})
     assert r.status_code == 200 and "hi there" in r.text and r.headers["cache-control"] == "no-store"
     assert "hmm" not in r.text                                              # рассуждение в файл не идёт
+    assert "Вложение: doc.txt" in r.text                                   # имена файлов — строками вложений
+    # шаг Open WebUI без входа — только заголовок и результат, без пустого блока
+    fake.chats[chat]["messages"]["a1"]["output"] += [
+        {"type": "function_call", "call_id": "c1", "name": "search", "arguments": "{}", "status": "completed"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "found it"}]}]
+    r = s.c.post(f"{BASE}/{aid}/chats/{chat}/export", json={"format": "md", "title": "Talk", "lang": "ru"})
+    assert "### search\n\n```\nfound it\n```" in r.text and "```\n\n```" not in r.text
     assert r.headers["content-type"].startswith("text/markdown") and "Talk.md" in r.headers["content-disposition"]
     # раздел Open WebUI заперт (lock_policy) — share и export отвечают 423 `screen_locked`
     state.DB.execute("UPDATE users SET screen_lock=1, screen_lock_sections='[\"owui\"]' WHERE id=?", (uid,))
