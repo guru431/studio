@@ -77,6 +77,30 @@ def test_auto_summary_is_stored_and_the_next_turn_reuses_it(studio):
     assert len(messages(studio, cid)) == 6 and messages(studio, cid)[0]["content"] == OLD   # история на месте
 
 
+def test_summary_stays_out_of_the_share_link_the_export_and_the_log(studio, caplog):     # спека п. 30
+    """Пересказ — только для модели: ни в ссылке «Поделиться» (снимок после PIN), ни в экспорте Markdown, ни в журнале."""
+    caplog.set_level(logging.INFO)
+    secret = "Пересказ: бирюзовый план в out/секрет.docx."
+    cid = tiny(studio); studio.gw.chat_reply = [secret]
+    assert ("recovery", {"stage": "summary"}) in sse(turn(studio, cid, "Дополни"))
+    assert stored(cid)["summary"] == secret
+    exported = studio.c.post(f"/api/chats/{cid}/export", json={"format": "md"})
+    assert exported.status_code == 200 and "Дополни" in exported.text
+    assert exported.text.count(secret) == 1                                # ответ хода — да, пересказ отдельно — нет
+    assert chat.SUMMARY_BLOCK.split("{0}")[0].strip() not in exported.text
+    state.DB.execute("UPDATE chats SET summary = ? WHERE id = ?", ("Только пересказ: лазурь.", cid))
+    exported = studio.c.post(f"/api/chats/{cid}/export", json={"format": "md"})
+    assert exported.status_code == 200 and "лазурь" not in exported.text
+    created = studio.c.post(f"/api/chats/{cid}/share", json={"pin": "0123"})
+    assert created.status_code == 201, created.text
+    token = created.json()["url"].rsplit("#", 1)[1]
+    studio.c.cookies.clear()
+    shared = studio.c.post("/share/unlock", json={"token": token, "pin": "0123"})
+    assert shared.status_code == 200 and "Дополни" in shared.text
+    assert "лазурь" not in shared.text and "conversation-summary" not in shared.text and "summary" not in shared.json()
+    assert "бирюз" not in caplog.text and "лазурь" not in caplog.text and "секрет" not in caplog.text
+
+
 def test_summary_cut_by_length_is_accepted(studio):                        # находка FINDINGS 2026-11-25
     cid = tiny(studio); studio.gw.chat_reply = ["Пересказ оборван на полусло"]
 
