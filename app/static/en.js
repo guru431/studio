@@ -4383,7 +4383,10 @@ globalThis.StudioEnglish = Object.freeze({
   "идёт": "running",
   "прервана": "interrupted",
   "Части ответа": "Answer parts",
-  "Части: {0} из {1}": "Parts: {0} of {1}"
+  "Части: {0} из {1}": "Parts: {0} of {1}",
+  "часть: {0}": "part: {0}",
+  "память": "memory",
+  "знания": "knowledge"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",

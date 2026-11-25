@@ -172,8 +172,12 @@ const WEB_TITLE = tr("Интернет: поиск, страницы и субт
 // без ключа Exa: «Интернет» открывает только веб-инструменты MCP диалога (поиска Studio нет)
 const WEB_MCP_TITLE = tr("Интернет: только веб-инструменты MCP — для поиска Studio задайте ключ Exa в Настройках");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
-const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP', part: tr("Часть") };   // строка хода по виду инструмента
-const TOOL_MARKS = { youtube: '▶', mcp: '🧩' };   // значок идущего инструмента; прочие — интернет 🌐
+const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP', part: tr("Часть"),
+  ask: tr("Вопрос модели"), todo: tr("План работы"), memory: tr("Память"), knowledge: tr("Знания") };   // строка хода по виду инструмента
+// встроенные инструменты (chat_tools.KIND_OF): подпись события — имя функции, на плашке — только слово вида
+const BUILTIN_KINDS = ['ask', 'todo', 'memory', 'knowledge'];
+// значок идущего инструмента; прочие — интернет 🌐
+const TOOL_MARKS = { youtube: '▶', mcp: '🧩', part: '📑', ask: '❓', todo: '📋', memory: '🧠', knowledge: '📚' };
 const THINK_TITLE = tr("Рассуждение: модель думает перед ответом, ход мысли виден");
 const THINK_NOTE = tr("С рассуждением модель реже ищет в интернете");   // замер 2026-10-22: 5 поисков из 10 против 10
 const TALK_TITLE = tr("Разговор: говорите — модель ответит голосом, текст останется в диалоге");
@@ -299,7 +303,7 @@ function scanLine({ page, pages }) {
 /* строка хода инструмента: «Ищу: запрос»; подпись YouTube сервер начинает словом «субтитры» */
 function toolLine({ kind, label }) {
   const what = TOOL_WORDS[kind] || tr("Инструмент");
-  let text = String(label || '');
+  let text = BUILTIN_KINDS.includes(kind) ? '' : String(label || '');
   if (kind === 'youtube') text = text.replace(/^субтитры\s+/, '');
   return text ? `${what}: ${text}` : `${what}…`;
 }

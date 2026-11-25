@@ -107,6 +107,8 @@ STAGES = """(async () => {
     cut: s.stageOf(null, { status: 'streaming', via: 'browser', live: false })?.key ?? null,
     elsewhere: s.stageOf(null, { status: 'streaming', via: 'browser', live: true })?.key ?? null,
     builtin: text({ tool: { kind: 'todo', label: 'todo_write' }, message: streaming }, streaming),
+    memory: text({ tool: { kind: 'memory', label: 'memory_save' }, message: streaming }, streaming),
+    part: text({ tool: { kind: 'part', label: 'Сбор' }, message: streaming }, streaming),
   };
 })()"""
 
@@ -138,7 +140,9 @@ def test_stage_words_card_queue_and_silence(browser, live):
     assert not r.get("failed"), r
     v = r["values"]["v"]
     assert v["cut"] is None and v["elsewhere"] == "remote"
-    assert v["builtin"].startswith("инструмент todo_write · ")
+    # встроенные — словом вида, а не именем функции; часть — своим названием
+    assert v["builtin"].startswith("инструмент план · ") and v["memory"].startswith("инструмент память · ")
+    assert v["part"].startswith("часть: Сбор · ")
     assert r["values"]["restart"] == ["инструмент A · one · 0:30", "инструмент B · two · 0:00"]
     assert v["keys"] == ["card", "scan", "recovery", "tool", "think", "write", "load", "wait", "remote", "pending", None]
     assert v["card"] == "жду карту · 2 · ≈9 мин · 0:42"

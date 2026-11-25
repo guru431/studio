@@ -19,8 +19,10 @@ function clockText(ms) {
 }
 
 function toolWords(tool) {
-  // MCP и встроенные (`todo_write`, `memory_save`…) — подписью сервера, «Интернет» — словом вида
-  const what = { search: tr("поиск"), page: tr("страница"), youtube: 'YouTube' }[tool.kind] || tool.label;
+  // часть ответа — её названием; MCP — подписью сервера; «Интернет» и встроенные (`todo_write`, `memory_save`…) — словом вида
+  if (tool.kind === 'part') return tool.label ? tr("часть: {0}", tool.label) : tr("часть");
+  const what = { search: tr("поиск"), page: tr("страница"), youtube: 'YouTube', ask: tr("вопрос"), todo: tr("план"),
+    memory: tr("память"), knowledge: tr("знания") }[tool.kind] || tool.label;
   return what ? tr("инструмент {0}", what) : tr("инструмент");
 }
 

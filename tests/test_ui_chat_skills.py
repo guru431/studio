@@ -110,12 +110,17 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
                 ("type", "#chat-input", "Большая задача"), ("press", "Enter"),
                 ("wait", "!document.querySelector('#chat-tools').hidden"),
                 ("click", "#chat-tools"), ("wait", f"{TOOLS_PART}"),
-                ("eval", "toolsPart", f"[{TOOLS_PART}.querySelector('.part-title').textContent, {TOOLS_PART}.querySelector('.part-state').textContent]")],
+                ("eval", "toolsPart", f"[{TOOLS_PART}.querySelector('.part-title').textContent, {TOOLS_PART}.querySelector('.part-state').textContent]"),
+                # плашка над ответом и строка состояния — «Часть: название», а не имя функции
+                ("eval", "badge", "[...document.querySelectorAll('#messages .msg.assistant')].at(-1).querySelector('.web-badge').textContent"),
+                ("eval", "activity", "document.querySelector('#chat-activity').textContent")],
                 width=width, mobile=mobile, init=init)
         finally:
             gw.chat_hold = False
         assert not r.get("failed"), r
         assert r["values"]["toolsPart"] == ["Сбор", "running" if lang == "en" else "идёт"], r["values"]
+        assert r["values"]["badge"] == ("📑 Part: Сбор" if lang == "en" else "📑 Часть: Сбор"), r["values"]
+        assert r["values"]["activity"].startswith("part: Сбор · " if lang == "en" else "часть: Сбор · "), r["values"]
         r = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
             ("wait", f"{ANSWERED} && {part} && !document.querySelector('#chat-parts').hidden"),
             ("eval", "part", f"[{part}.querySelector('.part-title').textContent, {part}.querySelector('.part-state').textContent]"),
