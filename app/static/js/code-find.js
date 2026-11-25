@@ -44,7 +44,8 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   let matches = [];
   let more = false;                // совпадений больше FIND_MAX
   let current = -1;
-  let timer = null;
+  let typing = null;               // пересчёт после ввода: новый запрос, первое совпадение
+  let changed = null;              // пересчёт после изменения ленты: текущее совпадение остаётся
   let searching = false;           // идёт «Искать в более ранней части»
   let stop = false;
   let alive = true;
@@ -116,8 +117,9 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
 
   /** Пересчёт совпадений; `fresh` — новый запрос: первое совпадение и переход к нему. */
   function recount(fresh) {
-    clearTimeout(timer);
-    timer = null;
+    clearTimeout(typing);
+    clearTimeout(changed);
+    typing = changed = null;
     const query = fold(input.value.trim());
     ({ found: matches, more } = query ? collect(query) : { found: [], more: false });
     current = !matches.length ? -1 : fresh || current < 0 ? 0 : Math.min(current, matches.length - 1);
@@ -126,7 +128,8 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   }
 
   function step(delta) {
-    if (timer !== null) { recount(true); return; }
+    if (typing !== null) { recount(true); return; }     // запрос ещё не пересчитан: первое совпадение нового
+    if (changed !== null) recount(false);                 // лента изменилась (идёт ход): позиция та же, шаг обычный
     if (!matches.length) return;
     current = (current + delta + matches.length) % matches.length;
     paint();
@@ -159,9 +162,10 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   }
 
   const observer = new MutationObserver(() => {
-    if (bar.hidden) return;
-    clearTimeout(timer);
-    timer = setTimeout(() => recount(false), TYPE_MS);
+    // пересчёт после ввода и так впереди; поток хода меняет ленту чаще TYPE_MS — таймер не перевзводится,
+    // иначе пересчёт не наступил бы до конца хода
+    if (bar.hidden || typing !== null || changed !== null) return;
+    changed = setTimeout(() => recount(false), TYPE_MS);
   });
 
   function open() {
@@ -181,8 +185,9 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
     bar.hidden = true;
     stop = true;
     observer.disconnect();
-    clearTimeout(timer);
-    timer = null;
+    clearTimeout(typing);
+    clearTimeout(changed);
+    typing = changed = null;
     matches = [];
     current = -1;
     clearHighlights();
@@ -199,8 +204,10 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   }
 
   input.addEventListener('input', () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => recount(true), TYPE_MS);
+    clearTimeout(typing);
+    clearTimeout(changed);
+    changed = null;
+    typing = setTimeout(() => recount(true), TYPE_MS);
   });
   bar.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {

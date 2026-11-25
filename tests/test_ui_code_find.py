@@ -68,3 +68,53 @@ def test_find_counts_steps_through_and_loads_earlier_pages(browser, live, width)
     assert not [p for p in r["sent"] if p.endswith("/search")]          # текст на сервер не уходит
     assert not [q for q in machine.requests if "search" in q["op"]]
     assert not problems(r), problems(r)
+
+
+def test_next_steps_forward_while_the_turn_streams(browser, live):
+    """Лента меняется чаще пересчёта (текст хода каждые 40 мс): «следующее» и Enter идут вперёд, а не на первое."""
+    import threading
+    import time
+
+    from fake_bridge import T0, pid
+    from test_ui_browser import code_permission, code_send
+    login = "find-stream"
+    live.add_user(login)
+    history = []
+    for i in range(3):
+        history += [{"id": f"m-{2 * i}", "role": "user", "text": f"вопрос {i}", "steps": [], "time": T0 + 2 * i},
+                    {"id": f"m-{2 * i + 1}", "role": "assistant", "text": f"Зебра {i}", "steps": [], "time": T0 + 2 * i + 1}]
+    machine = code_free_machine({CODE_CHAT_A: code_session("Поток", messages=history)})
+    # ход пишет «Зебра в ходе» и ждёт карточку: дальше текст идёт событиями из потока ниже
+    machine.script = [{"k": "text", "text": "Зебра в ходе. "}, code_permission("r1", False)]
+    aid, sb = code_online(live, login, machine)
+    done = threading.Event()
+
+    def stream():
+        while not done.is_set() and CODE_CHAT_A not in machine.running:
+            time.sleep(0.02)
+        while not done.is_set():
+            sb.send_events(pid("alpha"), CODE_CHAT_A, {"k": "text", "text": " ."})
+            time.sleep(0.04)
+
+    worker = threading.Thread(target=stream, daemon=True)
+    worker.start()
+    live_text = "document.querySelector('#code-feed .code-msg.assistant:last-of-type .code-timeline-text').textContent.length"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Дальше"), ("wait", "!!document.querySelector('.code-ask')"),
+            ("eval", "key", CTRL_F), query("зебра"), ("wait", COUNT + " === '1 из 4'"),
+            ("eval", "len0", live_text),
+            ("click", "#code-find-next"), ("wait", COUNT + " === '2 из 4'"),
+            ("click", "#code-find-next"), ("wait", COUNT + " === '3 из 4'"),
+            ("eval", "focus", "document.querySelector('#code-find-input').focus() ?? true"),
+            ("press", "Enter"), ("wait", COUNT + " === '4 из 4'"),
+            ("press", "Enter", "Shift"), ("wait", COUNT + " === '3 из 4'"),
+            ("eval", "len1", live_text)])
+    finally:
+        done.set()
+        worker.join(5)
+        sb.stop()
+    assert not r.get("failed"), r
+    values = r["values"]
+    assert values["len1"] > values["len0"], values          # лента и правда менялась между шагами
+    assert not problems(r), problems(r)
