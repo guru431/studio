@@ -19,9 +19,14 @@ function clockText(ms) {
 }
 
 function toolWords(tool) {
-  if (tool.kind === 'mcp') return tool.label ? tr("инструмент {0}", tool.label) : tr("инструмент");
-  const what = { search: tr("поиск"), page: tr("страница"), youtube: 'YouTube' }[tool.kind];
+  // MCP и встроенные (`todo_write`, `memory_save`…) — подписью сервера, «Интернет» — словом вида
+  const what = { search: tr("поиск"), page: tr("страница"), youtube: 'YouTube' }[tool.kind] || tool.label;
   return what ? tr("инструмент {0}", what) : tr("инструмент");
+}
+
+/** Ответ идёт: `streaming`, кроме ответа прямого подключения, брошенного другой вкладкой (под ним «прервано»). */
+function ongoing(job, m) {
+  return m?.status === 'streaming' && (!!job || m.via !== 'browser' || !!m.live);
 }
 
 /** Стадия ответа: первая подошедшая из списка. `job` — ответ, который читает эта вкладка (или null), `message` —
@@ -29,7 +34,7 @@ function toolWords(tool) {
  * words, title, state, since, eventAt }` или null — активного ответа нет. */
 export function stageOf(job, message, { local = false, now = Date.now(), track = null } = {}) {
   const m = message || {};
-  const streaming = m.status === 'streaming';
+  const streaming = ongoing(job, m);
   let key = null;
   let words = '';
   let state = 'thinking';
@@ -135,6 +140,11 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       const m = current ? current.message : last();
       if (!current && remote.id !== (m?.id ?? null)) Object.assign(remote, { id: m?.id ?? null, stageKey: null, stageAt: now });
       const track = current || remote;
+      // новый вызов инструмента (каждое событие `tool` — новый объект) — время стадии с нуля
+      if (current?.tool && current.tool !== track.stageTool) {
+        if (track.stageKey === 'tool') track.stageAt = now;
+        track.stageTool = current.tool;
+      }
       const stage = stageOf(current, m, { local: local(), now, track });
       if (stage && track.stageKey !== stage.key) Object.assign(track, { stageKey: stage.key, stageAt: stage.since });
       const words = stageText(stage, now);
@@ -142,7 +152,7 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       activity.title = stage ? stage.title : words;
       activity.dataset.stage = stage?.key || 'idle';
       activity.dataset.state = stage?.state || 'idle';
-      const going = m && m.status === 'streaming' ? m : null;
+      const going = ongoing(current, m) ? m : null;
       steps = going ? (going.tools?.length ? going.tools : going.calls || []) : [];
       toolsCount.textContent = String(steps.length);
       const label = tr("Вызовы инструментов: {0}", steps.length);
