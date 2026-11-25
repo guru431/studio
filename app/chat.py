@@ -3322,16 +3322,19 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
 
 
 NO_COMPACT = {"code": "no_compact", "message": "сжатие истории — только для моделей через сервер, кроме Cleaner и MCP"}
+NOTHING_TO_COMPACT = "пересказывать нечего: последний ход остаётся целиком"
 
 
-@router.post("/chats/{chat_id}/compact")
-async def compact_chat(chat_id: str, request: Request):
-    """«Сжать сейчас» (спека п. 30): всё до последнего сообщения пользователя — в хранимый пересказ (`chats.summary`)
-    из прежнего пересказа и сообщений после него; последний ход остаётся дословно. Запрос ведёт StreamTask вне
-    STREAMS тем же `_round` (через Cleaner — `cleaner_route`); на это время диалог — в COMPACTING. Итог — граница
-    пересказа и новая оценка заполнения (`_estimated`). В журнал — только id."""
-    uid = request.state.user.id
-    row = _chat_row(uid, chat_id)
+async def summarize_dialog(uid: int, row, upto: str) -> str:
+    """Пересказ диалога `row` (строка `chats` учётки `uid`) до сообщения `upto` включительно — механизм «Сжать
+    сейчас» (п. 30) без записи: из действующего пересказа (`chats.summary`, его граница не позже `upto`) и сообщений
+    после него, без шапки прежнего пересказа и текста последнего навыка (`_for_summary`). Допуски — как у хода:
+    идёт ответ — 409 `busy`; MCP-модель, прямое подключение и предпросмотр Cleaner — 409 `no_compact`; нет
+    подключения — 409 `no_connection`; модель снята или принудительный Cleaner — `_admit`; расшифровка без
+    подтверждения — 409 `external`; окно модели неизвестно — 409 `no_limit`; сменилась модель — 409 `changed`;
+    пересказывать нечего — 409 `nothing`. Запрос ведёт StreamTask вне STREAMS тем же `_round` (через Cleaner —
+    `cleaner_route`); на это время диалог — в COMPACTING. Ошибки модели — 503 `card`, 502 `upstream`, 413 `context`."""
+    chat_id = row["id"]
     _busy(chat_id)
     if row["mcp_model_sid"] is not None:
         raise HTTPException(409, NO_COMPACT)
@@ -3346,13 +3349,6 @@ async def compact_chat(chat_id: str, request: Request):
     # (подтверждают отправкой хода; след подтверждения — её ответ, `_needs_consent`)
     if not _consent_free(conn, model) and _needs_consent(chat_id, model, "server"):
         raise _external(conn)
-    last = _last_user(chat_id)
-    before = last and state.DB.execute(
-        "SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0 AND (created, rowid) < (?, ?)"
-        " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id, last["created"], last["rowid"])).fetchone()
-    nothing = HTTPException(409, {"code": "nothing", "message": "пересказывать нечего: последний ход остаётся целиком"})
-    if not before or before["id"] == row["summary_upto"]:
-        raise nothing
     limit = await model_window(conn, model)
     if limit is None:
         raise HTTPException(409, {"code": "no_limit", "message": "предел контекста модели неизвестен — сжимать не нужно"})
@@ -3363,11 +3359,10 @@ async def compact_chat(chat_id: str, request: Request):
         raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
     _admit(uid, conn, model)                         # снятие модели или принудительный режим — тем временем
     ids = []
-    composed = compose(chat_id, before["id"], model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)),
-                       ids=ids)
-    turns, seed, _ = _for_summary(chat_id, before["id"], composed, ids)
+    composed = compose(chat_id, upto, model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)), ids=ids)
+    turns, seed, _ = _for_summary(chat_id, upto, composed, ids)
     if not turns:
-        raise nothing
+        raise HTTPException(409, {"code": "nothing", "message": NOTHING_TO_COMPACT})
     rate = ratio(conn, model)
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id="", conn=conn, model=model, messages=[], limit=limit,
                     ratio=rate, thinking=False if sections.is_local(conn, model) else None, listening=False)
@@ -3387,6 +3382,24 @@ async def compact_chat(chat_id: str, request: Request):
         if batch <= 0 or len("\n\n".join(_summary_turns(turns))) > batch * SUMMARY_ROUNDS:
             raise _too_big(estimate_tokens(turns, rate), limit)
         raise HTTPException(502, {"code": "upstream", "message": SUMMARY_FAILED})
+    return summary
+
+
+@router.post("/chats/{chat_id}/compact")
+async def compact_chat(chat_id: str, request: Request):
+    """«Сжать сейчас» (спека п. 30): всё до последнего сообщения пользователя — в хранимый пересказ (`chats.summary`)
+    из прежнего пересказа и сообщений после него (`summarize_dialog`); последний ход остаётся дословно. Итог —
+    граница пересказа и новая оценка заполнения (`_estimated`). В журнал — только id."""
+    uid = request.state.user.id
+    row = _chat_row(uid, chat_id)
+    _busy(chat_id)
+    last = _last_user(chat_id)
+    before = last and state.DB.execute(
+        "SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0 AND (created, rowid) < (?, ?)"
+        " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id, last["created"], last["rowid"])).fetchone()
+    if not before or before["id"] == row["summary_upto"]:
+        raise HTTPException(409, {"code": "nothing", "message": NOTHING_TO_COMPACT})
+    summary = await summarize_dialog(uid, row, before["id"])
     operations.check(uid)
     row = _chat_row(uid, chat_id)
     if state.DB.execute("SELECT 1 FROM messages WHERE id = ? AND chat_id = ?", (before["id"], chat_id)).fetchone() is None:

@@ -38,6 +38,7 @@ import chat_info
 import chat_list
 import chat_pending
 import chat_fork
+import chat_continue
 import chat_preview
 import chat_sources
 import mcp_client
@@ -228,6 +229,7 @@ app.include_router(chat_preview.router)         # окно HTML и SVG отве�
 app.include_router(chat_sources.router)         # источники «Знаний» под ответом
 app.include_router(chat_list.router)
 app.include_router(chat_fork.router)
+app.include_router(chat_continue.router)         # «Новый диалог с итогом»
 app.include_router(knowledge.router)
 app.include_router(roles.router)
 app.include_router(skills.router)

@@ -20,7 +20,7 @@ from test_knowledge import base
 from test_mcp_dialog import name_of, offered, setup, tool, view
 from test_protected_source import code_of, flags, names, protect, web_dialog
 
-KEEP = ("connection_id", "model", "role", "mcp_ids", "thinking", "title")
+KEEP = ("connection_id", "model", "role", "mcp_ids", "thinking", "effort", "title")
 #: столбцы диалога, которые ветка берёт у исходного как есть
 INHERITED = ("connection_id", "model", "mcp_model_sid", "role_id", "thinking", "effort", "mcp_ids", "mcp_off",
              "mcp_tools_off", "protected_used", "title", "web")

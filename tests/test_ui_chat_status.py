@@ -236,6 +236,28 @@ def test_context_window_numbers_buttons_and_no_data(browser, live, width):
     assert not problems(r), r.get("log")
 
 
+def test_context_window_continue_goes_to_the_real_route(browser, live):
+    """«Новый диалог с итогом» без подмены (задача 15, `chat_continue`): итог модели — в поле открытого наследника."""
+    import chat
+    login = "ctxwin-continue"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+        ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(False),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("type", "#chat-input", "Вопрос"), ("press", "Enter"),
+        ("wait", f"{ANSWERED} && !document.querySelector('#ctx-meter').hidden"),
+        ("eval", "cid", CHAT),
+        ("click", "#ctx-meter"), ("wait", is_open("#chat-context-dialog")),
+        ("click", "#chat-context-continue"),
+        ("wait", "document.querySelector('#chat-input').value !== ''"),
+        ("eval", "moved", f"[{CHAT}, document.querySelector('#chat-input').value]")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["moved"][0] != v["cid"] and v["moved"][1] == "".join(live.gw.chat_reply)
+    assert live.gw.chat_requests[-1]["messages"][0]["content"] == chat.SUMMARY_NOTE
+    assert not problems(r), r.get("log")
+
+
 def test_context_window_without_usage_says_no_data(browser, live):
     """Приёмка п. 13: шлюз без `usage` — ход работает, в окне «нет данных»; кольцо — кнопка в строке состояния."""
     login = "ctxwin-empty"
