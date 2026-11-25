@@ -24,6 +24,11 @@ new MutationObserver(() => {
   if (!document.documentElement.classList.contains('shrouded')) locked = false;
 }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
+// автоматическая перезагрузка (refresh.js) не обрывает очередь: пока в ней есть сообщения — вето, как у drafts.js
+document.addEventListener('studio-before-auto-refresh', (event) => {
+  if ([...queues.values()].some((entry) => entry.items.length)) event.preventDefault();
+});
+
 function entryOf(id) {
   if (!queues.has(id)) queues.set(id, { items: [], paused: false });
   return queues.get(id);

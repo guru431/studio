@@ -63,6 +63,8 @@ def test_queue_sends_once_after_the_answer(browser, live):                 # Rev
             ("wait", f"{QUEUED}.length === 1"),
             ("eval", "queued", QUEUED), ("eval", "field", FIELD),
             ("eval", "later", "!document.querySelector('#queue-add').hidden"),
+            # поле пусто, ответ идёт через сервер — автоперезагрузку запрещает сама очередь
+            ("eval", "veto", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"),
             ("eval", "words", "(() => { const q = document.querySelector('#code-queue'); return [q.getAttribute('aria-label'),"
                               " q.querySelector('.small').textContent,"
                               " ...[...q.querySelectorAll('.code-queue-actions button')].map(b => b.getAttribute('aria-label'))]; })()"),
@@ -76,12 +78,14 @@ def test_queue_sends_once_after_the_answer(browser, live):                 # Rev
             release("go-once"),
             ("wait", f"{USERS}.length === 6 && {ANSWERED} && {QUEUED}.length === 0"),
             pause(1500),
-            ("eval", "users", USERS)])
+            ("eval", "users", USERS),
+            ("eval", "unveto", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))")])
     finally:
         live.gw.chat_hold = False
     assert not r.get("failed"), r
     v = r["values"]
     assert v["queued"] == ["Второй"] and v["field"] == "" and v["later"] is True
+    assert v["veto"] is True and v["unveto"] is False            # очередь пуста — перезагрузке не мешает
     # слова «Чата», а не «Агентов» (queueView, `labels`)
     assert v["words"] == ["Очередь сообщений", "После ответа", "Изменить ожидающее сообщение", "Удалить ожидающее сообщение"]
     assert v["sixth"] == ["В очереди не больше 5 сообщений", "Шестое"]
