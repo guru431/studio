@@ -75,10 +75,8 @@ export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost
   }
 
   function pick(item) {
-    if (item.kind !== 'command') {
-      choose(item);
-      text.value = text.value.replace(/^\/\S*[ \t]*/, '');
-    } else {
+    if (item.kind !== 'command') choose(item);       // «/слово» slash.js уже убрал из поля
+    else {
       const prefix = `/${item.name} `;
       text.value = prefix + text.value.replace(/^\/\S+[ \t]*/, '');
       text.setSelectionRange(prefix.length, prefix.length);
