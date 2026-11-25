@@ -111,6 +111,10 @@ import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
+import { chatDrafts } from './chat-drafts.js';
+import { messageNav } from './message-nav.js';
+import { QUEUE_MAX, chatQueue } from './chat-queue.js';
+import { fileDrop } from './chat-drop.js';
 import { keep } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
@@ -871,6 +875,30 @@ function build(view, ctx) {
   form.before(status.bar);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
+  // черновик на каждый диалог (chat-drafts.js); sectionDraft остаётся только защитой от автоперезагрузки
+  const dialogDrafts = chatDrafts(input, { autosize });
+  // стрелки по своим сообщениям и «Развернуть все шаги» (message-nav.js) — справа у ленты
+  const historyBox = el('div', { class: 'chat-history' });
+  scroller.replaceWith(historyBox);
+  const nav = messageNav({ scroller, feed, prefix: 'chat', own: '.msg.user', steps: 'details.web-steps, details.think',
+    expandLabels: [tr("Развернуть все шаги"), tr("Свернуть все шаги")], stuck: () => stick,
+    follow: (on) => { stick = on; found = null; } });
+  historyBox.append(scroller, nav.node);
+  const feedWatch = new MutationObserver(() => nav.paint());    // новый диалог, «Загружаю диалог…» — без стрелок
+  feedWatch.observe(feed, { childList: true });
+  feed.addEventListener('toggle', () => nav.paint(), true);       // шаг раскрыли рукой — подпись «Развернуть все»
+  // очередь «После ответа» (chat-queue.js): уходит сама, когда ответ кончился и карточки нет
+  const queueAdd = iconButton('wait', tr("После ответа"), { id: 'queue-add', class: 'send composer-go', hidden: true });
+  stop.before(queueAdd);
+  const queueHost = el('div', { hidden: true });
+  form.before(queueHost);
+  const queue = chatQueue(queueHost, { send: (item) => queuedTurn(item),
+    failed: (err) => { notice.textContent = words(err); } });
+  let queuing = null;          // { item, typed, back } — сообщение очереди уходит: его текст в поле на время submit
+  let forkNote = null;         // { id, text } — слова для #chat-error ветки после её загрузки
+  let idleTimer = 0;
+  // вставка и перетаскивание файлов в поле — тем же путём, что скрепка
+  fileDrop(form, (files) => addFiles(files));
   const sharing = shareMenu(root, { id: 'chat-share', content: scroller, archive: true,
     failed: (err) => { notice.textContent = words(err); } });
   const share = sharing.button;
@@ -1385,6 +1413,78 @@ function build(view, ctx) {
     });
   }
 
+  /* «После ответа» (chat-queue.js): текст поля — в очередь открытого диалога; правка сообщения и вложения в очередь
+     не встают. Принято — поле и черновик диалога пусты */
+  function enqueue() {
+    const text = input.value;
+    if (editing || !chatId || !text.trim()) return;
+    if (atts.length) {
+      notice.textContent = tr("В очередь встаёт только текст — вложения отправьте после ответа");
+      return;
+    }
+    if (!queue.add(chatId, text)) {
+      notice.textContent = tr("В очереди не больше {0} сообщений", QUEUE_MAX);
+      return;
+    }
+    notice.textContent = '';
+    inputDraft.sent(text);
+    input.value = '';
+    autosize();
+    dialogDrafts.typed(chatId);
+    ring.schedule();
+  }
+
+  /* сообщение очереди уходит обычным ходом (как voiceTurn): его текст — в поле на время submit (поле только для
+     чтения), набранное и вложения поля ждут и возвращаются. Итог — `done`, `unknown` (исход неизвестен: ждём
+     квитанцию), `busy` (ход на другом устройстве — подождать) или `failed` (очередь — на паузу) */
+  async function queuedTurn(item) {
+    const held = atts;
+    atts = [];
+    // окно подтверждения потом отправило бы текст поля, а не сообщение очереди: такой ход — только рукой
+    if (needsConsent(false) || needsWebConsent(false)) {
+      atts = held;
+      notice.textContent = tr("Сообщение из очереди требует подтверждения — отправьте его сами");
+      return 'failed';
+    }
+    queuing = { item, typed: input.value, back: false };
+    input.value = item.text;
+    input.readOnly = true;
+    let refusal = null;
+    try {
+      refusal = await submit(false);
+    } finally {
+      atts = [...held, ...atts];
+      unqueueField();
+      queuing = null;
+      paintAtts();
+    }
+    if (pendingTurn?.queued === item.id && pendingTurn.uncertain) return 'unknown';
+    return refusal?.code === 'busy' ? 'busy' : 'failed';      // принятое сообщение очередь уже убрала (done)
+  }
+
+  /* поле — снова набранное человеком (уход сообщения очереди кончился, смена диалога, уход из раздела) */
+  function unqueueField() {
+    if (!queuing || queuing.back) return;
+    queuing.back = true;
+    input.readOnly = false;
+    input.value = queuing.typed;
+    autosize();
+  }
+
+  /* файлы из скрепки, буфера и перетаскивания (chat-drop.js): звук и видео — в диалог для MCP, если он их примет;
+     не подходящие — словами у чипа сразу */
+  function addFiles(picked) {
+    const media = mediaState();
+    if (media && picked.some(isMedia)) pickMedia(picked.filter(isMedia), media);
+    for (const f of media ? picked.filter((x) => !isMedia(x)) : picked) {
+      const error = unfit(f);
+      atts.push({ file: f, meta: null, error: error && words(error), busy: false, unfit: !!error });   // как отказ сервера
+    }
+    dropWaiting();
+    if (atts.length > ATTACH_MAX) notice.textContent = tr("не больше {0} вложений в сообщении", ATTACH_MAX);
+    paintAtts();
+  }
+
   async function switchThink() {
     if (!chat) {
       draftThink = !draftThink;
@@ -1827,6 +1927,21 @@ function build(view, ctx) {
     input.focus();
   }
 
+  /* «Продолжить иначе» (chat_fork.py): новый диалог с историей до сообщения `m`, его текст — в поле (openWith);
+     вложения самого сообщения ветка не получает — слова об этом в #chat-error, когда ветка откроется */
+  async function forkAt(m) {
+    const id = chatId;
+    try {
+      const out = await api('POST', `/api/chats/${id}/fork`, { message_id: m.id });
+      if (!alive) return;
+      if (chatId !== id) { loadList(); return; }       // человек уже ушёл в другой диалог — ветка ждёт в списке
+      forkNote = (m.attachments || []).length ? { id: out.chat_id, text: tr("Вложения сообщения в новый диалог не перенесены") } : null;
+      openWith(out.chat_id, out.text);
+    } catch (err) {
+      if (chatId === id) notice.textContent = words(err);
+    }
+  }
+
   function askDeleteTurn(m) {
     if (sending || jobs.has(chatId) || remoteStream() || otherTab()) return;
     const id = chatId;
@@ -1923,6 +2038,8 @@ function build(view, ctx) {
       if (m.id) {
         const actions = el('div', { class: 'msg-actions' },
           button(tr("Изменить"), { class: 'btn btn-sm msg-edit' }, () => editTurn(m)),
+          button(tr("Продолжить иначе"), { class: 'btn btn-sm msg-fork',
+            title: tr("Новый диалог с историей до этого сообщения, его текст — в поле") }, () => forkAt(m)),
           button(tr("Удалить ход"), { class: 'btn btn-sm msg-delete-turn' }, () => askDeleteTurn(m)));
         if (chat?.chat.cleaner && (m.content || (m.attachments || []).some((a) => a.kind === 'document'))) {
           actions.append(cleanerCopy(m));
@@ -2180,6 +2297,7 @@ function build(view, ctx) {
       return node;
     }), msgs, chat));
     paintConsents();                                   // решение о файлах MCP могло смениться и у прежних узлов
+    nav.paint();
   }
 
   function emptyNote() {
@@ -2232,8 +2350,18 @@ function build(view, ctx) {
     editNote.querySelector('button').disabled = sending;
     send.hidden = busy;
     stop.hidden = !busy;
+    queueAdd.hidden = !(busy || otherTab());
     paintGuard();
     status.paint();
+    // после текущего шага: конец ответа следом перечитывает ленту (refresh), и очередь ждёт её
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { if (alive) queue.idle(chatId, queueFree()); }, 0);
+  }
+
+  /* очередь уходит, когда ответ кончился, свой ход не отправляется, нет правки и ждущей карточки, лента перечитана */
+  function queueFree() {
+    return !jobs.has(chatId) && !remoteStream() && !otherTab() && !sending && !editing && !historyRead && !!chatId
+      && chat?.chat.id === chatId && !chat.messages.some((m) => liveOf(m).pending);
   }
 
   function schedulePoll() {
@@ -2251,12 +2379,15 @@ function build(view, ctx) {
     if (pendingTurn === attempt) pendingTurn = null;
     if (attempt.regenerate || attempt.acknowledged) return;
     attempt.acknowledged = true;
+    // сообщение очереди принято — из очереди уходит; поле и черновик — набранное человеком, их не трогаем
+    if (attempt.queued) queue.done(attempt.queued);
     inputDraft.sent(attempt.text);                     // ушли из раздела до подтверждения — черновиком не вернётся
+    if (!attempt.queued) dialogDrafts.sent(attempt.id, attempt.text);
     if (attempt.edit) {
       if (editing?.message.id === attempt.edit.id && chatId === attempt.id) closeEdit();
-    } else if (input.value === attempt.text) { input.value = ''; autosize(); }
+    } else if (!attempt.queued && input.value === attempt.text) { input.value = ''; autosize(); }
     if (attempt.skill && skills.chosen() === attempt.skill) skills.clear();   // навык ушёл с ходом
-    skills.close();                                    // меню «/» — после отправки хода (slash.js)
+    if (!attempt.queued) skills.close();               // меню «/» — после отправки хода (slash.js)
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
   }
@@ -2310,9 +2441,13 @@ function build(view, ctx) {
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
     closeEdit();
+    unqueueField();                                  // в поле — набранное, а не текст уходящего сообщения очереди
+    if (chatId !== undefined) dialogDrafts.leave(chatId);   // первое открытие — черновика прежнего диалога нет
     if (talking) talking();                          // «Разговор» — у своего диалога, другой его останавливает
     const mine = ++opened;
     chatId = id;
+    dialogDrafts.enter(id);
+    queue.show(id);
     found = null;                                    // ?m= нового адреса ставит query() следом
     shareContext();
     chat = null;
@@ -2370,6 +2505,10 @@ function build(view, ctx) {
       return;
     }
     if (prefill?.id === id) prefill = null;
+    if (forkNote?.id === id) {                       // ветка от сообщения с вложениями
+      notice.textContent = forkNote.text;
+      forkNote = null;
+    }
     renderFeed();
     paintChip();
     syncBusy();
@@ -2483,6 +2622,12 @@ function build(view, ctx) {
   }
 
   async function submit(regenerate, externalOk = false, webOk = false) {
+    // ответ идёт (здесь или через сервер с другого устройства): Enter ставит текст в очередь. Ответ другой вкладки
+    // (`otherTab`) — только кнопкой «После ответа»: его признак у страницы бывает устаревшим, сервер решит сам
+    if (!regenerate && !queuing && !voiceWait && chatId && (jobs.has(chatId) || remoteStream())) {
+      enqueue();
+      return null;
+    }
     stopWaiting();                                 // ждали скан — ход идёт сейчас
     const text = input.value;
     const retained = editing?.message.attachments?.length || 0;
@@ -2510,12 +2655,16 @@ function build(view, ctx) {
     paintAtts();
     const made = {};                               // диалог, созданный этим ходом (`id`)
     let again = false;                             // ход повторится сам (окно подтверждения, скан): диалог нужен
+    let refusal = null;                            // отказ хода — очереди (chat-queue.js): `busy` ждёт, прочее — пауза
     try {
       await turn(regenerate, text, externalOk, webOk, made);
     } catch (err) {
+      refusal = err;
       again = ['external', 'external_web', 'not_ready'].includes(err.code);
+      // сообщение очереди: подтверждение и ожидание скана повторили бы ход текстом поля — очередь встаёт на паузу
+      if (queuing && again) notice.textContent = words(err);
       // вкладка не знала (другая вкладка сменила модель, включила «Интернет», ключ Exa появился)
-      if (err.code === 'external') askExternal(regenerate, webOk);
+      else if (err.code === 'external') askExternal(regenerate, webOk);
       else if (err.code === 'external_web') askWeb(regenerate, externalOk);
       else if (err.code === 'not_ready') {        // прямое подключение: скан ждёт страница
         notice.textContent = NOT_READY;
@@ -2530,6 +2679,7 @@ function build(view, ctx) {
       paintAtts();
     }
     if (made.id && !again) dropEmpty(made.id);
+    return refusal;
   }
 
   /* первый ход нового диалога не прошёл (отказ, отмена окна Cleaner, сбой загрузки вложения): созданный под него
@@ -2544,6 +2694,8 @@ function build(view, ctx) {
       const knew = chat.knowledge || [];
       ++opened;
       chatId = null;
+      dialogDrafts.rename(id, null);               // черновик снова у нового диалога
+      queue.show(null);
       chat = null;
       draft = { connection_id: was.connection_id, model: was.model };
       draftWeb = !!was.web;
@@ -2580,6 +2732,8 @@ function build(view, ctx) {
     const created = await api('POST', '/api/chats', draft || {});
     ++opened;
     chatId = created.id;
+    dialogDrafts.rename(null, created.id);         // черновик нового диалога переходит к созданному
+    queue.show(created.id);
     made.id = created.id;
     chat = { chat: created, messages: [] };
     shareContext();
@@ -2713,7 +2867,10 @@ function build(view, ctx) {
     scrollDown(true);
     let reply;
     const signature = JSON.stringify([id, turnInput]);
-    if (pendingTurn?.signature !== signature) {
+    if (queuing && !regenerate) {                  // сообщение очереди: его id — квитанция хода (повтор не задвоит)
+      pendingTurn = { signature, requestId: queuing.item.id, queued: queuing.item.id, id, regenerate, text, sent, edit,
+        skill };
+    } else if (pendingTurn?.signature !== signature || pendingTurn.queued) {
       pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent, edit, skill };
     }
     const attempt = pendingTurn;
@@ -2864,24 +3021,18 @@ function build(view, ctx) {
     autosize();
     dropWaiting();
     ring.schedule();
+    if (!editing) dialogDrafts.typed(chatId);
   });
+  queueAdd.addEventListener('click', enqueue);
   enterSends(input, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit(false);
   });
   file.addEventListener('change', () => {
-    const media = mediaState();                    // звук и видео — в диалог для MCP, если он их примет
     const picked = [...file.files];
-    if (media && picked.some(isMedia)) pickMedia(picked.filter(isMedia), media);
-    for (const f of media ? picked.filter((x) => !isMedia(x)) : picked) {
-      const error = unfit(f);
-      atts.push({ file: f, meta: null, error: error && words(error), busy: false, unfit: !!error });   // как отказ сервера
-    }
     file.value = '';
-    dropWaiting();
-    if (atts.length > ATTACH_MAX) notice.textContent = tr("не больше {0} вложений в сообщении", ATTACH_MAX);
-    paintAtts();
+    addFiles(picked);
   });
   stop.addEventListener('click', async () => {
     const job = jobs.get(chatId);
@@ -2949,10 +3100,16 @@ function build(view, ctx) {
     destroy() {
       if (talking) talking();
       closeEdit();
+      unqueueField();
+      if (chatId !== undefined) dialogDrafts.leave(chatId);   // черновик — у диалога (chat-drafts.js), не у раздела
+      queue.unmount();
+      nav.unmount();
+      feedWatch.disconnect();
+      clearTimeout(idleTimer);
       ring.hide();
       status.unmount();
       skills.unmount();
-      inputDraft.save();
+      inputDraft.save(false);
       sharing.unmount();
       listing.unmount();
       tabs.unmount();

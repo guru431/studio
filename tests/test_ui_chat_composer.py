@@ -156,7 +156,8 @@ def test_suggestion_inserts_text_without_sending(browser, live, width):
     v = r["values"]
     assert v["action"] == "Скачать ролик" and v["download"].startswith("Скачай ролик в MP4 со звуком.")
     assert v["inserted"] == "Сделай сводку"
-    assert v["after"] == ["Сделай сводку\n\nОбзор: кино", 0, False]
+    # у другого диалога — свой черновик (спека 2026-11-25, п. 21): вставленное в новом диалоге там и осталось
+    assert v["after"] == ["Обзор: кино", 0, False]
     assert not [s for s in r["sent"] if s.endswith("/turns")], r["sent"]
     assert v["fits"] is True
     assert not problems(r), problems(r)
