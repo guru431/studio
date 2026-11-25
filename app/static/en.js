@@ -2356,7 +2356,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Настройки ntfy сброшены": "ntfy settings reset",
   "О чём уведомлять": "What to notify about",
   "Для push и ntfy этого устройства: телефон и компьютер настраиваются отдельно. После выхода из учётки — заново.": "For push and ntfy on this device: set up your phone and computer separately. Set up again after signing out.",
-  "Вопросы и подтверждения агентов": "Agent questions and confirmations",
+  "Вопросы и подтверждения агентов и чата": "Agent and chat questions and confirmations",
   "Конец хода агентов и ответы чата": "Agent turn ends and chat answers",
   "Готовность заданий разделов": "Finished section tasks",
   "Служебные: копия базы, отключённая ссылка, неверный код входа": "Service: database backup, disabled link, wrong sign-in code",
@@ -4372,7 +4372,12 @@ globalThis.StudioEnglish = Object.freeze({
   "инструмент с подтверждением недоступен внутри части": "a tool that needs confirmation is not available inside a part",
   "модель зациклилась — часть остановлена": "model stuck in a loop; the part was stopped",
   "рассуждение части слишком длинное — часть остановлена": "the part's reasoning is too long; the part was stopped",
-  "этот инструмент недоступен внутри части": "this tool is not available inside a part"
+  "этот инструмент недоступен внутри части": "this tool is not available inside a part",
+  "Поиск по названиям": "Search titles",
+  "Закрепить": "Pin",
+  "Открепить": "Unpin",
+  "не прочитано": "unread",
+  "Открытые диалоги": "Open conversations"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",

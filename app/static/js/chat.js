@@ -115,6 +115,8 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
+import { chatList } from './chat-list.js';
+import { chatTabs } from './chat-tabs.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
@@ -858,6 +860,8 @@ function build(view, ctx) {
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
       export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive`,
       blocked: current.protected ? PROTECTED_SHARE : null } : null);
+    listing.seen(current);
+    tabs.show(current);
   }
 
   /* выдвижная панель списка (≤ 760px) */
@@ -867,31 +871,21 @@ function build(view, ctx) {
     toggle.setAttribute('aria-expanded', String(open));
   }
 
+  // список (chat-list.js): метки, звезда, поиск по названиям; вкладки диалогов над лентой (chat-tabs.js)
+  const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : newChat()), info: tabInfo });
+  const listing = chatList(list, { row: listItem, group: groupOf, failed: (err) => { notice.textContent = words(err); },
+    loaded: (items) => { listed = items; tabs.sync(items.map((c) => c.id)); } });
+  fresh.after(listing.search);
+  modelNote.after(tabs.node);
+
+  function tabInfo(id) {
+    const item = listed.find((c) => c.id === id);
+    return { title: chat?.chat.id === id ? chat.chat.title : item?.title, busy: !!item?.busy || jobs.has(id) };
+  }
+
   /* список диалогов */
   async function loadList() {
-    let items;
-    try {
-      items = (await api('GET', '/api/chats')).items;
-    } catch (err) {
-      list.replaceChildren(el('p', { class: 'error small chat-list-note' }, words(err)));
-      return;
-    }
-    listed = items;
-    if (!items.length) {
-      list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Диалогов пока нет")));
-      return;
-    }
-    const nodes = [];
-    let group = null;
-    for (const item of items) {
-      const name = groupOf(item.updated);
-      if (name !== group) {
-        group = name;
-        nodes.push(el('p', { class: 'chat-group' }, name));
-      }
-      nodes.push(listItem(item));
-    }
-    list.replaceChildren(...nodes);
+    await listing.reload();                          // удачный ответ — listed и tabs.sync через loaded
   }
 
   function listItem(item) {
@@ -2926,6 +2920,8 @@ function build(view, ctx) {
       status.unmount();
       inputDraft.save();
       sharing.unmount();
+      listing.unmount();
+      tabs.unmount();
       alive = false;
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);

@@ -967,6 +967,24 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .chat-item:focus-within .chat-more, .chat-item:has(.chat-menu:popover-open) .chat-more,
 .chat-item:has([aria-current="page"]) .chat-more { opacity: 1; }
 @media (hover: hover) { .chat-item:hover .chat-more { opacity: 1; } }
+/* список (chat-list.js): поиск по названиям, метки без текста (слова — aria-label), звезда «Закрепить» */
+.chat-search { flex: none; padding: 7px var(--space-4); }
+.chat-marks { flex: none; display: flex; align-items: center; gap: var(--space-2); padding-right: var(--space-1); }
+.chat-marks:empty { display: none; }
+.chat-mark { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.chat-mark[data-mark="busy"] { background: var(--success); }
+.chat-mark[data-mark="unread"] { background: var(--accent); }
+.chat-mark[data-mark="draft"] { width: auto; height: auto; border-radius: 0; color: var(--accent); font-size: var(--fs-xs); line-height: 1; }
+.chat-mark[data-mark="draft"]::before { content: '✎'; }
+.chat-pin { opacity: 0; }
+.chat-pin[aria-pressed="true"] { opacity: 1; color: var(--accent); }
+.chat-pin[aria-pressed="true"] svg { fill: currentColor; }
+.chat-item:focus-within .chat-pin, .chat-item:has(.chat-menu:popover-open) .chat-pin,
+.chat-item:has([aria-current="page"]) .chat-pin { opacity: 1; }
+@media (hover: hover) { .chat-item:hover .chat-pin { opacity: 1; } }
+/* вкладки диалогов (chat-tabs.js) над лентой: вид — ряд «Агентов», листается внутри себя */
+.chat-tabs { flex: none; min-width: 0; }
+.chat-tabs .code-tabbar { border-top: 0; border-bottom: 1px solid var(--line); }
 .chats-backdrop, .icon-btn.chats-toggle { display: none; }
 
 .icon-btn { position: relative; display: inline-grid; place-items: center; width: var(--h-icon); height: var(--h-icon); flex: none; padding: 0;
@@ -1211,6 +1229,7 @@ video.msg-file-media { max-height: 320px; }
   .chats-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .icon-btn.chats-toggle { display: inline-grid; margin-left: -6px; }
   .chat-more { opacity: 1; }
+  .chat-pin { opacity: 1; }
   .feed { padding: var(--space-7); }
   .msg.user { max-width: 92%; }
   .msg.assistant { gap: var(--space-5); }
@@ -2534,6 +2553,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   :is([aria-pressed="true"], [aria-current]:not([aria-current="false"]), [aria-checked="true"], [aria-selected="true"]) {
     outline: 2px solid Highlight; outline-offset: -2px; }
   .code-context, .code-tab-mark, .code-project-state::before, .code-activity-dot { forced-color-adjust: none; }
+  .chat-mark { forced-color-adjust: none; }
 }
 /* печать чата и перевода: без рельса, шапок и поля ввода, переписка целиком, а не один экран */
 @media print {

@@ -43,6 +43,7 @@ import { icon as svgIcon } from './icons.js';
 import { lazy, pageVersion, watchDeploys } from './stale.js';
 import { cancelRefresh, claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
 import './dialog-drafts.js';
+import './chat-tabs.js';           // выход стирает вкладки диалогов и без открытого «Чата»
 
 const LOADERS = {
   chat: () => import('./chat.js'),
