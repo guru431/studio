@@ -126,6 +126,7 @@ class _Turn:
     background_reply: set[str] = field(default_factory=set)  # уведомления текущего автоматического ответа
     cli_state: str | None = None  # подтверждённое состояние CLI; idle завершает уже поглощённые уведомления
     unread: set[str] = field(default_factory=set)  # uuid ввода, который CLI ещё не повторил (не принял в работу)
+    answered: bool = False  # ResultMessage пришёл после последнего повтора своего ввода
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
     mcp_config: object | None = None
@@ -597,6 +598,7 @@ class Runner:
                                 # Ответ на уведомление не подтверждает отправленный пользователем ввод.
                                 # У старого CLI без origin фоновый ответ идёт после всего явного ввода.
                                 if result_message:
+                                    t.answered = True
                                     origin = getattr(message, "origin", None)
                                     if (origin or {}).get("kind") == "task-notification" or (origin is None and not t.pending):
                                         if t.background_reply:
@@ -608,9 +610,10 @@ class Runner:
                                     if message.is_error:
                                         failure = _words(message.errors, message.result, message.subtype)
                                         t.pending = 0
-                                if t.cli_state == "idle" and not t.unread:
-                                    # CLI принял весь ввод хода и простаивает: на поглощённое идущим ответом
-                                    # уточнение (queued_command) отдельного ResultMessage не будет.
+                                if t.cli_state == "idle" and not t.unread and t.answered:
+                                    # CLI принял весь ввод хода, ответил после него и простаивает: на поглощённое
+                                    # идущим ответом уточнение (queued_command) отдельного ResultMessage не будет.
+                                    # Без ответа после повтора idle мог прийти раньше ResultMessage — ждём его.
                                     t.pending = 0
                                 if t.cli_state == "idle" and not (t.pending or t.background_tasks):
                                     # CLI мог поглотить уведомление текущим ответом без отдельного ResultMessage.
@@ -682,6 +685,7 @@ class Runner:
         """Штатные lifecycle-события SDK; фоновые Bash-задачи в счётчик агентов не попадают."""
         if isinstance(message, UserMessage) and message.parent_tool_use_id is None and message.uuid in t.unread:
             t.unread.discard(message.uuid)  # повтор своего ввода: CLI принял его в работу
+            t.answered = False
             return
         if isinstance(message, UserMessage) and message.parent_tool_use_id is None and (message.origin or {}).get("kind") == "task-notification":
             # Несколько завершений CLI может объединить в один ввод и один ResultMessage.

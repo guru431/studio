@@ -237,6 +237,20 @@ async def test_input_absorbed_by_the_running_response_finishes_on_idle(backgroun
     assert "replay-user-messages" in client.options.extra_args and all(client.uuids)
 
 
+async def test_idle_before_the_result_still_reads_the_result(background):
+    """Порядок «idle, потом ResultMessage»: ход не кончается на idle, итог ответа (ошибка) доходит до `done`."""
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(assistant(text("Ответ на оба")))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    client.items.put_nowait(result("error_during_execution", is_error=True, errors=["Сбой ответа"]))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert [(f["e"]["status"], f["e"].get("message")) for f in sent if f["e"]["k"] == "done"] == [("error", "Сбой ответа")]
+
+
 async def test_idle_before_the_cli_reads_new_input_keeps_the_turn(background):
     """CLI отвечает idle раньше, чем прочитал уточнение из stdin (проверено на 2.1.330): ход ждёт его ответа."""
     runner, client, turn, sent = background
