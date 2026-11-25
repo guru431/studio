@@ -87,9 +87,9 @@ def test_each_read_runs_its_own_mcp_job(browser, live, width):
                               **JOBS, **SERVICE})
     r = browser.drive(live.url + "/", [*start(login), *opened(cid),
         ("eval", "first", f"{READ}[0].click(); true"),
-        ("wait", f"{BOX}[0]?.querySelector('.mcp-run .status')?.textContent === 'В работе'"),
+        ("wait", f"{BOX}[0]?.querySelector('.mcp-run .status')?.textContent === 'Выполняется'"),
         ("eval", "second", f"{READ}[1].click(); true"),
-        ("wait", f"{BOX}[1]?.querySelector('.mcp-run .status')?.textContent === 'В работе'"),
+        ("wait", f"{BOX}[1]?.querySelector('.mcp-run .status')?.textContent === 'Выполняется'"),
         ("wait", "performance.getEntriesByType('resource').filter(e => e.name.endsWith('/run')).length === 2"),
         ("eval", "controls", f"[...{BOX}].map(box => box.querySelector('.mcp-result').id)")],
         width=width, mobile=width == 320, timeout=20000)
