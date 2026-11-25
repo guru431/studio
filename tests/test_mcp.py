@@ -86,6 +86,45 @@ def test_mcp_discovery_tool_round_and_secret_storage(studio, caplog, streaming):
     assert 'result-private' not in caplog.text
 
 
+def test_long_sse_answer_in_many_chunks_with_crlf_on_the_boundary(studio):
+    """Ответ SSE в несколько МБ сотнями кусков: CRLF, разрезанный между кусками, и чужие события до ответа —
+    разбор по мере прихода находит ответ на запрос (`mcp_client.Session.rpc`)."""
+    sid = add(studio)
+    mock(studio, streaming=True)
+    real = studio.gw.on['/mcp']
+    filler = 'я' * 1_500_000                                   # 3 МБ UTF-8: блок, который результат пропускает
+    cuts = []
+
+    async def handler(request):
+        payload = json.loads(request.content) if request.method == 'POST' else {}
+        if payload.get('method') != 'tools/call':
+            return await real(request)
+        result = {'content': [{'type': 'text', 'text': 'result-big'}, {'type': 'image', 'data': filler, 'mimeType': 'image/gif'}]}
+        body = (': ping\r\n\r\nevent: message\r\ndata: {"jsonrpc": "2.0", "method": "notifications/progress"}\r\n\r\n'
+                'event: message\r\ndata: ' + json.dumps({'jsonrpc': '2.0', 'id': payload['id'], 'result': result},
+                                                       ensure_ascii=False) + '\r\n\r\n').encode()
+        # разрез после каждого `\r` начала и конца (CRLF — между кусками) и каждые 4099 байт (UTF-8 — пополам)
+        cuts.extend(sorted({i + 1 for i, b in enumerate(body) if b == 13 and (i < 200 or i > len(body) - 5)}
+                           | set(range(4099, len(body), 4099))))
+
+        async def chunks():
+            prev = 0
+            for cut in [*cuts, len(body)]:
+                yield body[prev:cut]
+                prev = cut
+
+        return httpx.Response(200, content=chunks(), headers={'content-type': 'text/event-stream'})
+
+    studio.gw.on['/mcp'] = handler
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 200
+    studio.gw.chat_script = [{'tool_calls': [call(LOOKUP, query='value')]}, ['Готово']]
+    assert sse(turn(studio, cid, 'Use tool'))[-1] == ('done', {'status': 'done'})
+    assert len(cuts) > 700
+    assert studio.gw.chat_requests[1]['messages'][-1]['content'] == 'result-big'
+    assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Tools', 'tool': 'lookup'}]
+
+
 def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     sid = add(studio); calls = mock(studio, fail=True)
     cid = new_chat(studio)

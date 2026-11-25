@@ -401,22 +401,34 @@ class Session:
                         return {}
                     data, size = bytearray(), 0
                     sse = "text/event-stream" in response.headers.get("content-type", "")
+                    # SSE разбирается по мере прихода: CRLF нормализуется только в новом куске (хвостовой `\r` ждёт
+                    # следующего), `\n\n` ищется с прежней позиции — без копий и просмотров всего буфера на кусок
+                    cr, seen = False, 0
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
                         if size > max_bytes:
                             raise refused(f"Ответ MCP больше {max_bytes >> 20} МиБ")
-                        data.extend(chunk)
-                        if sse:
-                            # SSE допускает LF и CRLF; многострочное data склеивается переводом строки.
-                            data = bytearray(data.replace(b"\r\n", b"\n"))
-                            while b"\n\n" in data:
-                                event, _, rest = data.partition(b"\n\n")
-                                data = bytearray(rest)
-                                raw = b"\n".join(line[5:].lstrip(b" ") for line in event.split(b"\n") if line.startswith(b"data:"))
-                                if raw:
-                                    result = json.loads(raw)
-                                    if isinstance(result, dict) and result.get("id") == self.seq:
-                                        return self._result(result)
+                        if not sse:
+                            data.extend(chunk)
+                            continue
+                        # SSE допускает LF и CRLF; многострочное data склеивается переводом строки.
+                        if cr:
+                            chunk = b"\r" + chunk
+                        cr = chunk.endswith(b"\r")
+                        data.extend((chunk[:-1] if cr else chunk).replace(b"\r\n", b"\n"))
+                        while True:
+                            end = data.find(b"\n\n", max(seen - 1, 0))
+                            if end < 0:
+                                seen = len(data)
+                                break
+                            event = bytes(data[:end])
+                            del data[:end + 2]
+                            seen = 0
+                            raw = b"\n".join(line[5:].lstrip(b" ") for line in event.split(b"\n") if line.startswith(b"data:"))
+                            if raw:
+                                result = json.loads(raw)
+                                if isinstance(result, dict) and result.get("id") == self.seq:
+                                    return self._result(result)
                     if not sse:
                         result = json.loads(data)
                         if isinstance(result, dict) and result.get("id") == self.seq:
