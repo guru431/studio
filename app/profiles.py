@@ -8,8 +8,11 @@
 - Параметры (`request_params`): `temperature`, `top_p`, `presence_penalty` — как есть; `max_tokens` — как
   `max_completion_tokens` у профиля `openai`; `top_k` нестандартен — у `openai` отбрасывается, у прочих — только
   явно заданный; `max_images` — предел картинок запроса (`max_images`), `max_tools` — предел инструментов MCP
-  запроса (`max_tools`: API в духе OpenAI не принимают больше 128 инструментов), оба в запрос не уходят. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
-  `REFUSED` (`refusal`).
+  запроса (`max_tools`: API в духе OpenAI не принимают больше 128 инструментов), `context_window` — окно контекста
+  модели (`chat.model_window`), все три в запрос не уходят. Отказ сервиса с именем отправленного параметра и признаком
+  отказа (`REJECTED`) — слова `REFUSED` (`refusal`).
+- Параметры на модель (`model_params`, спека п. 35): те же поля для одной модели подключения, поверх параметров
+  подключения (`model_params()`); пустой набор модели не хранится.
 - Журнал — только id: ни текста, ни параметров, ни подсказок.
 """
 import json
@@ -21,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import capabilities
 import clock
 import connections
+import sections
 import state
 
 TEXT_MAX = 8000
@@ -54,6 +58,7 @@ class Params(BaseModel):
     max_tokens: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     max_images: int | None = Field(None, ge=1, le=32, strict=True)
     max_tools: int | None = Field(None, ge=1, le=256, strict=True)
+    context_window: int | None = Field(None, ge=8192, le=4_000_000, strict=True)
 
 
 class Suggestion(BaseModel):
@@ -68,7 +73,19 @@ class ProfileIn(BaseModel):
     system_text: str = Field("", max_length=TEXT_MAX)
     params: Params = Field(default_factory=Params)
     suggestions: list[Suggestion] = Field(default_factory=list, max_length=SUGGESTIONS_MAX)
+    model_params: dict[str, Params] = Field(default_factory=dict)
     _check = field_validator("system_text")(classmethod(lambda cls, v: _plain(v)))
+
+    @field_validator("model_params")
+    @classmethod
+    def _models(cls, value: dict) -> dict:
+        if len(value) > sections.MODELS_MAX:
+            raise ValueError(f"не больше {sections.MODELS_MAX} моделей")
+        for name in value:
+            if not 1 <= len(name) <= sections.MODEL_MAX:
+                raise ValueError(f"имя модели — от 1 до {sections.MODEL_MAX} знаков")
+            _plain(name)
+        return value
 
 
 def _no_cleaner(conn: connections.Connection) -> None:
@@ -77,8 +94,8 @@ def _no_cleaner(conn: connections.Connection) -> None:
 
 
 def _row(conn_id: int):
-    return state.DB.execute("SELECT system_text, params, suggestions FROM connection_profiles WHERE connection_id = ?",
-                            (conn_id,)).fetchone()
+    return state.DB.execute("SELECT system_text, params, suggestions, model_params FROM connection_profiles"
+                            " WHERE connection_id = ?", (conn_id,)).fetchone()
 
 
 def _view(conn: connections.Connection) -> dict:
@@ -86,6 +103,7 @@ def _view(conn: connections.Connection) -> dict:
     return {"system_text": row["system_text"] if row else "",
             "params": json.loads(row["params"]) if row else {},
             "suggestions": json.loads(row["suggestions"]) if row else [],
+            "model_params": json.loads(row["model_params"]) if row else {},
             "provider": capabilities.profile(conn)}
 
 
@@ -103,14 +121,17 @@ def put(owner_id: int | None, conn_id: int, body: ProfileIn) -> dict:
     text = body.system_text.strip()
     params = body.params.model_dump(exclude_none=True)
     suggestions = [s.model_dump() for s in body.suggestions]
-    if not (text or params or suggestions):
+    per_model = {name: kept for name, value in body.model_params.items() if (kept := value.model_dump(exclude_none=True))}
+    if not (text or params or suggestions or per_model):
         state.DB.execute("DELETE FROM connection_profiles WHERE connection_id = ?", (conn.id,))
     else:
         state.DB.execute(
-            "INSERT INTO connection_profiles(connection_id, system_text, params, suggestions, updated)"
-            " VALUES (?, ?, ?, ?, ?) ON CONFLICT(connection_id) DO UPDATE SET system_text = excluded.system_text,"
-            " params = excluded.params, suggestions = excluded.suggestions, updated = excluded.updated",
-            (conn.id, text, json.dumps(params), json.dumps(suggestions, ensure_ascii=False), clock.NOW()))
+            "INSERT INTO connection_profiles(connection_id, system_text, params, suggestions, model_params, updated)"
+            " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(connection_id) DO UPDATE SET system_text = excluded.system_text,"
+            " params = excluded.params, suggestions = excluded.suggestions, model_params = excluded.model_params,"
+            " updated = excluded.updated",
+            (conn.id, text, json.dumps(params), json.dumps(suggestions, ensure_ascii=False),
+             json.dumps(per_model, ensure_ascii=False), clock.NOW()))
     log.info("подключение %d: профиль сохранён", conn.id)
     return _view(conn)
 
@@ -119,12 +140,22 @@ def is_set(conn: connections.Connection) -> bool:
     return not conn.cleaner and _row(conn.id) is not None
 
 
-def request_params(conn: connections.Connection) -> dict:
-    """Параметры профиля для тела `chat/completions` (корень JSON)."""
+def model_params(conn: connections.Connection, model: "str | None") -> dict:
+    """Сохранённые параметры подключения, поверх — параметры модели `model` (None — только подключения);
+    у Cleaner — {}."""
     row = None if conn.cleaner else _row(conn.id)
     if row is None:
         return {}
-    saved = json.loads(row["params"])
+    own = json.loads(row["model_params"]).get(model, {}) if model is not None else {}
+    return {**json.loads(row["params"]), **own}
+
+
+def request_params(conn: connections.Connection, model: "str | None" = None) -> dict:
+    """Параметры профиля (с параметрами модели, `model_params`) для тела `chat/completions` (корень JSON);
+    `context_window`, `max_images`, `max_tools` в запрос не уходят."""
+    saved = model_params(conn, model)
+    if not saved:
+        return {}
     provider = capabilities.profile(conn)
     out = {k: saved[k] for k in ("temperature", "top_p", "presence_penalty") if k in saved}
     if "max_tokens" in saved:
@@ -134,20 +165,18 @@ def request_params(conn: connections.Connection) -> dict:
     return out
 
 
-def max_images(conn: connections.Connection) -> int:
-    """Картинок на весь запрос к подключению: `max_images` профиля, иначе DEFAULT_MAX_IMAGES."""
-    row = None if conn.cleaner else _row(conn.id)
-    return json.loads(row["params"]).get("max_images", DEFAULT_MAX_IMAGES) if row else DEFAULT_MAX_IMAGES
+def max_images(conn: connections.Connection, model: "str | None" = None) -> int:
+    """Картинок на весь запрос к подключению: `max_images` профиля (модели, иначе подключения), иначе
+    DEFAULT_MAX_IMAGES."""
+    return model_params(conn, model).get("max_images", DEFAULT_MAX_IMAGES)
 
 
 def max_tools(conn: connections.Connection, model: str | None = None) -> int:
     """Инструментов MCP на запрос хода к подключению (отбор — `mcp_client.Tools.discover`; встроенные и «Интернета»
-    идут сверх него): `max_tools` профиля, иначе локальной модели хода (`sections.is_local`) —
-    `mcp_client.LOCAL_MAX_TOOLS`, иначе `mcp_client.MAX_TOOLS`."""
+    идут сверх него): `max_tools` профиля (модели, иначе подключения), иначе локальной модели хода
+    (`sections.is_local`) — `mcp_client.LOCAL_MAX_TOOLS`, иначе `mcp_client.MAX_TOOLS`."""
     import mcp_client                      # здесь, не при загрузке: mcp_client сам зовёт profiles в ходе
-    import sections
-    row = None if conn.cleaner else _row(conn.id)
-    saved = json.loads(row["params"]).get("max_tools") if row else None
+    saved = model_params(conn, model).get("max_tools")
     if saved is not None:
         return saved
     if model is not None and sections.is_local(conn, model):

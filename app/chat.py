@@ -436,7 +436,7 @@ def _chat_view(user_id: int, row) -> dict:
 
 
 def _thinking_ok(user_id: int, conn_id: "int | None", model: "str | None") -> bool:
-    """Кнопка «Рассуждение» действует: роль `local-*` srvllm через сервер (sections.is_local) — студия проверила,
+    """Кнопка «Рассуждение» действует: локальная модель (sections.is_local: роль `local-*` srvllm, шлюз s06) — студия проверила,
     что `chat_template_kwargs.enable_thinking` до неё доходит; облачной роли LiteLLM передал бы его провайдеру."""
     if conn_id is None:
         return False
@@ -676,10 +676,10 @@ def _cap_images(messages: list[dict], limit: int) -> None:
         m["content"] = parts[::-1]
 
 
-def _max_images(conn: Connection) -> int:
+def _max_images(conn: Connection, model: str) -> int:
     """Картинок на запрос хода: подключение через Cleaner — ни одной (NO_IMAGES: картинки истории — пометкой
-    CLEANER_DROPPED), иначе предел профиля (`profiles.max_images`)."""
-    return NO_IMAGES if conn.routed else profiles.max_images(conn)
+    CLEANER_DROPPED), иначе предел профиля модели (`profiles.max_images`)."""
+    return NO_IMAGES if conn.routed else profiles.max_images(conn, model)
 
 
 def _refused_turns(rows, model: "str | None") -> set[str]:
@@ -1508,7 +1508,7 @@ class StreamTask:
         return None, ending, [calls[i] for i in sorted(calls)], text
 
     def _short_reasoning(self, payload):
-        if self.thinking is not None or self.conn.s06:
+        if self.thinking is not None:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
@@ -1915,7 +1915,7 @@ class StreamTask:
                 self.builtin_off = retried = True
                 continue
             if ending == BUSY:                           # 503: тот же круг заново после паузы
-                if not self.freed and sections.is_local(self.conn, self.model):
+                if not self.freed and self.conn.kind == "srvllm" and sections.is_local(self.conn, self.model):
                     self.freed = True                    # первый раз — отпустить модели картинок и сразу повторить
                     await self._free_images()
                     continue
@@ -2002,7 +2002,7 @@ class StreamTask:
         finally:
             self.scan_state = None
         self.cut, _ = _excerpt_plan(self.user_id, self.chat_id, self.user_message_id, self.model,
-                                    _max_images(self.conn), self.system, self.limit,
+                                    _max_images(self.conn, self.model), self.system, self.limit,
                                     bool(knowledge.chat_kbs(self.user_id, self.chat_id)),
                                     vectors=knowledge.vectors_for(self.conn))
         if self.tools:
@@ -2877,7 +2877,7 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     own = {a["id"] for a in _attachments(chat_id).get(upto, [])}
     excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
                                                knowledge.vectors_for(conn), own=own)
-    composed = _with_block(compose(chat_id, upto, model, _max_images(conn), excerpts), block)
+    composed = _with_block(compose(chat_id, upto, model, _max_images(conn, model), excerpts), block)
     tokens = estimate_tokens(chat_system.wrap(system, composed))
     if (limit is not None and tokens > limit - RESERVE_TOKENS
             and not _can_summarize(conn, chat_system.wrap(system, composed), limit)):
@@ -3027,7 +3027,7 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
         "SELECT * FROM attachments WHERE id = ? AND user_id = ? AND message_id IS NULL", (att_id, uid))
         if a["kind"] != "document" or a["text"] is not None]
     limit = await _limit(conn, model) if conn is not None else None
-    cap = _max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
+    cap = _max_images(conn, model) if conn is not None else profiles.DEFAULT_MAX_IMAGES
     profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
     system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
     excerpts_enabled = conn is None or not conn.cleaner
@@ -3349,7 +3349,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         # браузеру не уходит (его текст и параметры учётке не видны)
         profiled = conn if conn.proxied or not conn.shared else None
         system = chat_system.base(uid, profiled, _role(uid, fresh["role_id"]))
-        params = profiles.request_params(profiled) if profiled is not None else {}
+        params = profiles.request_params(profiled, model) if profiled is not None else {}
         kinds = (web.tools_for(conn, web.has_exa_key(uid))
                  if fresh["web"] and not fresh["protected_used"] and not conn.cleaner else [])
         mcp_ids = mcp_sources.dialog_servers(uid, fresh, conn)
@@ -3412,7 +3412,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 messages = compose(chat_id, user_mid, model, profiles.max_images(conn))
                 knowledge.release(knowledge.big_attachments(chat_id))
             else:
-                cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, _max_images(conn), system,
+                cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, _max_images(conn, model), system,
                                               limit, kbs, vectors=knowledge.vectors_for(conn))
             search = bool(cut) or kbs
             known = _known_links(chat_id) if kinds else {}

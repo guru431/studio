@@ -248,8 +248,8 @@ def test_admin_edits_a_users_sections(studio):
 
 
 def test_local_model_is_a_local_role_of_the_gateway_through_the_server(studio):
-    """Локальна только `local-*` подключения srvllm через сервер: облачная роль того же шлюза и
-    openai-подключение с тем же именем — нет."""
+    """Локальна `local-*` подключения srvllm через сервер (и весь шлюз s06 через сервер — `tests/test_s06.py`):
+    облачная роль того же шлюза и openai-подключение с тем же именем — нет."""
     gw = add_gateway(studio)
     cloud = add_connection(studio, chat_models=("local-x",))
     by_id = {c.id: c for c in connections.list_for(uid_of_owner())}

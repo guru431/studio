@@ -292,7 +292,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     st = chat.StreamTask(user_id=uid, chat_id=chat_id, message_id=mid, conn=conn, model=model,
                          messages=payload["messages"], content=message["content"], tools=kinds, exa_key=exa_key,
                          limit=limit, known=chat._known_links(chat_id) if kinds else {}, mcp_ids=mcp_ids,
-                         mcp_explicit=mcp_client.present(uid, fresh["mcp_ids"]), params=profiles.request_params(conn),
+                         mcp_explicit=mcp_client.present(uid, fresh["mcp_ids"]), params=profiles.request_params(conn, model),
                          thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                          steps=payload["steps"], reasoning=message["reasoning"] or "",
                          reasoning_sec=message["reasoning_sec"] or 0.0, user_message_id=user["id"] if user else None,

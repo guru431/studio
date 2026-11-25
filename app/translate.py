@@ -635,7 +635,7 @@ async def _translate(job: Job, row) -> "str | None":
             return NO_TEXT
     elif row["scan_id"] is not None and sections.is_local(job.conn, job.model):
         row = await _await_idle(job)
-    if sections.is_local(job.conn, job.model) and not job.freed:
+    if job.conn.kind == "srvllm" and sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await images.free_models(job.conn)       # и до определения языка: оно — запрос к той же модели
     _check(job)                                  # «Остановить» до определения языка — без запроса к модели

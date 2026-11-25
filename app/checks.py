@@ -310,7 +310,7 @@ async def probe(conn, model: str) -> dict:
     _checked_model(conn, model)
     snap = connections.snapshot(conn)
     # параметры профиля — кроме предела ответа: проба короткая всегда
-    params = {k: v for k, v in profiles.request_params(conn).items() if k not in ("max_tokens", "max_completion_tokens")}
+    params = {k: v for k, v in profiles.request_params(conn, model).items() if k not in ("max_tokens", "max_completion_tokens")}
     body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], **params,
             "max_tokens": PROBE_TOKENS, "stream": False}
     start = clock.NOW()

@@ -6,15 +6,18 @@ import json
 import httpx
 import pytest
 
+import card
 import connections
 import db
 import ocr
 import sections
 import speech
 import state
+import translate_text
 import upstream
 from conftest import add_gateway, make_user, signin
 from fakes import PNG_REAL, TOKEN
+from test_chat import sse, turn
 
 BASE = "http://10.77.1.15:4000"
 
@@ -129,6 +132,30 @@ def test_ocr_uses_native_image_and_markdown_without_slot_release(studio, s06):
     studio.gw.reply = lambda q: httpx.Response(200, json={"markdown": ""})
     with pytest.raises(ocr.PageFailed):
         asyncio.run(ocr.recognize(s06, PNG_REAL))
+
+
+def test_s06_models_are_local_everywhere(studio, s06):
+    """Один признак локальной модели (`sections.is_local`, спека п. 35): s06 — на карте, как роли `local-*` srvllm."""
+    assert sections.is_local(s06, "qwen-27b") and not hasattr(card, "_local")
+    cid = studio.c.post("/api/chats", json={"connection_id": s06.id, "model": "qwen-27b"}).json()["id"]
+    view = studio.c.get(f"/api/chats/{cid}").json()["chat"]
+    assert view["local"] and view["thinking_ok"]
+    assert studio.c.patch(f"/api/chats/{cid}", json={"thinking": True}).status_code == 200   # было 409 no_thinking
+    busy = [1]
+
+    async def reply(request):
+        if busy[0]:
+            busy[0] -= 1
+            return httpx.Response(503, json={"error": {"message": "slot busy"}})
+        return await studio.gw.builtin(request)
+    studio.gw.on["/v1/chat/completions"] = reply
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert studio.gw.chat_requests[-1]["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "/slot/images/release" not in [r.url.path for r in studio.gw.requests]    # release картинок — только srvllm
+    body = translate_text._body(s06, "qwen-27b", "system", "text", 0.2, 100)
+    assert (body["temperature"], body["max_tokens"], body["chat_template_kwargs"]) == (0.2, 100, {"enable_thinking": False})
+    links = next(s for s in studio.c.get("/api/sections").json()["sections"] if s["id"] == "chat")["links"]
+    assert next(l for l in links if l["connection"]["id"] == s06.id)["local_models"] == sections.S06_CATALOG["chat"]
 
 
 def test_step_32_preserves_connections_and_defaults(env):

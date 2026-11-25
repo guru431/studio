@@ -8,6 +8,7 @@ import connections
 import profiles
 import state
 from conftest import add_connection, add_gateway, make_user, signin
+from test_chat import new_chat, sse, turn
 from test_checks import CLOUD_ROLE, gateway_as_openai
 from test_shared_integrations import ADMIN, add_models
 
@@ -28,12 +29,12 @@ def own(studio, cid) -> dict:
 def test_own_profile_crud_and_limits(studio):
     cid = add_connection(studio)
     assert studio.c.get(f"/api/connections/{cid}/profile").json() == {
-        "system_text": "", "params": {}, "suggestions": [], "provider": "compatible"}
+        "system_text": "", "params": {}, "suggestions": [], "model_params": {}, "provider": "compatible"}
     assert own(studio, cid)["profile_set"] is False and own(studio, cid)["suggestions"] == []
 
     r = studio.c.put(f"/api/connections/{cid}/profile", json=FULL)
     assert r.status_code == 200, r.text
-    assert r.json() == {**FULL, "provider": "compatible"}
+    assert r.json() == {**FULL, "model_params": {}, "provider": "compatible"}
     assert studio.c.get(f"/api/connections/{cid}/profile").json() == r.json()
     item = own(studio, cid)
     assert item["profile_set"] is True and item["suggestions"] == FULL["suggestions"]
@@ -111,6 +112,32 @@ def test_request_params_by_provider(studio):
     for value in (1, 256):
         assert studio.c.put(f"/api/connections/{other}/profile", json={"params": {"max_tools": value}}).status_code == 200
         assert profiles.max_tools(get(other)) == value and profiles.request_params(get(other)) == {}
+
+
+def test_model_params_override_the_connection_params(studio):
+    cid = add_gateway(studio); url = f"/api/connections/{cid}/profile"
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    body = {"params": {"temperature": 0.3, "max_tools": 64},
+            "model_params": {"tiny": {"temperature": 0.9, "context_window": 16384, "max_images": 2}, "empty": {}}}
+    r = studio.c.put(url, json=body)
+    assert r.status_code == 200 and r.json()["model_params"] == {"tiny": body["model_params"]["tiny"]}
+    conn = connections.get(uid, cid)
+    assert profiles.model_params(conn, "tiny") == {"temperature": 0.9, "max_tools": 64, "context_window": 16384,
+                                                   "max_images": 2}
+    assert profiles.model_params(conn, "other") == profiles.model_params(conn, None) == body["params"]
+    assert profiles.request_params(conn, "tiny") == {"temperature": 0.9}
+    assert profiles.request_params(conn) == {"temperature": 0.3}
+    assert (profiles.max_images(conn, "tiny"), profiles.max_images(conn), profiles.max_tools(conn, "tiny")) == (2, 4, 64)
+    studio.c.put(f"/api/sections/chat/links/{cid}", json={"models": ["local-gemma-abl", "tiny"]})
+    sse(turn(studio, new_chat(studio, connection_id=cid, model="tiny")))
+    sent = studio.gw.chat_requests[-1]
+    assert sent["temperature"] == 0.9 and not {"context_window", "max_images", "max_tools"} & set(sent)
+    assert studio.c.put(url, json={"model_params": {"tiny": {"top_p": 0.5}}}).json() == {
+        "system_text": "", "params": {}, "suggestions": [], "model_params": {"tiny": {"top_p": 0.5}}, "provider": "srvllm"}
+    assert own(studio, cid)["profile_set"] is True
+    for bad in ({"": {}}, {"m" * 201: {}}, {"m": {"context_window": 8191}}, {"m": {"context_window": 4_000_001}},
+                {"m": {"context_window": "32768"}}, {"m": {"seed": 1}}, {f"m{n}": {"top_p": 0.5} for n in range(201)}):
+        assert studio.c.put(url, json={"model_params": bad}).status_code == 422, bad
 
 
 def test_cleaner_has_no_profile(studio):

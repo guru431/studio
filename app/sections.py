@@ -132,9 +132,10 @@ def default(user_id: int | None, section: str, available: list[Link] | None = No
 
 
 def is_local(conn: "connections.Connection", model: str) -> bool:
-    """Модель работает на карте srvllm: подключение srvllm через сервер и роль шлюза `local-*`
-    (соглашение llm_routers). Остальные роли того же шлюза облачные, а адрес локальности не доказывает."""
-    return conn.kind == "srvllm" and conn.proxied and model.startswith(LOCAL_PREFIX)
+    """Модель работает на карте студии — единственный признак локальной модели: подключение через сервер и шлюз s06
+    (весь) или роль шлюза srvllm `local-*` (соглашение llm_routers). Остальные роли srvllm облачные, а адрес
+    локальности не доказывает."""
+    return conn.proxied and (conn.s06 or (conn.kind == "srvllm" and model.startswith(LOCAL_PREFIX)))
 
 
 def capabilities(user_id: int) -> dict[str, bool]:

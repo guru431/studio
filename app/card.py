@@ -3,8 +3,8 @@
 Карту делит шлюз (srvllm, s06 — по хосту и порту адреса), о чужих клиентах студия не знает: она видит только свои
 задания в памяти модулей и ролики в базе. Запись — вид, модель, фаза и её начало:
 - `busy` — точно на карте: «распознаю» расшифровки, «озвучиваю» озвучки, идущие распознавание и перевод, ролик
-  `in_progress`, ответ чата через шлюз без ожидания; ответ чата и перевод — только локальной моделью (`_local`:
-  облачная роль srvllm карту не держит), перевод файла, что ждёт свой скан, — не в счёт (держит распознавание);
+  `in_progress`, ответ чата через шлюз без ожидания; ответ чата и перевод — только локальной моделью
+  (`sections.is_local`: облачная роль srvllm карту не держит), перевод файла, что ждёт свой скан, — не в счёт (держит распознавание);
 - `maybe` — запрос у шлюза, который держит его, пока карта занята (картинки, описание и перевод промпта «Фото»):
   работает, если на карте нет никого точнее, иначе ждёт;
 - `wait` — ждёт карту: «жду карту» после 503 шлюза;
@@ -61,6 +61,7 @@ def _entries() -> list[Entry]:
     import connections
     import images
     import ocr
+    import sections
     import speeches
     import transcripts
     import translate
@@ -68,7 +69,7 @@ def _entries() -> list[Entry]:
 
     def add(section, job_id, conn, kind, model, phase, since, role=None):
         gpu = _gpu(conn)
-        if gpu is not None and (role is None or _local(conn, role)):     # role — модель чата или перевода
+        if gpu is not None and (role is None or sections.is_local(conn, role)):     # role — модель чата или перевода
             out.append(Entry((section, job_id), gpu, kind, model, phase, since))
 
     for job_id, job in list(images.JOBS.items()):
@@ -105,12 +106,6 @@ def _entries() -> list[Entry]:
         add("chat", message_id, stream.conn, "chat", stream.model, "busy" if wait is None else "wait",
             now if wait is None else wait[0], stream.model)
     return out
-
-
-def _local(conn, model: str) -> bool:
-    """Модель чата или перевода на карте: s06 — весь, srvllm — только роль `local-*` (`sections.is_local`)."""
-    import sections
-    return getattr(conn, "s06", False) or sections.is_local(conn, model)
 
 
 def _holder(entries: list[Entry]) -> "Entry | None":
