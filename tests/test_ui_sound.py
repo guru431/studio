@@ -97,6 +97,26 @@ def test_every_gesture_wakes_a_suspended_context(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_agents_signal_through_the_snapshot_event(browser, live):
+    """Снимки «Агентов» — событием `studio-code-snapshot`: первый снимок компьютера молчит, «ждёт ответа» — `ask`,
+    конец хода — `done`."""
+    login = "sound-agents"
+    live.add_user(login)
+    snap = """(() => { window.tones.length = 0; document.dispatchEvent(new CustomEvent('studio-code-snapshot',
+      { detail: { aid: 'a9', items: %s } })); return window.tones.slice(); })()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "load", """import('/static/js/sound.js').then(() => {          // жест создаёт контекст звука
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true })); return true; })"""),
+        ("eval", "first", snap % "[{ chat: 'c1', running: true }]"),
+        ("eval", "asking", snap % "[{ chat: 'c1', running: true, asking: true }]"),
+        pause(1600),
+        ("eval", "done", snap % "[]")], init="localStorage.setItem('studio-sound', '1');" + FAKE_AUDIO)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert [v["first"], v["asking"], v["done"]] == [[], [880, 880], [660, 880]], v
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("kind", ["error", "ask"])
 def test_error_and_pause_have_their_own_signals(browser, live, kind):
     login = f"sound-{kind}"
