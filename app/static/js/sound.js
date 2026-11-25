@@ -36,12 +36,14 @@ export function setSound(on) {
 function wake() {
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) return null;
-  context ??= new Context();
-  if (context.state === 'suspended') context.resume?.().catch(() => {});
+  if (!context || context.state === 'closed') context = new Context();
+  if (context.state !== 'running') context.resume?.().catch(() => {});
   return context;
 }
-for (const type of ['pointerdown', 'keydown']) {
-  document.addEventListener(type, () => { if (soundOn()) wake(); }, { once: true, capture: true });
+/* Будит каждый жест, не один: у касания активацию даёт отпускание (`pointerup`), не `pointerdown`; iOS
+ * приостанавливает контекст после фона (`suspended`, `interrupted`); звук могут включить позже загрузки. */
+for (const type of ['pointerup', 'keydown']) {
+  document.addEventListener(type, () => { if (soundOn() && context?.state !== 'running') wake(); }, { capture: true });
 }
 
 function tone(ctx, frequency, start) {
@@ -90,10 +92,12 @@ export function answerSignal(message) {
   return false;
 }
 
-/** Новое готовое опроса «В работе»: хоть один итог не `done` — `error`, иначе `done`; ключ — id первого. */
+/** Новое готовое опроса «В работе»: отменённое человеком — без сигнала; хоть один итог не `done` — `error`, иначе
+ * `done`; ключ — id первого. */
 export function jobSignal(fresh) {
-  if (!fresh?.length) return false;
-  return signal(fresh.some((f) => f.state !== 'done') ? 'error' : 'done', fresh[0].id);
+  const ended = (fresh || []).filter((f) => f.state !== 'cancelled');
+  if (!ended.length) return false;
+  return signal(ended.some((f) => f.state !== 'done') ? 'error' : 'done', ended[0].id);
 }
 
 /** Сигналы снимка «Агентов» компьютера `aid`: `before` — «aid:чат → состояние» (ведёт сама). Первый снимок компьютера —

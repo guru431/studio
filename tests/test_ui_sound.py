@@ -61,6 +61,42 @@ def test_sound_is_off_by_default_and_plays_three_signals_once(browser, live):
     assert not problems(r), problems(r)
 
 
+SUSPENDED_AUDIO = """window.audio = { made: 0, resumed: 0, last: null };
+window.AudioContext = class {
+  constructor() { this.state = 'suspended'; this.currentTime = 0; this.destination = {}; window.audio.made++;
+    window.audio.last = this; }
+  resume() { window.audio.resumed++; this.state = 'running'; return Promise.resolve(); }
+  createOscillator() { return { type: '', frequency: { value: 0 }, connect: (g) => g, start() {}, stop() {} }; }
+  createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {} }, connect: (d) => d }; }
+};"""
+
+
+def test_every_gesture_wakes_a_suspended_context(browser, live):
+    """Контекст будит каждое отпускание пальца и клавиша, пока он не `running` (касание даёт активацию на `pointerup`,
+    iOS приостанавливает контекст после фона); при выключенном звуке контекста нет, отменённое задание молчит."""
+    login = "sound-wake"
+    live.add_user(login)
+    gesture = """(async () => { await import('/static/js/sound.js');
+      document.body.dispatchEvent(new PointerEvent('%s', { bubbles: true, pointerType: 'touch' }));
+      await Promise.resolve(); return [window.audio.made, window.audio.resumed, window.audio.last?.state ?? null]; })()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "off", gesture % "pointerup"),
+        ("eval", "on", "(() => { localStorage.setItem('studio-sound', '1'); return true; })()"),
+        ("eval", "down", gesture % "pointerdown"),
+        ("eval", "up", gesture % "pointerup"),
+        ("eval", "again", gesture % "pointerup"),
+        ("eval", "background", "(() => { window.audio.last.state = 'suspended'; return true; })()"),
+        ("eval", "back", gesture % "pointerup"),
+        ("eval", "cancelled", """(async () => { const s = await import('/static/js/sound.js');
+          return s.jobSignal([{ id: 'j1', state: 'cancelled' }]); })()""")], init=SUSPENDED_AUDIO, width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["off"] == [0, 0, None] and v["down"] == [0, 0, None], v
+    assert v["up"] == [1, 1, "running"] and v["again"] == [1, 1, "running"], v
+    assert v["back"] == [1, 2, "running"] and v["cancelled"] is False, v
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("kind", ["error", "ask"])
 def test_error_and_pause_have_their_own_signals(browser, live, kind):
     login = f"sound-{kind}"
