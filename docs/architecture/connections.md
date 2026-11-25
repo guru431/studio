@@ -105,22 +105,29 @@
 - Профиль подключения (`profiles`, шаг схемы 57, спека 2026-11-21-studio-source-foundation-design §2) — таблица
   `connection_profiles` по id подключения (удаление подключения уносит профиль триггером): системный текст до
   `profiles.TEXT_MAX` (8000 знаков, без NUL и одиночных суррогатов), параметры `profiles.Params` (null или нет поля —
-  не слать: `temperature` 0–2, `top_p` (0, 1], `top_k` целое 1–1000, `presence_penalty` −2…2, `max_tokens` 1…10⁶, `max_images` целое 1–32, `max_tools` целое 1–256) и
+  не слать: `temperature` 0–2, `top_p` (0, 1], `top_k` целое 1–1000, `presence_penalty` −2…2, `max_tokens` 1…10⁶, `max_images` целое 1–32, `max_tools` целое 1–256, `context_window` целое 8192–4 000 000 —
+  окно контекста вместо списка моделей, `chat.model_window`), параметры на модель `model_params` (`{модель: Params}`, до
+  `sections.MODELS_MAX` (200) моделей; шаг схемы 82, спека 2026-11-25 п. 35): те же поля для одной модели подключения,
+  сильнее параметров подключения (`profiles.model_params`: подключения, поверх — модели; пустой набор модели не
+  хранится) и
   до `profiles.SUGGESTIONS_MAX` (12) подсказок (заголовок до 80, текст до 2000 знаков). Пустой профиль строку удаляет.
   Свой — `GET/PUT /api/connections/{id}/profile` (только владелец), общий — `GET/PUT
   /api/admin/shared/connections/{id}/profile` (только администратор); у Cleaner профиля нет — 422 `cleaner`.
   **Текст и параметры общего профиля учётке не отдаются** (как адрес и ключ); `connections.out` отдаёт всем, кому
-  видно подключение, `suggestions`, а у своих ещё `profile_set`. Страница подсказки профиля пока не показывает.
+  видно подключение, `suggestions`, а у своих ещё `profile_set`. Страница показывает подсказки чипами на пустом экране
+  диалога (`chat-suggest.js`, вместе с подсказками серверов MCP).
   Параметры в запрос (`profiles.request_params`): `temperature`, `top_p`, `presence_penalty` — в корень тела как есть;
   `max_tokens` — как `max_completion_tokens` при `capabilities.profile(conn) == "openai"` (как `checks.probe`), иначе
   `max_tokens`; `top_k` нестандартен — у профиля `openai` поле в окне выключено и при отправке отбрасывается, у
   `compatible`, `openrouter`, `srvllm`, `s06` уходит только явно заданный (подсказка «только vLLM и совместимые»).
   `max_images` («Картинок в запросе») в запрос не уходит: это предел картинок на весь запрос хода
   (`profiles.max_images`, без него — `profiles.DEFAULT_MAX_IMAGES` (4)), лишние — пометкой `chat.DROPPED` (`chat.compose`).
-  `max_tools` («Инструментов в запросе») тоже не уходит: предел инструментов MCP хода (`profiles.max_tools`, без
-  него — `mcp_client.MAX_TOOLS` (128): API в духе OpenAI больше 128 инструментов в запросе не принимают); его берут отбор
+  `max_tools` («Инструментов в запросе») тоже не уходит: предел инструментов MCP хода (`profiles.max_tools`: модели,
+  иначе подключения; без него у локальной модели — `mcp_client.LOCAL_MAX_TOOLS` (32), у прочих — `mcp_client.MAX_TOOLS`
+  (128): API в духе OpenAI больше 128 инструментов в запросе не принимают); этот предел берут отбор
   хода `mcp_client.Tools.discover`, `mcp_client.web_tools` и оценка заполнения. Лишние — заметкой хода
   `mcp_client.TRIMMED`; список одного сервера всё равно не длиннее `mcp_client.MAX_TOOLS` ([chat](chat.md)).
+  `context_window` в запрос тоже не уходит: это окно модели для счёта контекста (`chat.model_window`).
   «Пробный ответ» шлёт параметры профиля, кроме предела ответа. Отказ 400 распознаётся как отказ параметра, только
   если тело называет отправленный параметр **и** содержит признак отказа `profiles.REJECTED` («unknown»,
   «unsupported», «extra inputs are not permitted» …; `profiles.refusal`): одного имени мало — ошибка длины контекста
