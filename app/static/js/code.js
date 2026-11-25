@@ -86,7 +86,8 @@ let pollTimer = null;   // следующий опрос меток
 let wantFile = null;    // путь файла из шага чата до перехода на «Файлы» — только в памяти
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
-let copyStart = null;   // { aid, pid, chat, text } — задание для чата отдельной копии (separateCopy) до его показа
+let copyStart = null;   // { aid, pid, chat, text, skill? } — задание чата отдельной копии (separateCopy) или проверки
+                        // другим помощником (verifyWith: текст и навык — в поле, без отправки) до его показа
 let shownHash = null;   // адрес отрисованной правой части: сюда возвращает несохранённая правка
 let shownEntry = null;  // метка записи отрисованного адреса ({ entry: n } в history.state — ставит роутер app.js)
 /** Проекты компьютеров (GET …/projects): aid → обещание списка, пока показан раздел; отказ не запоминается. */
@@ -697,11 +698,22 @@ async function separateCopy(p, engine, text) {
   location.replace(`#/code/${p.aid}/${copy.pid}/${chat}`);
 }
 
+/** «Проверить другим помощником»: новый чат помощника `engine` в том же проекте, в поле — `text` и навык `skill`
+ * (`copyStart`, только память страницы); отправляет человек. */
+async function verifyWith(p, engine, text, skill) {
+  const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine === 'claude' ? '' : `?engine=${engine}`}`);
+  p.listing = null;
+  copyStart = { aid: p.aid, pid: p.pid, chat, text, skill };
+  created(p, chat, engine);
+}
+
 async function chat(mine, p, id, agent, section, status) {
   const gitAction = p.gitAction?.chat === id ? p.gitAction.prompt : null;
   p.gitAction = null;
-  const startText = copyStart?.pid === p.pid && copyStart.chat === id ? copyStart.text : null;
-  if (startText !== null) copyStart = null;
+  const start = copyStart?.pid === p.pid && copyStart.chat === id ? copyStart : null;
+  const startText = start ? start.text : null;
+  const startSkill = start?.skill || null;
+  if (start) copyStart = null;
   let name;
   let row;
   let chatView;
@@ -728,7 +740,8 @@ async function chat(mine, p, id, agent, section, status) {
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent,
     project: name ? { pid: p.pid, name, ...(p.dir ? { dir: p.dir } : {}) } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title, readonly: !!p.readonly,
-    git: p.repo, gitAction, startText,
+    git: p.repo, gitAction, startText, startSkill,
+    verifyWith: p.readonly ? null : (engine, text, skill) => verifyWith(p, engine, text, skill),
     separateCopy: p.worktrees && !p.readonly ? (text) => separateCopy(p, row?.engine || 'claude', text) : null,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
     verify: cached ? listing.then(() => {
