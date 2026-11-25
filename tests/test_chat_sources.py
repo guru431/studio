@@ -3,11 +3,12 @@
 import json
 
 import chat_shares
+import knowledge
 import state
 from conftest import add_connection, add_gateway, make_user, signin
-from test_chat import messages, new_chat, sse, turn
+from test_chat import attach, messages, new_chat, sse, turn
 from test_chat_web import call, steps_of
-from test_knowledge import base, big_text, upload
+from test_knowledge import base, big_text, small_model, upload
 from test_protected_source import code_of
 
 
@@ -67,6 +68,33 @@ def test_direct_turn_records_the_auto_step_before_the_json_answer(studio):
     (step,) = steps_of(body["assistant_message_id"])
     assert (step["kind"], step["auto"], step["text"], step["sources"]) == ("knowledge", True, "", ["справка.txt"])
     assert step["found"] == len(step["hits"]) >= 1
+
+
+def test_attachment_document_of_another_chat_is_not_a_source(studio):
+    """Ревью, п. 6: документ большого вложения — источник только своего диалога; из другого диалога той же учётки
+    (подставленный в шаг) — 404 `gone`, и `knowledge.chunk` — None."""
+    gw = add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    first = new_chat(studio)
+    small_model(studio, first, gw, 20_000)                                            # выдержками — документ знаний
+    doc = attach(studio, "отчёт.txt", big_text("Пароль от сейфа — 4711.").encode())
+    sse(turn(studio, first, "Какой пароль от сейфа?", attachment_ids=[doc["id"]]))
+    doc_id = state.DB.execute("SELECT id FROM kb_documents WHERE attachment_id = ?", (doc["id"],)).fetchone()[0]
+    n = state.DB.execute("SELECT min(n) FROM kb_chunks WHERE doc_id = ?", (doc_id,)).fetchone()[0]
+    assert knowledge.chunk(uid, first, doc_id, n)["doc"] == "отчёт.txt"               # свой диалог — кусок есть
+    other = new_chat(studio)
+    studio.gw.chat_script = [["Ответ"]]
+    sse(turn(studio, other, "Привет"))
+    assert knowledge.chunk(uid, other, doc_id, n) is None
+    answer = messages(studio, other)[1]
+    forged = [{"kind": "knowledge", "query": "пароль", "found": 1, "sources": ["отчёт.txt"], "text": "",
+               "hits": [{"doc": "отчёт.txt", "n": n, "id": doc_id}]}]
+    state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(forged, ensure_ascii=False), answer["id"]))
+    got = studio.c.get(f"/api/chats/{other}/messages/{answer['id']}/sources/0/0")
+    assert code_of(got, 404) == "gone"
+    own = messages(studio, first)[1]["id"]                                            # тот же шаг в своём диалоге — 200
+    state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(forged, ensure_ascii=False), own))
+    assert studio.c.get(f"/api/chats/{first}/messages/{own}/sources/0/0").json()["doc"] == "отчёт.txt"
 
 
 def test_head_of_a_document_without_matches_is_not_a_source(studio):
