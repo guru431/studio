@@ -7,7 +7,7 @@ import pytest
 from claude_agent_sdk._internal.message_parser import parse_message
 
 from fake_sdk import FakeClient, FakeFactory, assistant, result, result_ok, text, tool_result, tool_use, user
-from claude_agent_sdk import ResultMessage, UserMessage
+from claude_agent_sdk import PermissionResultAllow, ResultMessage, ToolPermissionContext, UserMessage
 from studio_agent import limits, sessions, store, subagents, turns
 from studio_agent.turns import Runner, _Turn
 
@@ -235,6 +235,85 @@ async def test_input_absorbed_by_the_running_response_finishes_on_idle(backgroun
     assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
     # Подтверждение поглощения — повтор ввода с его uuid: CLI шлёт его только с этим флагом.
     assert "replay-user-messages" in client.options.extra_args and all(client.uuids)
+
+
+def done_statuses(sent):
+    return [f["e"]["status"] for f in sent if f["e"]["k"] == "done"]
+
+
+async def test_queue_goes_out_on_idle_after_absorbed_input(background, caplog):
+    """Очередь уходит по тому idle, что обнулил поглощённый ввод; строка «CLI ждёт» по нему не пишется."""
+    runner, client, turn, sent = background
+    caplog.set_level("INFO", logger="studio_agent.turns")
+    client.items.put_nowait(client.replay(0))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    queued = await runner.steer(PID, CHAT, "Следующее задание", [], mode="queue")
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(assistant(text("Ответ на оба")))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    assert await client.queried.get() == "Следующее задание"
+    await drain(client)
+    assert CHAT in runner.live() and not turn.finishing
+    assert not [r for r in caplog.records if "CLI ждёт" in r.getMessage()]
+    client.items.put_nowait(lifecycle("session_state_changed", state="running"))
+    client.items.put_nowait(client.replay(2))
+    client.items.put_nowait(assistant(text("Следующий ответ")))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert done_statuses(sent) == ["done"]
+    assert any(f["e"] == {"k": "followup_sent", "id": queued["id"]} for f in sent)
+
+
+async def test_stop_with_absorbed_input_ends_stopped_once(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    client.items.put_nowait(assistant(tool_use("run", "Bash", {"command": "build"})))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    await drain(client)
+    await runner.stop(PID, CHAT)
+    assert client.interrupted
+    client.items.put_nowait(result("error_during_execution", is_error=True, terminal_reason="aborted_tools"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await asyncio.wait_for(asyncio.wait({turn.task}), 0.5)
+    assert done_statuses(sent) == ["stopped"] and client.disconnected
+
+
+async def test_permission_card_with_absorbed_input_finishes_once(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    client.items.put_nowait(assistant(tool_use("run", "Bash", {"command": "build"})))
+    await drain(client)
+    card = asyncio.create_task(client.options.can_use_tool(
+        "Bash", {"command": "build"}, ToolPermissionContext(suggestions=[], tool_use_id="run")))
+    while not turn.asks:
+        await asyncio.sleep(0)
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    runner.answer(PID, CHAT, "run", "allow", None, None)
+    assert isinstance(await card, PermissionResultAllow)
+    client.items.put_nowait(user(tool_result("run", "ok")))
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(assistant(text("Ответ на оба")))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert done_statuses(sent) == ["done"]
+    assert [f["e"]["k"] for f in sent if f["e"]["k"] in ("ask", "asked")] == ["ask", "asked"]
+
+
+async def test_error_result_with_absorbed_input_ends_with_its_words(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(result("error_during_execution", is_error=True, errors=["Сбой ответа"]))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert [(f["e"]["status"], f["e"].get("message")) for f in sent if f["e"]["k"] == "done"] == [("error", "Сбой ответа")]
 
 
 def stalled_absorbed_steer(runner, client):

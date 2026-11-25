@@ -629,19 +629,21 @@ class Runner:
                                     t.background_reply.clear()
                             if not t.waiting and failure is None:
                                 await self._wait_queue(t)
+                            queue_sent = False
                             async with t.input_lock:
                                 if (not t.waiting and t.queued and failure is None
                                         and not (t.stopped or t.closing or t.queue_expired)):
                                     message_id, extra_text, extra_images = t.queued[0]
                                     await self._steer_input(t, extra_text, extra_images, message_id)
                                     self._queued_sent(t, message_id)
+                                    queue_sent = True
                                 if not t.waiting:
                                     t.finishing = True
                             if result_message:
                                 await self._usage(t, model, effort)
                             elif not t.waiting:
                                 break
-                            else:  # только числа: чем ход занят после простоя CLI
+                            elif not queue_sent:  # только числа: чем ход занят после простоя CLI
                                 log.info("ход %s: CLI ждёт, ход открыт: ввод %d, не принято %d, фоновых %d, "
                                          "уведомлений %d+%d", t.turn, t.pending, len(t.unread),
                                          len(t.background_tasks), len(t.background_notices), len(t.background_reply))
