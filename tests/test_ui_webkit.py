@@ -467,23 +467,30 @@ def test_landscape_navigation_reaches_every_section_and_profile(iphone, tmp_path
     sections = page.locator('#rail .tab').evaluate_all('tabs => tabs.map(t => t.dataset.section)')
     for section in sections:
         tab = page.locator(f'#rail [data-section="{section}"]')
-        tab.tap()
-        pw.expect(tab).to_have_attribute('aria-current', 'page')
+        with tap_state(page, f'#rail [data-section="{section}"]'):
+            tab.tap()
+            pw.expect(tab).to_have_attribute('aria-current', 'page')
         pw.expect(page.locator('#view')).not_to_be_empty()
         fits(page)
-    page.locator('#search-open').tap()
-    page.locator('#search-q').wait_for()
-    page.locator('#jobs').tap()
-    pw.expect(page.locator('#jobs-panel')).to_be_visible()
-    page.locator('#jobs-close').tap()
-    page.locator('#avatar').tap()
+    with tap_state(page, '#search-open'):
+        page.locator('#search-open').tap()
+        page.locator('#search-q').wait_for()
+    with tap_state(page, '#jobs'):
+        page.locator('#jobs').tap()
+        pw.expect(page.locator('#jobs-panel')).to_be_visible()
+    with tap_state(page, '#jobs-close'):
+        page.locator('#jobs-close').tap()
+        pw.expect(page.locator('#jobs-panel')).not_to_be_visible()
     menu = page.locator('#menu')
-    pw.expect(menu).to_be_visible()
+    with tap_state(page, '#avatar'):
+        page.locator('#avatar').tap()
+        pw.expect(menu).to_be_visible()
     box = menu.bounding_box()
     assert box['y'] >= 0 and box['y'] + box['height'] <= 393
     page.screenshot(path=str(tmp_path / 'landscape-navigation.png'))
-    page.locator('#menu a[href="#/settings"]').tap()
-    pw.expect(page).to_have_url(page.url.split('/#')[0] + '/#/settings')
+    with tap_state(page, '#menu a[href="#/settings"]'):
+        page.locator('#menu a[href="#/settings"]').tap()
+        pw.expect(page).to_have_url(page.url.split('/#')[0] + '/#/settings')
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
