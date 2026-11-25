@@ -1,20 +1,25 @@
 """Картинки из результатов MCP (спека 2026-11-25, п. 39): вложениями ответа под ответом; модели, принимающей
 изображения, — сообщением user после всех `tool` круга в пределах `max_images`; через Cleaner модели не уходят."""
 import base64
+import io
 import json
 import logging
+import random
 from types import SimpleNamespace
 
+from PIL import Image
+
+import capabilities
 import chat
 import mcp_client
 import mcp_files
 import state
-from conftest import set_passport
+from conftest import add_gateway, set_passport
 from test_chat import messages, new_chat, png, sse, turn
 from test_chat_pending import answer, pending_of
 from test_chat_web import call, steps_of
 from test_cleaner_route_chat import MCP_KEY, MCP_URL, cleaner_gw, routed_chat  # noqa: F401 (фикстура)
-from test_mcp_dialog import name_of, server, setup, tool
+from test_mcp_dialog import add_shared, name_of, server, setup, tool
 from test_shared_integrations import MODEL
 
 PIC = base64.b64encode(png("red")).decode()
@@ -120,6 +125,27 @@ def test_pictures_wait_for_the_pause_and_follow_both_tool_messages(studio):
     assert [m["role"] for m in tail] == ["tool", "tool", "user"]
     assert [p["type"] for p in tail[-1]["content"]] == ["text", "image_url"]
     assert tail[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_a_big_picture_result_keeps_its_text_and_picture(studio):
+    """Ревью, п. 1: ответ `tools/call` больше MAX_BYTES (картинка ~3 МБ base64) не отвергается целиком —
+    предел вызова CALL_MAX_BYTES вмещает RESULT_IMAGES картинок предельного размера."""
+    raw = io.BytesIO()
+    Image.frombytes("RGB", (900, 900), random.Random(1).randbytes(900 * 900 * 3)).save(raw, "PNG")
+    data = base64.b64encode(raw.getvalue()).decode()
+    assert len(data) > 2 * mcp_client.MAX_BYTES
+    assert mcp_client.CALL_MAX_BYTES == mcp_client.RESULT_IMAGES * mcp_client.RESULT_IMAGE_CHARS + mcp_client.MAX_BYTES
+    big = {"content": [{"type": "text", "text": "большой график"}, {"type": "image", "data": data, "mimeType": "image/png"}]}
+    sid, calls, _ = setup(studio, results={"lookup": big})
+    vision()
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]}, ["Вижу."]]
+    sse(turn(studio, cid, "Нарисуй"))
+    tool_message, shown = after_tools(studio.gw.chat_requests[1])
+    assert (tool_message["role"], tool_message["content"]) == ("tool", "большой график")
+    assert [p["type"] for p in shown["content"]] == ["text", "image_url"]
+    reply = messages(studio, cid)[1]
+    assert len(reply["attachments"]) == 1 and reply["tools"][-1]["pictures"] == 1 and "error" not in reply["tools"][-1]
 
 
 def test_pictures_do_not_go_through_cleaner(cleaner_gw):

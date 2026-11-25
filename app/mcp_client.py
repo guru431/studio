@@ -581,6 +581,9 @@ TRIMMED = "Инструментов MCP больше {0} — часть этог
 RESULT_IMAGES = 4
 RESULT_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
 RESULT_IMAGE_CHARS = (image_upload.MAX_UPLOAD + 2) // 3 * 4     # base64 картинки до image_upload.MAX_UPLOAD
+#: предел ответа `tools/call`: RESULT_IMAGES картинок предельного размера сверх обычного MAX_BYTES (иначе результат с
+#: картинкой больше ~750 КБ base64 отвергался бы целиком вместе с текстом)
+CALL_MAX_BYTES = RESULT_IMAGES * RESULT_IMAGE_CHARS + MAX_BYTES
 ONLY_IMAGES = "Инструмент MCP вернул изображение"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 #: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
@@ -810,7 +813,7 @@ class Tools:
             await session.ensure()
             self.reached.add(session.sid)     # дальше — ответ сервера, и ошибка тоже (`reached_protected`)
             try:
-                result = await session.rpc("tools/call", {"name": tool, "arguments": args})
+                result = await session.rpc("tools/call", {"name": tool, "arguments": args}, max_bytes=CALL_MAX_BYTES)
             except HTTPException:
                 if _unknown_tool(session.error):
                     mcp_sources.forget(session.sid)       # каталог устарел: следующий ход спросит список заново

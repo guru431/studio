@@ -323,7 +323,7 @@ MCP берутся по порядку набора (явные серверы �
 цикле, что встроенный поиск. Поддерживаются JSON и SSE-ответы Streamable HTTP. Результаты текста и structuredContent
 передаются модели; вызовы отмечены MCP в ленте (значок 🧩). Вызов инструмента при сетевой ошибке не повторяется.
 Ответ без ссылок называет список под собой «Вызовы инструментов (N)», а не «Источники (0)». Пределы:
-`mcp_client.MAX_BYTES`, `mcp_client.TIMEOUT`; круги — общие `chat.tool_rounds`; сервер с инструментами сверх
+`mcp_client.MAX_BYTES` (ответ `tools/call` — `mcp_client.CALL_MAX_BYTES`, ради картинок), `mcp_client.TIMEOUT`; круги — общие `chat.tool_rounds`; сервер с инструментами сверх
 `mcp_client.MAX_TOOLS` урезается до первых (признак `trimmed` в каталоге, заметка хода; предел списка одного сервера
 не зависит от профиля), файлы чата — не больше
 `mcp_files.MEDIA_MAX` (64 МиБ); подсказки (`prompts/list`) читаются по возможности — их отказ сервер не убирает.
@@ -431,7 +431,9 @@ Studio проксирует файлы через исходное подклю�
 **Картинки из результатов MCP** (спека 2026-11-25-studio-skills-status-local-models, п. 39). `mcp_client.Tools.call`
 берёт из результата (не ошибки) блоки `image` типов `mcp_client.RESULT_IMAGE_TYPES` не длиннее
 `mcp_client.RESULT_IMAGE_CHARS` знаков base64, первые `mcp_client.RESULT_IMAGES` (4), во временный ключ шага `images`;
-результат из одних картинок — текст `mcp_client.ONLY_IMAGES`. `chat.StreamTask._calls` снимает ключ до записи шага
+результат из одних картинок — текст `mcp_client.ONLY_IMAGES`. Ответ `tools/call` читается до
+`mcp_client.CALL_MAX_BYTES` (столько картинок предельного размера сверх `mcp_client.MAX_BYTES`), иначе результат с
+картинкой больше ~750 КБ отвергался бы целиком вместе с текстом. `chat.StreamTask._calls` снимает ключ до записи шага
 (base64 — ни в `messages.tools`, ни в журнал) и зовёт `chat.StreamTask._result_images`: `normalize_image` в потоке
 (негодная — мимо), файл PNG с миниатюрой и строка `attachments` ответа (`kind` image, имя `<инструмент>-<n>.png`) — не
 больше `chat.RESULT_IMAGES_MAX` (16) на ответ; шаг `mcp` получает `pictures`. Под ответом они — его `attachments`.
