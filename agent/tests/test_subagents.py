@@ -8,7 +8,7 @@ from claude_agent_sdk._internal.message_parser import parse_message
 
 from fake_sdk import FakeClient, FakeFactory, assistant, result, result_ok, text, tool_result, tool_use, user
 from claude_agent_sdk import ResultMessage, UserMessage
-from studio_agent import sessions, store, subagents
+from studio_agent import limits, sessions, store, subagents, turns
 from studio_agent.turns import Runner, _Turn
 
 from test_turns import CHAT, PID, project, marked, settle
@@ -235,6 +235,72 @@ async def test_input_absorbed_by_the_running_response_finishes_on_idle(backgroun
     assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
     # Подтверждение поглощения — повтор ввода с его uuid: CLI шлёт его только с этим флагом.
     assert "replay-user-messages" in client.options.extra_args and all(client.uuids)
+
+
+def stalled_absorbed_steer(runner, client):
+    """Запасной режим (CLI без повтора ввода): уточнение поглощено, один ResultMessage, idle — ход ждёт второго."""
+    async def scenario():
+        await runner.steer(PID, CHAT, "Уточнение", [])
+        assert await client.queried.get() == "Уточнение"
+        client.items.put_nowait(assistant(text("Ответ на оба")))
+        client.items.put_nowait(result(result="готово"))
+        client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+        await drain(client)
+    return scenario()
+
+
+async def test_first_stop_ends_a_turn_whose_cli_is_idle(background):
+    """CLI простаивает, а ход ждёт ответа на ввод: interrupt ответа не даст — первое «Остановить» отменяет задачу."""
+    runner, client, turn, sent = background
+    await stalled_absorbed_steer(runner, client)
+    assert turn.pending == 1 and turn.cli_state == "idle" and not turn.finishing
+    await runner.stop(PID, CHAT)
+    await asyncio.wait_for(asyncio.wait({turn.task}), 0.5)  # отменённая задача кончается CancelledError после done
+    assert client.interrupted and client.disconnected
+    assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["stopped"]
+
+
+@pytest.fixture
+def stall(background):
+    """Пауза простоя без реального времени: таймер ждёт, пока тест его не отпустит."""
+    runner = background[0]
+    calls, release = [], asyncio.Event()
+
+    async def sleep(seconds):
+        calls.append(seconds)
+        await release.wait()
+
+    runner.sleep = sleep
+    return calls, release
+
+
+async def test_idle_cli_without_an_answer_ends_the_turn_after_the_limit(background, stall, caplog):
+    runner, client, turn, sent = background
+    calls, release = stall
+    caplog.set_level("INFO", logger="studio_agent.turns")
+    await stalled_absorbed_steer(runner, client)
+    assert calls == [limits.IDLE_INPUT_SEC] and CHAT in runner.live()
+    release.set()
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert client.disconnected and CHAT not in runner.live()
+    assert [(f["e"]["status"], f["e"].get("message")) for f in sent if f["e"]["k"] == "done"] == [("error", turns.STALLED)]
+    line = next(r.getMessage() for r in caplog.records if "простаивает" in r.getMessage())
+    assert turn.turn in line and "ввод 1" in line and "Уточнение" not in line
+
+
+async def test_idle_limit_waits_only_for_explicit_input(background, stall):
+    """Фоновая работа держит ход сколько угодно: предел простоя к ней не относится, следующее событие снимает таймер."""
+    runner, client, turn, sent = background
+    calls, release = stall
+    client.items.put_nowait(lifecycle("task_started", "shell", task_type="local_bash", description="Команда"))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await drain(client)
+    assert calls == [] and CHAT in runner.live()
+    client.items.put_nowait(lifecycle("task_updated", "shell", patch={"status": "completed"}))
+    client.items.put_nowait(result(result="готово"))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
 
 
 async def test_idle_before_the_result_still_reads_the_result(background):

@@ -40,6 +40,8 @@ NO_CLI = "Claude Code не найден на компьютере"
 NO_START = "Claude Code не запустился"
 # Сбой SDK после отправки запроса: ответ мог уже идти — это обрыв хода, а не установка.
 BROKEN = "Claude Code прервал ход — повторите задание"
+# CLI простаивает дольше `limits.IDLE_INPUT_SEC`, а ответа на ввод хода нет: ход закрыт, а не «Думает…» навсегда.
+STALLED = "Claude Code простаивает без ответа на уточнение — ход закрыт"
 # Чтение состояния — фоновое, без действия владельца в папке: хуки её `.claude/settings*.json` (SessionStart и др.)
 # не исполняются. `--settings` сильнее настроек проекта и local; остальные настройки читаются как прежде.
 # Серверы `.mcp.json` папки SDK поднимает без одобрения — чтение идёт с `strict_mcp=True` (только конфиг владельца).
@@ -76,6 +78,10 @@ def _words(errors: list | None, result: str | None, subtype: str | None) -> str:
     """Слова ошибки результата: `errors[0]`, иначе `result`, иначе «Claude Code: <subtype>» — до 300 знаков."""
     first = errors[0] if errors and isinstance(errors[0], str) and errors[0] else None
     return events.clip(first or result or f"Claude Code: {subtype}", limits.MESSAGE_MAX)
+
+
+class _Stalled(Exception):
+    """CLI простаивает дольше `limits.IDLE_INPUT_SEC`, а ход ждёт ответа на свой ввод."""
 
 
 @dataclass
@@ -145,7 +151,7 @@ class Runner:
 
     def __init__(self, emit: Callable[[dict], None], *, choices: store.Choices, cli_path: Path | None,
                  factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli, now=time.time,
-                 monotonic=time.monotonic):
+                 monotonic=time.monotonic, sleep=asyncio.sleep):
         self.emit = emit
         self.choices = choices
         self.cli_path = cli_path
@@ -155,6 +161,8 @@ class Runner:
         self.now = now
         self.monotonic = monotonic  # время хода (`_time`)
         self.queue_pause_sec = limits.QUEUE_PAUSE_SEC
+        self.sleep = sleep  # пауза предела простоя CLI (`_stream`)
+        self.idle_input_sec = limits.IDLE_INPUT_SEC
         self._turns: dict[str, _Turn] = {}
         self._closing = False  # close() идёт (или прошёл с `final` или `hold`): новых ходов нет
         self._final = False  # close(final=True): выход моста — `reopen` ходы не возвращает
@@ -584,7 +592,7 @@ class Runner:
                 self._accepted(t)
                 while t.waiting:
                     received_result = False
-                    async for message in t.client.receive_response():
+                    async for message in self._stream(t):
                         self._subtask(t, message)
                         self._cache_usage(t, message)
                         for e in t.feed.events(message):
@@ -645,6 +653,10 @@ class Runner:
                         break
         except asyncio.CancelledError:
             cancelled = True
+        except _Stalled:
+            log.warning("ход %s: CLI простаивает %d с без ответа: ввод %d, не принято %d, ответ после повтора %s",
+                        t.turn, self.idle_input_sec, t.pending, len(t.unread), t.answered)
+            failure = STALLED
         except CLINotFoundError:
             failure = NO_CLI
         except ResultError as e:
@@ -655,6 +667,40 @@ class Runner:
         await self._finish(t, new and sent, failure, claude=sent)
         if cancelled:
             raise asyncio.CancelledError
+
+    @staticmethod
+    def _idle_without_answer(t) -> bool:
+        """CLI сообщил idle, а ход ждёт только ответа на свой ввод: штатно следующее событие — за миллисекунды."""
+        return (t.cli_state == "idle" and bool(t.pending)
+                and not (t.background_tasks or t.background_notices or t.background_reply or t.asks))
+
+    async def _stream(self, t):
+        """`receive_response()`; после idle без ответа на ввод следующее событие ждётся не дольше `idle_input_sec`
+        (пауза — `self.sleep`), дальше — `_Stalled`. Таймер — в той же задаче: генератор SDK не меняет задачу."""
+        stream = t.client.receive_response().__aiter__()
+        while True:
+            scope = None
+            try:
+                if not self._idle_without_answer(t):
+                    message = await stream.__anext__()
+                else:
+                    async with asyncio.timeout(None) as scope:
+                        timer = asyncio.create_task(self._expire(scope))
+                        try:
+                            message = await stream.__anext__()
+                        finally:
+                            timer.cancel()
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                if scope is not None and scope.expired():
+                    raise _Stalled from None
+                raise
+            yield message
+
+    async def _expire(self, scope):
+        await self.sleep(self.idle_input_sec)
+        scope.reschedule(asyncio.get_running_loop().time())
 
     def _children_progress(self, t):
         t.progress["agents"] = copy.deepcopy(list(t.child_states.values()))
@@ -886,13 +932,15 @@ class Runner:
         if t.client is None:
             return True  # клиента ещё нет: ход сверит `stopped` до запуска
         waiting_background = not t.pending and t.waiting
+        idle = t.cli_state == "idle"
         try:
             if t.background_tasks and hasattr(t.client, "stop_task"):
                 await asyncio.wait_for(asyncio.gather(*(t.client.stop_task(child)
                     for child in list(t.background_tasks))), INTERRUPT_SEC)
             await asyncio.wait_for(t.client.interrupt(), INTERRUPT_SEC)
-            if waiting_background and t.task is not None and not t.finishing:
-                t.task.cancel()  # Родитель уже ответил: interrupt может больше не дать ResultMessage.
+            if (waiting_background or idle) and t.task is not None and not t.finishing:
+                # Родитель уже ответил или CLI простаивает: interrupt может больше не дать ResultMessage.
+                t.task.cancel()
         except Exception as e:
             log.info("ход %s: interrupt: %s", t.turn, type(e).__name__)
             return False

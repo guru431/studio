@@ -2128,6 +2128,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Текст заполнил очередь — сократите сообщение": "The text has filled the queue. Shorten the message",
   "Claude Code не запустился": "Claude Code did not start",
   "Claude Code прервал ход — повторите задание": "Claude Code interrupted the turn. Repeat the task",
+  "Claude Code простаивает без ответа на уточнение — ход закрыт": "Claude Code is idle without answering the clarification. The turn was closed",
   "ход прерван: мост остановлен": "turn interrupted: the bridge stopped",
   "Claude Code завершил поток до окончания фоновых задач": "Claude Code closed the stream before background tasks finished",
   "Новая версия моста не запустилась — работает прежняя": "The new bridge version did not start. The previous one is running",
