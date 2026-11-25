@@ -84,3 +84,16 @@ def test_usage_sums_the_rounds_of_one_answer(studio):
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["Готово."]]
     assert sse(turn(studio, cid), metrics=True)[-1][1]["usage"] == {"in": 200, "out": 20}
     assert ratios() == 0                                                                # 100 токенов < 500
+
+
+def test_direct_answer_brings_its_own_numbers(studio):
+    add_connection(studio); cid = new_chat(studio)                      # прямое подключение: модель читает браузер
+    aid = turn(studio, cid, "Привет").json()["assistant_message_id"]
+    url, body = f"/api/chats/{cid}/messages/{aid}", {"content": "Здравствуйте!", "status": "done"}
+    for bad in ({"usage": {"in": -1}}, {"usage": {"in": 100_000_001}}, {"usage": {"tokens": 1}}, {"usage": {"out": 1.5}},
+                {"usage": {"in": True}}, {"gen_ms": -1}, {"gen_ms": "800"}, {"total_ms": 86_400_001}):
+        assert studio.c.put(url, json=body | bad).status_code == 422, bad
+    sent = {"usage": {"in": 12, "out": 3}, "gen_ms": 800, "total_ms": 1500}
+    assert studio.c.put(url, json=body | sent).status_code == 200
+    assert {k: messages(studio, cid)[1][k] for k in sent} == sent
+    assert studio.c.put(url, json=body | {"gen_ms": 1}).status_code == 200 and messages(studio, cid)[1]["gen_ms"] == 800

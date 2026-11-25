@@ -52,7 +52,7 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import access
 import card
@@ -134,6 +134,8 @@ TEXT_MAX = 200_000
 ANSWER_MAX = 2_000_000
 ERROR_MAX = 400                  # слова ошибки ответа из браузера: подробность сервиса до 300 знаков и начало страницы
 MODEL_MAX = 200
+USAGE_MAX = 100_000_000          # токенов в поле `usage` ответа прямого подключения
+MS_MAX = 86_400_000              # его `gen_ms`, `total_ms` — не больше суток
 INTERRUPTED = "\n\n[прервано перезапуском студии]"
 # пометки обрезанного ответа: он — ошибка, в контекст следующих ходов не идёт (compose)
 CUT_LENGTH = "\n\n[ответ обрезан пределом длины модели]"
@@ -287,11 +289,24 @@ class TurnIn(BaseModel):
     cleaner_local: bool = False
 
 
+class UsageIn(BaseModel):
+    """Токены ответа прямого подключения (`usage` шлюза, прочитанный страницей) — как `_usage_of`."""
+    model_config = ConfigDict(extra="forbid")
+    in_: int | None = Field(None, alias="in", strict=True, ge=0, le=USAGE_MAX)
+    out: int | None = Field(None, strict=True, ge=0, le=USAGE_MAX)
+    cached: int | None = Field(None, strict=True, ge=0, le=USAGE_MAX)
+    reasoning: int | None = Field(None, strict=True, ge=0, le=USAGE_MAX)
+
+
 class AnswerIn(BaseModel):
     # как у ответа через сервер: до ANSWER_MAX знаков и пометка обрезки (длиннейшая — CUT_SIZE)
     content: str = Field(max_length=ANSWER_MAX + len(CUT_SIZE))
     status: Literal["done", "stopped", "error"]
     error: str | None = Field(None, max_length=ERROR_MAX)    # слова ошибки (`status` error), как `messages.error`
+    # токены и время ответа, что страница прочитала сама (решение 19 спеки 2026-11-25)
+    usage: UsageIn | None = None
+    gen_ms: int | None = Field(None, strict=True, ge=0, le=MS_MAX)
+    total_ms: int | None = Field(None, strict=True, ge=0, le=MS_MAX)
 
 
 class CleanerCopyIn(BaseModel):
@@ -3178,7 +3193,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
 async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Request):
     """Ответ прямого подключения: браузер прочитал модель сам и кладёт итог (один раз). Тот же итог повторно —
     200, как в первый раз: ответ на первый PUT мог не дойти, и страница повторяет его после обрыва связи.
-    `error` — слова ошибки страницы («Сервис ответил ошибкой (401)…»): хранятся у ответа со статусом `error`."""
+    `error` — слова ошибки страницы («Сервис ответил ошибкой (401)…»): хранятся у ответа со статусом `error`;
+    `usage`, `gen_ms`, `total_ms` — токены и время, что страница прочитала сама (повтор итога их не переписывает)."""
     _chat_row(request.state.user.id, chat_id)
     row = state.DB.execute("SELECT role, status, via, content FROM messages WHERE id = ? AND chat_id = ?",
                            (message_id, chat_id)).fetchone()
@@ -3188,7 +3204,9 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
         return {"id": message_id, "status": body.status}
     error = (body.error or "").strip() or None if body.status == "error" else None
     if (row["role"], row["status"], row["via"]) != ("assistant", "streaming", "browser") \
-            or not _finish(message_id, chat_id, body.content, body.status, error=error):
+            or not _finish(message_id, chat_id, body.content, body.status, error=error,
+                           usage=body.usage.model_dump(by_alias=True, exclude_none=True) if body.usage else None,
+                           gen_ms=body.gen_ms, total_ms=body.total_ms):
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
     log.info("чат %s: ответ %s от браузера — %s", chat_id[:8], message_id[:8], body.status)
     return {"id": message_id, "status": body.status}
