@@ -50,6 +50,19 @@ def test_preview_lives_in_memory_and_is_served_sandboxed_without_network(studio,
     assert "окно HTML" in caplog.text
 
 
+def test_expired_windows_of_every_account_leave_memory_on_a_new_window(studio, caplog):
+    """Ревью, п. 4–5: POST окна убирает истёкшие записи всех учёток (документ до 2 МиБ не живёт до следующего обращения
+    своей учётки); журнал — короткий id диалога, как в остальном «Чате»."""
+    caplog.set_level(logging.INFO)
+    add_gateway(studio)
+    cid = new_chat(studio)
+    now = studio.clock[0]
+    chat_preview.VIEWS[-1] = ("old", "digest", "other", "x" * 1000, now)                # истекла ровно сейчас
+    chat_preview.VIEWS[-2] = ("live", "digest", "other", "y", now + 10)
+    assert post(studio, cid).status_code == 201
+    assert -1 not in chat_preview.VIEWS and -2 in chat_preview.VIEWS and len(chat_preview.VIEWS) == 2
+
+
 def test_preview_closes_with_the_dialog(studio):
     add_gateway(studio)
     cid = new_chat(studio)

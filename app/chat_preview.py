@@ -53,7 +53,10 @@ async def open_preview(chat_id: str, body: PreviewIn, request: Request):
         raise HTTPException(413, {"code": "preview_size", "message": TOO_BIG})
     document = body.text if body.kind == "html" else SVG_HEAD + body.text
     token = secrets.token_hex(16)
-    VIEWS[uid] = (token, request.state.digest, chat_id, document, clock.NOW() + TTL_SEC)
+    now = clock.NOW()
+    for owner in [owner for owner, kept in VIEWS.items() if kept[4] <= now]:   # истёкшие окна всех учёток — из памяти
+        del VIEWS[owner]
+    VIEWS[uid] = (token, request.state.digest, chat_id, document, now + TTL_SEC)
     log.info("чат %s: окно HTML, %d байт", chat_id, size)
     return {"token": token}
 
