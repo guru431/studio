@@ -1794,8 +1794,9 @@ class StreamTask:
                         "tool": self.mcp.calls[c.name][1] if self.mcp and c.name in self.mcp.calls else c.name}
             elif self.protected and mcp_client.has_url(web.args_of(c.arguments) or c.arguments):
                 step = self._url_refused(c, kind)    # после защищённого источника ссылка не уходит никуда
-            elif (self.part is not None and self.mcp and c.name in self.mcp.calls and mcp_sources.confirm_needed(
-                    self.mcp.confirm_hint(c.name), web.args_of(c.arguments))):   # внутри части паузы нет
+            elif (self.part is not None and self.mcp and c.name in self.mcp.calls
+                    and (self.mcp.confirm_hint(c.name) or {}).get("confirm") is not None):   # внутри части паузы нет:
+                # отказ по тому же признаку, что убирает инструмент из набора части (chat_parts._specs), — и условному
                 _, tool, server, _ = self.mcp.calls[c.name]
                 step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_parts.NEEDS_CONFIRM}
             elif self.mcp and c.name in self.mcp.calls:

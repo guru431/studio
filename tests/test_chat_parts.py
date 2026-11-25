@@ -341,6 +341,22 @@ def test_part_refuses_mcp_tools_that_need_confirmation(studio):
     assert state.DB.execute("SELECT COUNT(*) FROM chat_pending").fetchone()[0] == 0
 
 
+def test_part_refuses_conditionally_confirmed_mcp_tools_without_the_condition(studio):
+    """Ревью, п. 4: инструмент с условным подтверждением в набор части не входит — и вызов без выполненного условия
+    тоже отказ, а не исполнение (спека п. 7: внутри части нет инструментов, требующих подтверждения)."""
+    sid_mcp, calls, _ = setup(studio, tools=[
+        tool("lookup"), tool("video", _meta={"studio/confirm": {"when": [{"arg": "seconds", "gt": 30}]}})])
+    cid = new_chat(studio)
+    sid = new_skill(studio)
+    studio.gw.chat_script = [{"tool_calls": [part()]}, {"tool_calls": [call(name_of(sid_mcp, "video"), seconds=5)]},
+                             ["Итог"], ["Готово"]]
+    sse(turn(studio, cid, "Задача", skill_id=sid))
+    _, sub, _, _ = studio.gw.chat_requests
+    assert offered(sub) == ["Shared tools: lookup"]
+    inner = [s for s in messages(studio, cid)[-1]["tools"] if "part" in s]
+    assert inner[0]["error"] == chat_parts.NEEDS_CONFIRM and "tools/call" not in methods(calls)
+
+
 def test_part_goes_through_cleaner_with_the_dialog_context(cleaner_gw):  # провайдеру мимо Cleaner — ничего
     s, gw = cleaner_gw
     cid = routed_chat(s, gw)
