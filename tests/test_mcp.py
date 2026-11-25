@@ -125,6 +125,20 @@ def test_long_sse_answer_in_many_chunks_with_crlf_on_the_boundary(studio):
     assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Tools', 'tool': 'lookup'}]
 
 
+def test_structured_content_is_cut_before_it_is_serialized():
+    """`structuredContent` в тексте шага — то же начало, что у полного `json.dumps(…, ensure_ascii=True)`, но кодируется
+    только то, что войдёт в RESULT_TEXT_MAX: строка не-ASCII не раздувается целиком в `\\uXXXX`."""
+    assert mcp_client.CALL_MAX_BYTES == mcp_client.RESULT_IMAGE_CHARS + mcp_client.MAX_BYTES
+    values = [{'текст': 'я' * 50_000, 'n': [1, 2.5, None, True]}, ['а' * 7, {'ключ' * 30: ['б'] * 900}] * 40,
+              {'k': 'v'}, 'строка', 42, [], {}]
+    for value in values:
+        for room in (1, 5, 17, 1000, 60_000):
+            assert mcp_client._json_head(value, room) == json.dumps(value, ensure_ascii=True)[:room]
+    assert mcp_client._json_head({'a': 1}, 0) == ''
+    # дальше предела кодирование не идёт: объект, который JSON не кодирует, после длинной строки не мешает
+    assert mcp_client._json_head(['я' * 3_000_000, object()], 60_000) == ('["' + r'\u044f' * 10_000)[:60_000]
+
+
 def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     sid = add(studio); calls = mock(studio, fail=True)
     cid = new_chat(studio)

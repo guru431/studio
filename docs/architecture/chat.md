@@ -432,8 +432,10 @@ Studio проксирует файлы через исходное подклю�
 берёт из результата (не ошибки) блоки `image` типов `mcp_client.RESULT_IMAGE_TYPES` не длиннее
 `mcp_client.RESULT_IMAGE_CHARS` знаков base64, первые `mcp_client.RESULT_IMAGES` (4), во временный ключ шага `images`;
 результат из одних картинок — текст `mcp_client.ONLY_IMAGES`. Ответ `tools/call` читается до
-`mcp_client.CALL_MAX_BYTES` (столько картинок предельного размера сверх `mcp_client.MAX_BYTES`), иначе результат с
-картинкой больше ~750 КБ отвергался бы целиком вместе с текстом. `chat.StreamTask._calls` снимает ключ до записи шага
+`mcp_client.CALL_MAX_BYTES` (одна картинка предельного размера или несколько меньших сверх `mcp_client.MAX_BYTES`,
+≈14 МиБ), иначе результат с картинкой больше ~750 КБ отвергался бы целиком вместе с текстом. Поток SSE разбирается по
+мере прихода (CRLF — только в новом куске, разделитель событий ищется с прежнего места), `structuredContent` —
+сериализуется лениво и только в пределах `mcp_client.RESULT_TEXT_MAX` (60000) знаков текста шага (`mcp_client._json_head`). `chat.StreamTask._calls` снимает ключ до записи шага
 (base64 — ни в `messages.tools`, ни в журнал) и зовёт `chat.StreamTask._result_images`: `normalize_image` в потоке
 (негодная — мимо), файл PNG с миниатюрой и строка `attachments` ответа (`kind` image, имя `<инструмент>-<n>.png`) — не
 больше `chat.RESULT_IMAGES_MAX` (16) на ответ; шаг `mcp` получает `pictures`. Под ответом они — его `attachments`.

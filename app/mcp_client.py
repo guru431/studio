@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import re
@@ -593,9 +594,35 @@ TRIMMED = "Инструментов MCP больше {0} — часть этог
 RESULT_IMAGES = 4
 RESULT_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
 RESULT_IMAGE_CHARS = (image_upload.MAX_UPLOAD + 2) // 3 * 4     # base64 картинки до image_upload.MAX_UPLOAD
-#: предел ответа `tools/call`: RESULT_IMAGES картинок предельного размера сверх обычного MAX_BYTES (иначе результат с
-#: картинкой больше ~750 КБ base64 отвергался бы целиком вместе с текстом)
-CALL_MAX_BYTES = RESULT_IMAGES * RESULT_IMAGE_CHARS + MAX_BYTES
+#: предел ответа `tools/call`: одна картинка предельного размера (или несколько меньших) сверх обычного MAX_BYTES (иначе
+#: результат с картинкой больше ~750 КБ base64 отвергался бы целиком вместе с текстом)
+CALL_MAX_BYTES = RESULT_IMAGE_CHARS + MAX_BYTES
+RESULT_TEXT_MAX = 60_000             # знаков текста результата в шаге (с structuredContent)
+
+
+def _json_head(value, room: int) -> str:
+    """Начало `json.dumps(value, ensure_ascii=True)` не длиннее `room` знаков, без сериализации остального: строки и
+    ключи заранее режутся до `room` знаков (знак даёт до 6 знаков JSON), списки и словари — до `room` элементов,
+    кодирование ленивое и останавливается, как только набралось `room`."""
+    if room <= 0:
+        return ""
+
+    def cut(v):
+        if isinstance(v, str):
+            return v[:room]
+        if isinstance(v, list):
+            return [cut(x) for x in v[:room]]
+        if isinstance(v, dict):
+            return {(k[:room] if isinstance(k, str) else k): cut(x) for k, x in itertools.islice(v.items(), room)}
+        return v
+
+    parts, size = [], 0
+    for piece in json.JSONEncoder(ensure_ascii=True).iterencode(cut(value)):
+        parts.append(piece)
+        size += len(piece)
+        if size >= room:
+            break
+    return "".join(parts)[:room]
 ONLY_IMAGES = "Инструмент MCP вернул изображение"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 #: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
@@ -835,7 +862,7 @@ class Tools:
             if result.get("isError") and _unknown_tool(None, text):
                 mcp_sources.forget(session.sid)
             if result.get("structuredContent") is not None:
-                text += "\n" + json.dumps(result["structuredContent"], ensure_ascii=True)
+                text += "\n" + _json_head(result["structuredContent"], RESULT_TEXT_MAX - len(text) - 1)
             images = [(block["data"], block["mimeType"]) for block in result.get("content", [])
                       if isinstance(block, dict) and block.get("type") == "image" and isinstance(block.get("data"), str)
                       and block.get("mimeType") in RESULT_IMAGE_TYPES and len(block["data"]) <= RESULT_IMAGE_CHARS]
@@ -844,7 +871,7 @@ class Tools:
                 text = ONLY_IMAGES
             if not text:
                 text = "Инструмент MCP вернул результат без текста"
-            step["error" if result.get("isError") else "text"] = text[:60_000]
+            step["error" if result.get("isError") else "text"] = text[:RESULT_TEXT_MAX]
             import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
             files = [] if result.get("isError") else mcp_files.result_files(result)
             if not files and not result.get("isError"):

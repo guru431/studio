@@ -134,7 +134,7 @@ def test_a_big_picture_result_keeps_its_text_and_picture(studio):
     Image.frombytes("RGB", (900, 900), random.Random(1).randbytes(900 * 900 * 3)).save(raw, "PNG")
     data = base64.b64encode(raw.getvalue()).decode()
     assert len(data) > 2 * mcp_client.MAX_BYTES
-    assert mcp_client.CALL_MAX_BYTES == mcp_client.RESULT_IMAGES * mcp_client.RESULT_IMAGE_CHARS + mcp_client.MAX_BYTES
+    assert mcp_client.CALL_MAX_BYTES == mcp_client.RESULT_IMAGE_CHARS + mcp_client.MAX_BYTES
     big = {"content": [{"type": "text", "text": "большой график"}, {"type": "image", "data": data, "mimeType": "image/png"}]}
     sid, calls, _ = setup(studio, results={"lookup": big})
     vision()
