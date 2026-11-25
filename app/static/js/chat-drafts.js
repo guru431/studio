@@ -2,14 +2,21 @@
  * хранилище сессии вкладки по id диалога (dialog-drafts.js, ключ `studio-chat-drafts`), у нового диалога — `'new'`.
  * Вложения — только в памяти страницы (поле общее для диалогов). Блокировка и выход стирают черновики сами
  * (dialog-drafts.js). Квитанция `receipt` (id сообщения очереди, ушло ли которое — неизвестно, chat-queue.js) живёт,
- * пока текст черновика тот же: такой текст уходит тем же `request_id`. */
+ * пока текст черновика тот же: такой текст уходит тем же `request_id`. До отпирания (с <html> снят `shrouded`,
+ * lock.js) ввод и уход из диалога черновик не пишут — как очередь (chat-queue.js); поле на экране остаётся. */
 import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 
 const store = draftStore(CHAT_DRAFTS);
 const keyOf = (id) => id ?? 'new';
+let locked = false;
+document.addEventListener('studio-locked', () => { locked = true; });
+new MutationObserver(() => {
+  if (!document.documentElement.classList.contains('shrouded')) locked = false;
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
 export function chatDrafts(input, { autosize }) {
   const save = (id) => {
+    if (locked) return;
     const text = input.value.trim() ? input.value : '';
     const old = store.saved()[keyOf(id)];
     store.save(keyOf(id), text, old?.receipt && old.text === text ? old.receipt : undefined);

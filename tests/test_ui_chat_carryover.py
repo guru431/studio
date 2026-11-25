@@ -470,6 +470,34 @@ def test_locked_page_keeps_the_queue_out_of_the_drafts(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_locked_page_keeps_the_field_out_of_the_drafts(browser, live):
+    """Блокировка стирает черновики: ввод под ней (`typed`) и уход из диалога (`leave`) в хранилище не пишут; после
+    отпирания (с <html> снят `shrouded`) черновик снова пишется."""
+    live.add_user("drafts-lock")
+    typed = """(() => { const f = document.querySelector('#chat-input'); f.value += '!';
+      f.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"""
+    r = browser.drive(live.url + "/", [*start("drafts-lock"),
+        ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", ANSWERED),
+        ("eval", "a", f"window.a = {CHAT}"),
+        ("type", "#chat-input", "Тайное"), ("eval", "before", draft_of(CHAT)),
+        ("eval", "lock", "document.dispatchEvent(new Event('studio-locked'));"
+                         " document.documentElement.classList.add('shrouded'); true"),
+        ("eval", "typed", typed), ("eval", "afterTyped", f"[{draft_of(CHAT)}, {FIELD}]"),
+        ("eval", "leave", "location.hash = '#/chat'"), ("wait", "!document.querySelector('#messages .msg')"),
+        ("eval", "afterLeave", f"[{draft_of('window.a')}, sessionStorage.getItem('studio-chat-drafts')]"),
+        ("eval", "unlock", "document.documentElement.classList.remove('shrouded'); true"), pause(100),
+        ("eval", "back", "location.hash = '#/chat/' + window.a"),
+        ("wait", "document.querySelector('#messages .msg.user .bubble')?.textContent === 'Первый'"),
+        ("type", "#chat-input", "Открытое"), ("eval", "opened", draft_of("window.a"))])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == "Тайное"
+    assert v["afterTyped"] == [None, "Тайное!"]
+    assert v["afterLeave"] == [None, None]
+    assert v["opened"] == "Открытое"
+    assert not problems(r), problems(r)
+
+
 def test_draft_stays_with_its_dialog(browser, live):
     live.add_user("drafts")
     def to(expr):
