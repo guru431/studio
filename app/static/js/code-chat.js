@@ -1347,6 +1347,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         foreign = false;
         queue.clear();
         setRunning(false);
+        context.turnLost();
         if (!['done', 'stopped', 'error'].includes(activity.dataset.state)) paintActivity('idle');
         if (turn) {                // ход кончился, пока страница не смотрела: история его уже знает
           turn = null;
@@ -1359,6 +1360,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         if (data.owner === WINDOW && data.accepted) acknowledgeInput();
         setRunning(true);
         activeTools.clear();
+        context.turnLost();
         const t = current();
         if (data.settings) acceptSettings(data.settings);
         paintContext(data.context);

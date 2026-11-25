@@ -134,12 +134,15 @@ export function contextView(host, { chat, engine, project, messages }) {
     timing(data) { setTimes(data); if (dialog.open) paint(); },
     /** Событие `turn`: точка отсчёта выходных токенов хода. */
     turnStarted() { startOutput = context?.usage?.output ?? null; },
+    /** Ход застан снимком (`snapshot`) или кончился без этой страницы (`idle`): точки отсчёта нет. */
+    turnLost() { startOutput = undefined; },
     /** Конец хода (`done`): время и скорость — разница выходных токенов, делённая на время хода. */
     turnDone(data) {
       setTimes(data);
       const output = context?.usage?.output;
       const tokens = Number.isFinite(output) && Number.isFinite(startOutput) ? output - startOutput : -1;
-      speed = tokens >= 0 && times.turn > 0 ? Math.round(tokens / (times.turn / 1000)) : null;
+      // ноль выходных токенов — помощник их не сообщил: «нет данных», не «0 ток/с»
+      speed = tokens > 0 && times.turn > 0 ? Math.round(tokens / (times.turn / 1000)) : null;
       startOutput = undefined;
       if (dialog.open) paint();
     },

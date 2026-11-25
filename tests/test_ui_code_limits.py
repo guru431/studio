@@ -7,7 +7,7 @@ import pytest
 
 from fakes import PNG_REAL
 from test_ui_browser import (CODE_CHAT_A, NO_OVERFLOW, READY, browser, code_chat, code_free_machine, code_online,
-                             code_requests, code_session, live, problems, signin)
+                             code_requests, code_send, code_session, live, problems, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -62,6 +62,31 @@ def test_ten_screenshots_in_one_message_and_turn_time(browser, live, width):
     assert values["times"] == ["1 с", "1 с", "500 ток/с"], values
     [turn] = code_requests(machine, "turn")
     assert len(turn["images"]) == 10
+    assert not problems(r), problems(r)
+
+
+def test_zero_output_tokens_is_no_speed_data(browser, live):
+    """Спека п. 8: прирост выходных токенов хода 0 — «нет данных», не «0 ток/с»; время хода при этом есть."""
+    login = "limits-zero"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Без токенов")})
+    machine.timing = True
+    usage = {"total": 100, "input": 80, "output": 20}
+    machine.context = {"used": 10, "limit": 100, "percent": 10, "usage": usage}
+    machine.script = [{"k": "context", "used": 12, "limit": 100, "usage": usage},
+                      {"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", "document.querySelector('#code-context').dataset.used === '10'"),
+            *code_send("Сделай"),
+            ("wait", "document.querySelector('#code-stop').hidden"
+                     " && document.querySelector('#code-feed').textContent.includes('Готово')"),
+            *OPEN_CONTEXT, ("eval", "times", TIMES)])
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["times"] == ["1 с", "1 с", "нет данных"], r["values"]
     assert not problems(r), problems(r)
 
 
