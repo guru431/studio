@@ -10,7 +10,7 @@ import state
 from conftest import add_connection, add_gateway, make_user, signin
 from test_chat import events_of, messages, new_chat, sse, turn
 from test_chat_fork import INHERITED, count_chats, row_of
-from test_chat_summary import code, compact, stored, three_turns
+from test_chat_summary import code, compact, stored, three_turns, with_skill
 from test_chat_system import role, with_role
 from test_chat_web import call
 from test_cleaner_route_chat import cleaner_gw, routed_chat  # noqa: F401 — фикстура шлюза Cleaner
@@ -59,6 +59,25 @@ def test_continue_summarizes_the_whole_dialog_into_an_heir(studio, caplog):
     prompt = studio.gw.chat_requests[-1]["messages"][1]["content"]
     assert prompt.startswith("Summary so far:\nИтог-1\n\nTranscript:\nuser: Вопрос-3") and "Вопрос-1" not in prompt
     assert stored(cid)["summary"] == "Итог-1"                                   # хранимый пересказ прежний
+
+
+def test_continue_retells_the_last_skill_too(studio):
+    """Решение ведущего (ревью раунда 2): у наследника шапки нет — текст последнего навыка идёт в итог, а не
+    вырезается, как у «Сжать сейчас» (решение 14); и навык из шапки прежнего пересказа тоже."""
+    add_gateway(studio); cid = three_turns(studio); ms = messages(studio, cid)
+    with_skill(ms[0]["id"], "РАННИЙ НАВЫК"); with_skill(ms[4]["id"], "ПОСЛЕДНИЙ НАВЫК")
+    studio.gw.chat_script = [["Итог"]]
+    assert go(studio, cid).status_code == 201
+    prompt = studio.gw.chat_requests[-1]["messages"][1]["content"]
+    assert "РАННИЙ НАВЫК" in prompt and "ПОСЛЕДНИЙ НАВЫК" in prompt and "Вопрос-3" in prompt
+    other = three_turns(studio); ms = messages(studio, other)
+    with_skill(ms[2]["id"], "НАВЫК-A")
+    studio.gw.chat_script = [["Итог-1"], ["Итог-2"]]
+    assert compact(studio, other).status_code == 200                 # навык A — в шапке пересказа
+    assert "НАВЫК-A" not in studio.gw.chat_requests[-1]["messages"][1]["content"]   # «Сжать сейчас» — как прежде
+    assert go(studio, other).status_code == 201
+    prompt = studio.gw.chat_requests[-1]["messages"][1]["content"]
+    assert prompt.startswith("Summary so far:\nИтог-1\n\nTranscript:\nuser: НАВЫК-A") and "Вопрос-3" in prompt
 
 
 def test_continue_of_a_protected_dialog_stays_protected(studio):                     # Review Focus 3

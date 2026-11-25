@@ -830,12 +830,14 @@ def _without(content, text: str):
     return content
 
 
-def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None") -> tuple[list[dict], str, "str | None"]:
+def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None", *,
+                 keep_skill: bool = False) -> tuple[list[dict], str, "str | None"]:
     """Сообщения запроса до `upto` для пересказа: без шапки действующего пересказа и без текста последнего навыка
     внутри новой границы (решение 14). `ids` — id строк на каждое сообщение `turns` (None — не известны: граница —
     `upto`, навык ищется текстом). Итог — (сообщения, прежний пересказ или "", текст навыка для новой шапки или None).
     Навык прежней шапки остаётся в новой, пока он последний внутри границы; иначе его текст идёт в расшифровку
-    первым сообщением — его пересказывают, как другие ранние навыки."""
+    первым сообщением — его пересказывают, как другие ранние навыки. `keep_skill` — последний навык тоже
+    пересказывается («Новый диалог с итогом»: у наследника шапки нет, навык живёт только в итоге)."""
     turns, seed, held = list(turns), "", None
     applied = _history_head(chat_id, _messages(chat_id), upto)
     if applied is not None and turns:
@@ -843,7 +845,7 @@ def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None")
         if stripped != turns[0]["content"]:
             turns[0] = {**turns[0], "content": stripped}
             seed, held = applied[1], applied[3]
-    skill = _last_skill(chat_id, ids[-1][-1] if ids else upto)
+    skill = None if keep_skill else _last_skill(chat_id, ids[-1][-1] if ids else upto)
     if skill is not None and held is not None and skill[0] == held[0]:
         return turns, seed, held[1]                    # навык шапки — всё ещё последний: дословно в новой шапке
     out = False
@@ -3334,10 +3336,11 @@ NO_COMPACT = {"code": "no_compact", "message": "сжатие истории — 
 NOTHING_TO_COMPACT = "пересказывать нечего: последний ход остаётся целиком"
 
 
-async def summarize_dialog(uid: int, row, upto: str) -> str:
+async def summarize_dialog(uid: int, row, upto: str, *, keep_skill: bool = False) -> str:
     """Пересказ диалога `row` (строка `chats` учётки `uid`) до сообщения `upto` включительно — механизм «Сжать
     сейчас» (п. 30) без записи: из действующего пересказа (`chats.summary`, его граница не позже `upto`) и сообщений
-    после него, без шапки прежнего пересказа и текста последнего навыка (`_for_summary`). Допуски — как у хода:
+    после него, без шапки прежнего пересказа и текста последнего навыка (`_for_summary`; `keep_skill` — с ним:
+    «Новый диалог с итогом» пересказывает и его). Допуски — как у хода:
     идёт ответ — 409 `busy`; MCP-модель, прямое подключение и предпросмотр Cleaner — 409 `no_compact`; нет
     подключения — 409 `no_connection`; модель снята или принудительный Cleaner — `_admit`; расшифровка без
     подтверждения — 409 `external`; окно модели неизвестно — 409 `no_limit`; сменилась модель — 409 `changed`;
@@ -3369,7 +3372,7 @@ async def summarize_dialog(uid: int, row, upto: str) -> str:
     _admit(uid, conn, model)                         # снятие модели или принудительный режим — тем временем
     ids = []
     composed = compose(chat_id, upto, model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)), ids=ids)
-    turns, seed, _ = _for_summary(chat_id, upto, composed, ids)
+    turns, seed, _ = _for_summary(chat_id, upto, composed, ids, keep_skill=keep_skill)
     if not turns:
         raise HTTPException(409, {"code": "nothing", "message": NOTHING_TO_COMPACT})
     rate = ratio(conn, model)

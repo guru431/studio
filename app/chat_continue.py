@@ -35,7 +35,7 @@ async def continue_chat(chat_id: str, request: Request):
         raise cleaner_client.refused(CLEANER)
     last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0"
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
-    text = await chat.summarize_dialog(uid, row, last["id"])
+    text = await chat.summarize_dialog(uid, row, last["id"], keep_skill=True)   # навык действует весь диалог
     operations.check(uid)
     fresh = chat._chat_row(uid, chat_id)    # удалён — 404; отметка защищённого источника могла встать за время итога
     state.DB.execute("BEGIN")
