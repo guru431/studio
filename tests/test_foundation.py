@@ -222,8 +222,8 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-        assert columns("connection_profiles") - {"model_params"} == {      # параметры на модель — шаг 82
-            "connection_id", "system_text", "params", "suggestions", "updated"}
+        assert columns("connection_profiles") == {                         # параметры на модель — шаг 82
+            "connection_id", "system_text", "params", "suggestions", "updated", "model_params"}
         assert columns("role_defaults") == {"id", "lang", "name", "text", "position", "builtin", "created", "updated"}
         assert columns("chat_roles") == {"id", "user_id", "name", "text", "position", "origin", "created", "updated"}
         assert columns("mcp_uploads") == {"attachment_id", "server_id", "artifact_id", "path", "stamp", "created"}
