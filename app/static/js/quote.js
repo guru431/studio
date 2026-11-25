@@ -9,6 +9,7 @@ import { tr } from './i18n.js';
  * selectionQuote(scroller, { texts, quote }) → { unmount() }: выделение целиком внутри одного узла `texts` ленты —
  *   кнопка `#quote-float` «Цитировать» у конца выделения; нажатие — quote(выделенный текст). */
 import { icon, iconButton } from './icons.js';
+import { rootZoom } from './menu.js';
 import { el } from './ui.js';
 
 export const QUOTE_MAX = 4000;
@@ -87,9 +88,10 @@ export function selectionQuote(scroller, { texts, quote }) {
     const rect = rects[rects.length - 1] || found.range.getBoundingClientRect();
     button.hidden = false;
     const { width, height } = button.getBoundingClientRect();
-    button.style.left = `${Math.max(EDGE, Math.min(rect.right - width / 2, innerWidth - width - EDGE))}px`;
+    const zoom = rootZoom();
+    button.style.left = `${Math.max(EDGE, Math.min(rect.right - width / 2, innerWidth - width - EDGE)) / zoom}px`;
     const below = rect.bottom + EDGE;
-    button.style.top = `${below + height + EDGE <= innerHeight ? below : Math.max(EDGE, rect.top - height - EDGE)}px`;
+    button.style.top = `${(below + height + EDGE <= innerHeight ? below : Math.max(EDGE, rect.top - height - EDGE)) / zoom}px`;
   };
   const onKey = (event) => { if (event.key === 'Escape' && !button.hidden) hide(); };
   button.addEventListener('mousedown', (event) => event.preventDefault());   // выделение остаётся

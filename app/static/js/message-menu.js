@@ -8,7 +8,7 @@ import { tr } from './i18n.js';
  * (null — без «Цитировать»); said(слова) — итог копирования. На ссылке, картинке, видео, звуке и в полях ввода, а
  * также с Shift — меню браузера. Где `contextmenu` долгим нажатием нет (iOS) — касание без сдвига больше MOVE_PX
  * дольше LONG_PRESS_MS; меню открывается по отпусканию пальца: иначе отпускание закрыло бы popover сразу. */
-import { menuItem, popupMenu } from './menu.js';
+import { menuItem, popupMenu, rootZoom } from './menu.js';
 import { el } from './ui.js';
 
 export const LONG_PRESS_MS = 550;
@@ -57,8 +57,9 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
     target = node;
     const box = node.getBoundingClientRect();
     if (!x && !y) { x = box.left + 16; y = box.top + 16; }          // клавиша меню: у начала сообщения
-    anchor.style.left = `${Math.max(0, Math.min(x, innerWidth - 1))}px`;
-    anchor.style.top = `${Math.max(0, Math.min(y, innerHeight - 1))}px`;
+    const zoom = rootZoom();
+    anchor.style.left = `${Math.max(0, Math.min(x, innerWidth - 1)) / zoom}px`;
+    anchor.style.top = `${Math.max(0, Math.min(y, innerHeight - 1)) / zoom}px`;
     popup.close();
     popup.open();
   };

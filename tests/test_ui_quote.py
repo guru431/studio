@@ -92,6 +92,43 @@ def test_quote_chip_folds_into_the_field_and_the_menu_mirrors_actions(browser, l
         assert v["long"] == [True, False], v
 
 
+ZOOMED = "(async () => {" + FRAMES + """
+  const q = await import('/static/js/quote.js');
+  const mm = await import('/static/js/message-menu.js');
+  const { el } = await import('/static/js/ui.js');
+  document.documentElement.style.zoom = '0.8';                  // «Масштаб интерфейса» 80 %
+  const text = el('div', { class: 'md' }, 'выделенный текст ответа');
+  const msg = el('div', { class: 'msg assistant', style: 'margin:200px 0 0 300px; width:400px' }, text);
+  const scroller = el('div', {}, msg);
+  document.body.append(scroller);
+  const sel = q.selectionQuote(scroller, { texts: '.md', quote: () => {} });
+  const menu = mm.messageMenu(scroller, { message: '.msg', text: (n) => n.textContent });
+  const range = document.createRange(); range.selectNodeContents(text);
+  getSelection().removeAllRanges(); getSelection().addRange(range);
+  await frames();
+  const end = [...range.getClientRects()].at(-1);
+  const button = [...document.querySelectorAll('#quote-float')].at(-1).getBoundingClientRect();   // у «Чата» — своя
+  const out = { float: [Math.round(button.left + button.width / 2 - end.right), Math.round(button.top - end.bottom)] };
+  getSelection().removeAllRanges();
+  const box = text.getBoundingClientRect();
+  const x = Math.round(box.left + 20), y = Math.round(box.top + 5);
+  text.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  await frames();
+  const anchor = [...document.querySelectorAll('.msg-menu-anchor')].at(-1).getBoundingClientRect();
+  out.anchor = [Math.round(anchor.left - x), Math.round(anchor.top - y)];
+  sel.unmount(); menu.unmount(); document.documentElement.style.zoom = '';
+  return out;
+})()"""
+
+
+def test_quote_button_and_menu_follow_the_pointer_at_80_percent(browser, live):
+    """Масштаб интерфейса — CSS zoom корня: координаты экрана делятся на него (menu.rootZoom), иначе при 80 % кнопка
+    у выделения и меню уезжают на пятую часть расстояния от угла."""
+    v = probe(browser, live, ZOOMED)
+    assert abs(v["float"][0]) <= 2 and 0 <= v["float"][1] <= 12, v
+    assert [abs(n) <= 1 for n in v["anchor"]] == [True, True], v
+
+
 SELECT_ANSWER = """(() => { const md = document.querySelector('#messages .msg.assistant .md');
   const range = document.createRange(); range.selectNodeContents(md);
   const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); return sel.toString(); })()"""

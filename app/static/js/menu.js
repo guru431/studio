@@ -13,10 +13,16 @@ import { el } from './ui.js';
 const GAP = 6;
 const EDGE = 8;
 
+/** CSS zoom корня (масштаб интерфейса): координаты экрана (`clientX`, `getBoundingClientRect`) делятся на него,
+ * прежде чем стать `left`/`top` узла внутри страницы. */
+export function rootZoom() {
+  return Number(getComputedStyle(document.documentElement).zoom) || 1;
+}
+
 /** Показать popover `menu` у `trigger`: side — 'below' | 'above' (куда предпочтительно), align — 'start' | 'end'
  * (край кнопки). Не помещается с предпочтительной стороны — с другой, иначе прижимается к краю видимой области. */
 export function placePopup(menu, trigger, { side = 'below', align = 'start' } = {}) {
-  const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1;
+  const zoom = rootZoom();
   const viewport = window.visualViewport;
   const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
   const width = viewport?.width || innerWidth, height = viewport?.height || innerHeight;
