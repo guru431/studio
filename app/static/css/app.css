@@ -2596,7 +2596,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   body.shell { display: block; height: auto; overflow: visible; }
   #view, .chat, .chat-main, .messages, .split, .split-main, .tl-source-text, .tl-output, .tl-pairs-wrap {
     height: auto; max-height: none; overflow: visible; }
-  :is(#rail, #menu, .head, .chats, .composer, .hint-bar, .split-aside, .msg-actions, .copy, .chat-error, .tl-past) {
+  :is(#rail, #menu, .head, .chats, .composer, .hint-bar, .split-aside, .msg-actions, .copy, .preview-open, .chat-error, .tl-past) {
     display: none; }
 }
 
