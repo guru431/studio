@@ -95,3 +95,33 @@ def test_context_refusal_retries_once_with_compaction_then_refuses_in_words(stud
     events = sse(turn(studio, cid, "Вопрос-4"))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith(chat.CONTEXT_WORDS)
     assert len(seen) == 6                                                  # отказ, пересказ, отказ — третьего нет
+
+
+def test_context_refusal_from_a_profile_max_tokens_names_the_parameter(studio):
+    """Предел ответа профиля (на модель) не меньше окна без запаса: отказ шлюза по длине — слова о параметре
+    профиля, без сжатия и без записи пересказа (`chats.summary`): сжатие не помогло бы."""
+    gw = add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_script = [["Ответ-1"], ["Ответ-2"]]
+    sse(turn(studio, cid, "Вопрос-1")); sse(turn(studio, cid, "Вопрос-2"))
+    window(studio, 65536)
+    big = 65536 - chat.RESERVE_TOKENS
+    r = studio.c.put(f"/api/connections/{gw}/profile", json={"model_params": {"local-gemma-abl": {"max_tokens": big}}})
+    assert r.status_code == 200, r.text
+    seen = []
+
+    async def completions(request):                                         # отказ vLLM — только с большим пределом
+        body = json.loads(request.content)
+        seen.append(body)
+        if body.get("max_tokens") != big:
+            return await studio.gw.builtin(request)
+        return httpx.Response(400, json={"error": {"message": (
+            "This model's maximum context length is 65536 tokens. However, you requested 66000 tokens "
+            f"({66000 - big} in the messages, {big} in the completion).")}})
+    studio.gw.on["/v1/chat/completions"] = completions
+    studio.gw.chat_script = [["Пересказ двух ходов."]]
+    events = sse(turn(studio, cid, "Вопрос-3"))
+    assert state.DB.execute("SELECT summary FROM chats WHERE id = ?", (cid,)).fetchone()[0] is None
+    assert len(seen) == 1 and seen[0]["max_tokens"] == big                 # без пересказа и без повтора
+    assert ("recovery", {"stage": "summary"}) not in events
+    assert events[-1] == ("error", {"message": chat.PARAM_TOO_BIG})
+    assert not chat.PARAM_TOO_BIG.startswith(chat.CONTEXT_WORDS)          # «Новый диалог с итогом» не поможет

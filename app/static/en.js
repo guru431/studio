@@ -3481,6 +3481,7 @@ globalThis.StudioEnglish = Object.freeze({
   "декабря": "December",
   "Не помещается в контекст модели: ~{0} тыс. токенов при пределе {1} тыс. Уберите документ или начните новый диалог.": "Exceeds model context: ~{0}k tokens, limit {1}k. Remove a document or start a new conversation.",
   "Не помещается в контекст модели: модель отклонила запрос по длине. Уберите документ или начните новый диалог.": "Exceeds model context: the model rejected the request as too long. Remove a document or start a new conversation.",
+  "Модель отклонила запрос по длине: предел ответа (max_tokens) в профиле подключения не меньше окна контекста модели. Уменьшите его в профиле.": "The model rejected the request as too long: the answer limit (max_tokens) in the connection profile is not smaller than the model's context window. Lower it in the profile.",
   "вложение уже отправлено": "attachment already sent",
   "не больше {0} вложений в сообщении": "no more than {0} attachments per message",
   "ответ ещё идёт — дождитесь или остановите": "response in progress. Wait or stop it",

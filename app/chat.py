@@ -124,6 +124,9 @@ DEFAULT_RATIO = 3.0
 CONTEXT_WORDS = "Не помещается в контекст модели"
 #: шлюз отклонил запрос по длине и после сжатия истории (или сжимать нечего)
 TOO_LONG_WORDS = CONTEXT_WORDS + ": модель отклонила запрос по длине. Уберите документ или начните новый диалог."
+#: тот же отказ, когда предел ответа профиля (max_tokens) не меньше окна без RESERVE_TOKENS: сжатие не помогло бы
+PARAM_TOO_BIG = ("Модель отклонила запрос по длине: предел ответа (max_tokens) в профиле подключения не меньше окна "
+                 "контекста модели. Уменьшите его в профиле.")
 #: отказ шлюза 400 по длине контекста (OpenAI, vLLM, LiteLLM, Anthropic) — `StreamTask._round`
 CONTEXT_REFUSED = re.compile(r"context[ _]length|context window|maximum context|too many tokens|prompt is too long"
                              r"|input is too long", re.IGNORECASE)
@@ -2141,6 +2144,9 @@ class StreamTask:
                 self.builtin_off = retried = True
                 continue
             if ending is TOO_LONG:                       # отказ по длине: один повтор со сжатием, второй — слова
+                if self.limit is not None and max(self.params.get("max_tokens", 0),
+                                                  self.params.get("max_completion_tokens", 0)) >= self.limit - RESERVE_TOKENS:
+                    return PARAM_TOO_BIG                 # предел ответа профиля занял окно — сжатие не поможет
                 if self.forced or self.limit is None:
                     return TOO_LONG_WORDS
                 self.forced = True
