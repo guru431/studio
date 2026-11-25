@@ -34,6 +34,7 @@ import audio
 import auth
 import bridge
 import chat
+import chat_info
 import chat_pending
 import mcp_client
 import mcp_contracts
@@ -213,6 +214,7 @@ app.include_router(media.router)
 app.include_router(presets.router)          # раньше images: /api/images/presets — не id картинки
 app.include_router(images.router)
 app.include_router(videos.router)
+app.include_router(chat_info.router)          # раньше chat: /api/chats/stats — не id диалога
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
 app.include_router(knowledge.router)
