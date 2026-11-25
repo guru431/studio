@@ -90,4 +90,10 @@ def test_old_bridge_is_refused_with_its_own_number_before_the_bridge(studio):
     link.hello["attachments"] = True
     r = studio.c.post(chat_url(aid, "steer"), json={"text": "x", "attachments": [FILE] * 9})
     assert r.status_code == 422 and detail(r)["message"] == "можно прикрепить до 8 файлов"
+    # больше общего предела формы (13) — отказ разбора тела, но слова — с числом этого моста
+    r = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "attachments": [FILE] * 13})
+    assert (r.status_code, detail(r)) == (422, {"code": "invalid", "message": "нужны текст и до 8 вложений"})
+    link.hello["limits"] = {"images": 12, "attachments": 12}
+    r = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "attachments": [FILE] * 13})
+    assert detail(r)["message"] == "нужны текст и до 12 вложений"
     assert not sent(machine, "turn") and not sent(machine, "steer")

@@ -1394,7 +1394,10 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     try:
         body = Turn.model_validate(json.loads(raw))
     except (ValueError, RecursionError):
-        raise _refuse(422, "invalid", "нужны текст и до 12 вложений") from None
+        # слова — с действующим числом моста (у 0.47 — 8); канал после разбора берётся заново ниже
+        link = bridge.LINKS.get(aid)
+        counts = bridge.turn_limits(link.hello) if link is not None else bridge.LIMITS_MAX
+        raise _refuse(422, "invalid", f"нужны текст и до {counts['attachments']} вложений") from None
     if (not body.text.strip() and not body.images and not body.attachments) or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
     images = await asyncio.to_thread(_turn_images, body.images)
