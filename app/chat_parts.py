@@ -25,7 +25,9 @@ import web
 
 BAD_ARGS = "неверные аргументы run_part — нужны название и задание части"
 ONE_PER_ROUND = "за один круг выполняется одна часть — вызови следующую после итога этой"
-LIMIT = f"не больше {chat_tools.PARTS_MAX} частей в одном ответе — собери ответ из готовых итогов"
+#: шаблон, `{0}` — chat_tools.PARTS_MAX при отказе: при загрузке `chat_tools` может быть ещё не готов
+#: (цикл chat_tools → chat → chat_parts)
+LIMIT = "не больше {0} частей в одном ответе — собери ответ из готовых итогов"
 TIME = "часть шла дольше срока ответа — остановлена"
 EMPTY = "модель не вернула итог части"
 STOPPED = "часть остановлена"
@@ -134,7 +136,7 @@ async def run(task, call) -> dict:
     if task.part_round:
         return chat_tools.part_refusal(call, ONE_PER_ROUND)
     if task.parts >= chat_tools.PARTS_MAX:
-        return chat_tools.part_refusal(call, LIMIT)
+        return chat_tools.part_refusal(call, LIMIT.format(chat_tools.PARTS_MAX))
     title, job = parsed
     task.parts += 1
     task.part_round = True

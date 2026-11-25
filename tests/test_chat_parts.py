@@ -4,8 +4,11 @@
 прерывает и часть, защищённый источник внутри части помечает диалог. В журнал — ни названия, ни задания, ни итога."""
 import json
 import logging
+import subprocess
+import sys
 
 import httpx
+import pytest
 
 import chat
 import chat_parts
@@ -13,13 +16,22 @@ import chat_tools
 import mcp_client
 import state
 import web
-from conftest import add_gateway
+from conftest import APP, add_gateway
 from test_chat import events_of, messages, new_chat, sse, turn, window
 from test_chat_pending import answer as answer_card, pending_of
 from test_chat_web import EXA_KEY, call
 from test_cleaner_route_chat import cleaner_gw, routed_chat  # noqa: F401 (фикстура)
 from test_mcp_dialog import methods, name_of, offered, setup, tool
 from test_protected_source import ALL, flags, names, protect, web_dialog
+
+@pytest.mark.integration
+@pytest.mark.parametrize("module", ["chat_tools", "chat_parts"])
+def test_modules_import_first_without_a_cycle(module):
+    """Первым импортом в чистом процессе (консоль службы, сторонний скрипт): `chat_tools` → `chat` → `chat_parts`
+    не читает `chat_tools.PARTS_MAX` при загрузке."""
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], cwd=APP, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+
 
 SKILL = {"name": "По частям", "text": "Дели задачу.", "scope": "chat", "parts": True}
 
@@ -130,7 +142,8 @@ def test_eleventh_part_is_refused_in_words_and_part_rounds_are_not_counted(studi
     answer = messages(studio, cid)[-1]
     steps = answer["tools"]
     assert len([s for s in steps if s["kind"] == "part" and s["state"] == "done"]) == 10
-    assert steps[-1]["error"] == chat_parts.LIMIT and "n" not in steps[-1] and "ms" not in steps[-1]
+    assert steps[-1]["error"] == chat_parts.LIMIT.format(chat_tools.PARTS_MAX)
+    assert "n" not in steps[-1] and "ms" not in steps[-1]
     assert answer["status"] == "done" and answer["content"] == "Ответ"
     assert "tools" in studio.gw.chat_requests[-1]                        # последний главный запрос — ещё с инструментами
 
@@ -430,7 +443,7 @@ def test_pause_keeps_part_counters(studio):
     sse(answer_card(studio, cid, pid, "answer", "Да"))
     answer = messages(studio, cid)[-1]
     done = [s for s in parts_of(answer) if s["state"] == "done"]
-    assert len(done) == 10 and parts_of(answer)[-1]["error"] == chat_parts.LIMIT
+    assert len(done) == 10 and parts_of(answer)[-1]["error"] == chat_parts.LIMIT.format(chat_tools.PARTS_MAX)
 
 
 def test_pause_keeps_the_part_of_its_round(studio):
