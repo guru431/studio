@@ -67,6 +67,7 @@ import { WINDOW } from './code-window.js';
 import { cancelRefresh, refreshAfterFailure } from './refresh.js';
 import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { codeActivity } from './code-activity.js';
+import { attachCounts, countRefusal } from './code-attach-limits.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -88,7 +89,6 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif
 // (сервер, claude_code.py, отказал бы уже после загрузки всего сообщения).
 const attachLimits = (agent) => agent?.large_attachments ? { file: 10, total: 30 } : { file: 5, total: 8 };
 const MIB = 1024 * 1024;
-const IMAGE_COUNT = 8;
 
 /** Черновики чатов (`${aid}/${chat}`). Смена «есть черновик / нет» — событие
  * `studio-code-draft` { key, draft } на document: по нему вкладка показывает ✎ (code.js, code-tabs.js). */
@@ -358,8 +358,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const picker = el('input', { type: 'file', id: 'code-image-input',
     multiple: true, hidden: true, 'aria-label': tr("Вложения") });
   const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': tr("Добавить вложение"),
-    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, {0} МиБ на файл, {1} МиБ на сообщение",
-      attachLimits(agent).file, attachLimits(agent).total)
+    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до {2} файлов, {0} МиБ на файл, {1} МиБ на сообщение",
+      attachLimits(agent).file, attachLimits(agent).total, attachCounts(agent).attachments)
       : tr("Изображения · обновите мост для файлов любого типа"), disabled: !agent?.images && !agent?.attachments });
   attach.append(icon('clip'));
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
@@ -627,15 +627,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     attach.disabled = true;
     showStatus('');
     try {
-      if (images.length + files.length > IMAGE_COUNT) throw new Error(tr("Можно прикрепить до 8 файлов"));
+      const refusal = countRefusal(images, files, attachCounts(agent));
+      if (refusal) throw new Error(refusal);
       if (!agent?.attachments && files.some((f) => !IMAGE_TYPES.has(f.type))) {
         throw new Error(tr("Обновите мост на компьютере для отправки файлов любого типа"));
       }
       const limits = attachLimits(agent);
       if (files.some((f) => f.size > limits.file * MIB)) throw new Error(tr("Размер файла — до {0} МиБ", limits.file));
-      if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
-        throw new Error(tr("Можно прикрепить до 4 изображений к сообщению"));
-      }
       if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > limits.total * MIB) {
         throw new Error(tr("Общий размер вложений — до {0} МиБ", limits.total));
       }

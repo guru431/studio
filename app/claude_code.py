@@ -194,8 +194,8 @@ class ChatSettings(BaseModel):
 
 class Turn(ChatSettings):
     text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
-    images: list[TurnImage] = Field(default_factory=list, max_length=4)
-    attachments: list[TurnAttachment] = Field(default_factory=list, max_length=8)
+    images: list[TurnImage] = Field(default_factory=list, max_length=bridge.LIMITS_MAX["images"])
+    attachments: list[TurnAttachment] = Field(default_factory=list, max_length=bridge.LIMITS_MAX["attachments"])
     mode: Literal["steer", "queue"] = "steer"
     request_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{16,64}$")   # квитанция отправки (RECEIPTS)
 
@@ -314,9 +314,17 @@ def _turn_images(images: list[TurnImage]) -> list[dict]:
     return [image.model_dump() for image in images]
 
 
+def _turn_counts(link, images: list[dict], attachments: list[dict]) -> None:
+    """Число вложений хода — по пределам моста (`bridge.turn_limits`); без канала — `bridge.LIMITS_MAX`, и `ask`
+    скажет `offline`. Отказ — до моста, словами с действующим числом."""
+    counts = bridge.turn_limits(link.hello) if link is not None else bridge.LIMITS_MAX
+    if len(images) > counts["images"]:
+        raise _refuse(422, "invalid", f"можно прикрепить до {counts['images']} изображений")
+    if len(images) + len(attachments) > counts["attachments"]:
+        raise _refuse(422, "invalid", f"можно прикрепить до {counts['attachments']} файлов")
+
+
 def _turn_attachments(items: list[TurnAttachment], images: list[dict]) -> list[dict]:
-    if len(items) + len(images) > 8:
-        raise _refuse(422, "invalid", "можно прикрепить до 8 файлов")
     # Изображения уже проверены _turn_images; размер вычисляется без повторного декодирования.
     total = sum(len(image['data']) // 4 * 3 - image['data'][-2:].count('=') for image in images)
     result = []
@@ -1386,12 +1394,13 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     try:
         body = Turn.model_validate(json.loads(raw))
     except (ValueError, RecursionError):
-        raise _refuse(422, "invalid", "нужны текст и до 8 вложений") from None
+        raise _refuse(422, "invalid", "нужны текст и до 12 вложений") from None
     if (not body.text.strip() and not body.images and not body.attachments) or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
     images = await asyncio.to_thread(_turn_images, body.images)
     attachments = await asyncio.to_thread(_turn_attachments, body.attachments, images)
     link = bridge.LINKS.get(aid)
+    _turn_counts(link, images, attachments)
     if op == "steer" and link is not None and not link.hello.get("chat_control"):
         raise _refuse(409, "unsupported", "Обновите мост для отправки уточнений во время работы")
     if op == "steer" and body.mode == "queue":

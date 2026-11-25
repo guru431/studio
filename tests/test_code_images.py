@@ -56,3 +56,15 @@ def test_image_and_request_limits(studio, monkeypatch):
     monkeypatch.setattr(claude_code, "TURN_BODY_MAX", 30)
     r = studio.c.post(chat_url(aid, "turn"), json={"text": "Вопрос", "images": [PNG]})
     assert r.status_code == 413 and not sent(machine, "turn")
+
+
+def test_twelve_images_pass_with_the_new_bridge(studio):
+    """Мост 0.48.0 объявляет 12 изображений в `hello.limits`: двенадцать проходят, тринадцатое — 422 до моста."""
+    aid, machine, link = setup(studio)
+    machine.script = [DONE]
+    link.hello["limits"] = machine.limits = {"images": 12, "attachments": 12}
+    assert studio.c.get("/api/agents").json()["items"][0]["limits"] == {"images": 12, "attachments": 12}
+    assert studio.c.post(chat_url(aid, "turn"), json={"text": "", "images": [PNG] * 12}).status_code == 200
+    assert len(sent(machine, "turn")[0]["images"]) == 12
+    assert studio.c.post(chat_url(aid, "turn"), json={"text": "", "images": [PNG] * 13}).status_code == 422
+    assert len(sent(machine, "turn")) == 1

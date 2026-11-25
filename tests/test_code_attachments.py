@@ -6,7 +6,7 @@ import pytest
 
 import bridge
 import claude_code
-from test_code import A, ALPHA, DONE, chat_url, sent, setup
+from test_code import A, ALPHA, DONE, chat_url, detail, sent, setup
 from test_code_images import PNG
 
 FILE = {"name": "report.pdf", "mime": "application/pdf", "data": base64.b64encode(b"%PDF-test").decode()}
@@ -79,3 +79,15 @@ def test_legacy_bridge_refuses_large_files_without_sending_them(studio):
     result = studio.c.post(chat_url(aid, "turn"), json={"text": "", "attachments": [item]})
     assert result.status_code == 409 and result.json()["detail"]["code"] == "unsupported"
     assert not sent(machine, "turn")
+
+
+def test_old_bridge_is_refused_with_its_own_number_before_the_bridge(studio):
+    """Мост 0.47 без `hello.limits`: прежние 4 изображения и 8 вложений, отказ словами с этим числом до моста."""
+    aid, machine, link = setup(studio)
+    assert studio.c.get("/api/agents").json()["items"][0]["limits"] == {"images": 4, "attachments": 8}
+    r = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "images": [PNG] * 5})
+    assert (r.status_code, detail(r)) == (422, {"code": "invalid", "message": "можно прикрепить до 4 изображений"})
+    link.hello["attachments"] = True
+    r = studio.c.post(chat_url(aid, "steer"), json={"text": "x", "attachments": [FILE] * 9})
+    assert r.status_code == 422 and detail(r)["message"] == "можно прикрепить до 8 файлов"
+    assert not sent(machine, "turn") and not sent(machine, "steer")

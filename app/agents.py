@@ -255,6 +255,7 @@ async def list_agents(request: Request, refresh: bool = False):
                       "deepseek_usage": hello.get("deepseek_usage", False),
                       "answer_takeover": hello.get("answer_takeover", False),
                       "chat_manage": hello.get("chat_manage", False),
+                      "limits": bridge.turn_limits(hello),
                       **{engine: hello[engine] for engine in ("codex", "opencode", "deepseek") if engine in hello}})
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:

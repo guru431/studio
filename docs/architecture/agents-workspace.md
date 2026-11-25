@@ -545,8 +545,12 @@ Chrome для Codex — `studio_chrome` (Chrome DevTools MCP, открытый �
 не захватывая writer исходной сессии; временная копия отписывается в finally.
 
 Изображения раздела «Агенты» (studio-agent ≥ 0.3.3): `hello.images: true` → `/api/agents.images`;
-`Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 10 МиБ на файл / 30 МиБ всего с
-`hello.large_attachments` (без capability — прежние 5/8 МиБ). Тело хода читается через `auth.small_body`
+`Turn.images` — `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 10 МиБ на файл / 30 МиБ всего с
+`hello.large_attachments` (без capability — прежние 5/8 МиБ). Число — по пределам моста: `hello.limits`
+(мост 0.48.0) → `bridge.turn_limits` → `/api/agents.limits` `{images, attachments}`, не больше
+`bridge.LIMITS_MAX` (12 и 12); мост без поля — `bridge.LEGACY_LIMITS` (4 и 8). Сервер (`claude_code._turn_counts`)
+и страница (`code-attach-limits.js`: `attachCounts`, `countRefusal`) отказывают до моста словами с действующим
+числом («можно прикрепить до 4 изображений»); подсказка скрепки называет число файлов компьютера. Тело хода читается через `auth.small_body`
 до 44 МиБ; кадр канала — до 48 МиБ. Base64 проверяется в потоке, на машине
 `image_input.validate` повторяет пределы и сверяет сигнатуру. Старый мост с картинками — 409
 `unsupported`, без картинок контракт прежний. `code-chat.js` — выбор, paste, drop, превью и черновик
