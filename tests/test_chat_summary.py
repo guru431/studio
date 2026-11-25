@@ -12,9 +12,9 @@ import cleaner_route
 import sections
 import state
 from conftest import add_connection, add_gateway, make_user, signin
-from test_chat import done_transcript, events_of, from_transcript, messages, new_chat, sse, turn
+from test_chat import attach, done_transcript, events_of, from_transcript, messages, new_chat, sse, turn
 from test_cleaner_forced import CLEANER_HOSTS, owner_id
-from test_cleaner_route_chat import allow, settings
+from test_cleaner_route_chat import allow, cleaner_gw, routed_chat, settings  # noqa: F401 (фикстура)
 from test_knowledge import small_model
 from test_shared_integrations import MODEL, add_models
 
@@ -253,3 +253,30 @@ def test_skill_in_the_summary_head_stays_after_a_newer_skill(studio):
     assert "user: НАВЫК-A" in prompt and "НАВЫК-B" not in prompt and "Вопрос-4" in prompt
     head = chat.compose(cid, messages(studio, cid)[-2]["id"])[0]["content"]
     assert head.startswith("НАВЫК-B\n\n" + chat.SUMMARY_BLOCK.format("Итог-2")) and "НАВЫК-A" not in head
+
+
+def used(att_id: str) -> int:
+    return state.DB.execute("SELECT cleaner_used FROM attachments WHERE id = ?", (att_id,)).fetchone()[0]
+
+
+def test_compact_through_cleaner_marks_the_attachments_as_cleaner_used(cleaner_gw):
+    """«Сжать сейчас» через шлюз Cleaner отправляет историю с началами документов — вложения отмечаются
+    `cleaner_used`, как ходом (откат, шаг 79)."""
+    s, gw = cleaner_gw
+    gw.models[0]["context_length"] = 131072; chat.LIMITS.clear()
+    cid = routed_chat(s, gw)
+    doc = attach(s, "отчёт.txt", "Квартальный отчёт.".encode(), "text/plain")
+    sse(turn(s, cid, "Один", attachment_ids=[doc["id"]])); sse(turn(s, cid, "Два"))
+    assert used(doc["id"]) == 1                                            # ход отметил
+    state.DB.execute("UPDATE attachments SET cleaner_used = 0")             # отправлено до «Через Cleaner»
+    r = compact(s, cid)
+    assert r.status_code == 200, r.text
+    assert used(doc["id"]) == 1 and stored(cid)["summary"] == "Привет из облака"
+
+
+def test_compact_without_cleaner_leaves_the_attachments_unmarked(studio):
+    add_gateway(studio); cid = new_chat(studio)
+    doc = attach(studio, "отчёт.txt", "Квартальный отчёт.".encode(), "text/plain")
+    studio.gw.chat_script = [["Ответ-1"], ["Ответ-2"], ["Итог"]]
+    sse(turn(studio, cid, "Один", attachment_ids=[doc["id"]])); sse(turn(studio, cid, "Два"))
+    assert compact(studio, cid).status_code == 200 and used(doc["id"]) == 0

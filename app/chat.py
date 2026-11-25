@@ -470,6 +470,14 @@ def _consent_free(conn: Connection, model: str, external_ok: bool = False) -> bo
     return external_ok or sections.is_local(conn, model) or conn.cleaner or conn.routed
 
 
+def _mark_routed(conn: Connection, chat_id: str) -> None:
+    """История диалога уходит через шлюз Cleaner (`conn.routed`: ход и «Сжать сейчас»): вложения его сообщений
+    отмечаются `attachments.cleaner_used` — прежний код при откате не отдаст их внешнему источнику (шаг 79)."""
+    if conn.routed:
+        state.DB.execute("UPDATE attachments SET cleaner_used = 1 WHERE cleaner_used = 0 AND message_id IN"
+                         " (SELECT id FROM messages WHERE chat_id = ?)", (chat_id,))
+
+
 def _external(conn: Connection) -> HTTPException:
     """409 `external`: история с расшифровкой уйдёт внешней модели без подтверждения (`_needs_consent`)."""
     return HTTPException(409, {"code": "external", "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
@@ -3097,6 +3105,7 @@ async def compact_chat(chat_id: str, request: Request):
         raise nothing
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id="", conn=conn, model=model, messages=[], limit=limit,
                     thinking=False if sections.is_local(conn, model) else None, listening=False)
+    _mark_routed(conn, chat_id)                      # до отправки — как у хода
     COMPACTING.add(chat_id)
     try:
         summary, words = await st._summarize(turns, seed)
@@ -3378,9 +3387,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                                     (user_mid, a["id"])).rowcount != 1:
                     raise _gone("вложения нет или оно уже отправлено")
             ask = not free and _needs_consent(chat_id, model, via)
-        if conn.routed:
-            state.DB.execute("UPDATE attachments SET cleaner_used = 1 WHERE cleaner_used = 0 AND message_id IN"
-                             " (SELECT id FROM messages WHERE chat_id = ?)", (chat_id,))
+        _mark_routed(conn, chat_id)
         if ask:
             raise _external(conn)
         # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —
