@@ -4368,6 +4368,7 @@ globalThis.StudioEnglish = Object.freeze({
   "часть шла дольше срока ответа — остановлена": "the part ran longer than the answer time limit and was stopped",
   "модель не вернула итог части": "the model returned no result for the part",
   "часть остановлена": "the part was stopped",
+  "сбой службы — часть не выполнена": "service failure; the part was not completed",
   "инструмент с подтверждением недоступен внутри части": "a tool that needs confirmation is not available inside a part",
   "модель зациклилась — часть остановлена": "model stuck in a loop; the part was stopped",
   "рассуждение части слишком длинное — часть остановлена": "the part's reasoning is too long; the part was stopped",

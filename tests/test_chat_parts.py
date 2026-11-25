@@ -301,6 +301,25 @@ def test_stop_interrupts_the_part(studio):
         "stopped", "error", chat_parts.STOPPED)
 
 
+def test_failure_inside_the_part_ends_its_step(studio, monkeypatch):
+    """Ревью, п. 5: исключение внутри части (не отмена) — шаг части ошибкой FAILED с записью и событием, а не
+    `running` навсегда; ход кончается «сбоем службы», как без частей."""
+    cid, sid = parts_chat(studio)
+
+    async def broken(task):
+        raise RuntimeError("тайный текст")
+
+    monkeypatch.setattr(chat_parts, "_rounds", broken)
+    studio.gw.chat_script = [{"tool_calls": [part()]}, ["Готово"]]
+    events = sse(turn(studio, cid, "Задача", skill_id=sid))
+    ended = [d for e, d in events if e == "part" and d["state"] != "running"]
+    assert [(d["n"], d["state"]) for d in ended] == [(1, "error")]
+    answer = messages(studio, cid)[-1]
+    (only,) = parts_of(answer)
+    assert (only["state"], only["error"]) == ("error", chat_parts.FAILED)
+    assert answer["status"] == "error" and events[-1] == ("error", {"message": "сбой службы: RuntimeError"})
+
+
 def test_run_part_in_a_protected_dialog_gets_no_web_and_protection_inside_a_part_sticks(studio):
     sid_mcp, calls, _ = setup(studio, tools=[tool("lookup"), tool("search", annotations={"openWorldHint": True})])
     protect(studio, sid_mcp)

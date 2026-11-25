@@ -29,6 +29,8 @@ LIMIT = f"не больше {chat_tools.PARTS_MAX} частей в одном о
 TIME = "часть шла дольше срока ответа — остановлена"
 EMPTY = "модель не вернула итог части"
 STOPPED = "часть остановлена"
+#: исключение внутри части (не отмена): шаг — ошибка, исключение идёт дальше в ход («сбой службы»)
+FAILED = "сбой службы — часть не выполнена"
 NEEDS_CONFIRM = "инструмент с подтверждением недоступен внутри части"
 #: рассуждение круга части сверх chat.STRAY_MAX при выключенной кнопке / сверх chat.REASONING_MAX (`StreamTask._round`)
 LOOPED = "модель зациклилась — часть остановлена"
@@ -125,7 +127,7 @@ async def run(task, call) -> dict:
     часть круга — ONE_PER_ROUND, сверх PARTS_MAX — LIMIT (шаг без запуска). Иначе шаг `running` (событие и запись
     сразу), запрос части с подменой `messages`, `seen`, `part`, `part_deadline`, `spec_size` хода на её время, итог —
     `text.strip()[:PART_RESULT_MAX]`, подогнанный к остатку окна хода (`StreamTask._fit`: обрезка с пометкой или
-    ошибка NO_ROOM). Отмена хода — шаг STOPPED и отмена дальше."""
+    ошибка NO_ROOM). Отмена хода — шаг STOPPED и отмена дальше, иное исключение — шаг FAILED и исключение дальше."""
     parsed = _args(call)
     if parsed is None:
         return chat_tools.part_refusal(call, BAD_ARGS)
@@ -154,11 +156,14 @@ async def run(task, call) -> dict:
         finally:
             task.messages, task.seen, task.spec_size, task.part_deadline = saved
             task.part = None
-    except asyncio.CancelledError:
-        step |= {"state": "error", "error": STOPPED, "ms": round((clock.NOW() - started) * 1000)}
+    except (asyncio.CancelledError, Exception) as exc:   # шаг не остаётся `running`: итог, запись, событие — и дальше
+        stopped = isinstance(exc, asyncio.CancelledError)
+        step |= {"state": "error", "error": STOPPED if stopped else FAILED,
+                 "ms": round((clock.NOW() - started) * 1000)}
         task._step(step)
         task.put("part", {"n": n, "title": title, "state": "error", "ms": step["ms"]})
-        log.info("чат %s: ответ %s — часть %d: остановлена, %d мс", task.chat_id[:8], task.message_id[:8], n, step["ms"])
+        log.info("чат %s: ответ %s — часть %d: %s, %d мс", task.chat_id[:8], task.message_id[:8], n,
+                 "остановлена" if stopped else f"сбой ({type(exc).__name__})", step["ms"])
         raise
     result = text.strip()[:chat_tools.PART_RESULT_MAX]
     if error is None and not result:
