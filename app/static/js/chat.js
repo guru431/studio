@@ -754,8 +754,8 @@ function build(view, ctx) {
     el('span', { 'aria-hidden': 'true' }, 'Cleaner'), el('span', { class: 'sr' }, tr("Диалог идёт через Cleaner")));
   // название диалога и «Действия с диалогом» (chat-title.js): те же окна, что в меню строки списка
   const title = chatTitle({ rename: (item) => renameDialog(item), remove: (item) => deleteDialog(item),
-    said: (text) => { answering.textContent = text; } });
-  const head = el('header', { class: 'head chat-head' }, toggle, title.node, title.actions, title.menu,
+    said: (text) => { notice.textContent = text; } });
+  const head = el('header', { class: 'head chat-head' }, toggle, title.node, title.actions, title.menu, title.note,
     el('span', { class: 'grow' }));
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
@@ -2336,6 +2336,7 @@ function build(view, ctx) {
         ring.schedule();
       }
     } catch (err) {
+      if (prefill?.id === id) prefill = null;       // текст openWith не ждёт следующего открытия этого диалога
       if (mine !== opened) return;
       feed.replaceChildren(el('p', { class: 'error feed-note' }, words(err)));
       needsReload = err.status !== 404;
