@@ -12,7 +12,7 @@ import mcp_client
 import state
 import web
 from conftest import add_gateway
-from test_chat import events_of, messages, new_chat, sse, turn
+from test_chat import events_of, messages, new_chat, sse, turn, window
 from test_chat_pending import answer as answer_card, pending_of
 from test_chat_web import EXA_KEY, call
 from test_cleaner_route_chat import cleaner_gw, routed_chat  # noqa: F401 (фикстура)
@@ -169,6 +169,28 @@ def test_part_result_is_cut_and_part_rounds_are_capped(studio, monkeypatch):
     refused = messages(studio, other)[-1]["tools"]
     assert refused == [{"kind": "part", "title": "Часть 1", "state": "error", "error": web.NOT_OFFERED}]
     assert state.DB.execute("SELECT COUNT(*) FROM chat_pending").fetchone()[0] == 0
+
+
+def test_part_result_is_cut_to_the_context(studio):
+    """Ревью, п. 2: итог части (в нём результаты «Интернета», MCP и знаний) — через `_fit`, как результат
+    инструмента: малое окно — обрезка с пометкой chat.CUT_CONTEXT, шаг хранит то, что получила модель; остатка нет —
+    ошибка части NO_ROOM."""
+    cid, sid = parts_chat(studio)
+    base = studio.c.post(f"/api/chats/{cid}/estimate", json={"text": "Задача", "skill_id": sid}).json()["tokens"]
+    window(studio, chat.RESERVE_TOKENS + base + 1000)
+    studio.gw.chat_script = [{"tool_calls": [part()]}, ["слово " * 660], ["Готово"]]
+    assert sse(turn(studio, cid, "Задача", skill_id=sid))[-1] == ("done", {"status": "done"})
+    sent = studio.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert sent.endswith(chat.CUT_CONTEXT) and 500 < len(sent) < 3960
+    (step,) = parts_of(messages(studio, cid)[-1])
+    assert (step["state"], step["text"]) == ("done", sent)
+    other = new_chat(studio)
+    window(studio, chat.RESERVE_TOKENS + base + 150)
+    studio.gw.chat_script = [{"tool_calls": [part()]}, ["слово " * 660], ["Не влезло"]]
+    assert sse(turn(studio, other, "Задача", skill_id=sid))[-1] == ("done", {"status": "done"})
+    (step,) = parts_of(messages(studio, other)[-1])
+    assert (step["state"], step["error"], step["text"]) == ("error", chat.NO_ROOM, "")
+    assert "слово" not in studio.gw.chat_requests[-1]["messages"][-1]["content"]
 
 
 def test_answer_with_parts_outlives_1800_seconds_and_a_part_has_its_own_limit(studio, monkeypatch, no_pings):

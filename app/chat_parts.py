@@ -122,7 +122,8 @@ async def run(task, call) -> dict:
     """`run_part` хода `task` (`chat.StreamTask`, `task.part` — None): шаг части. Неверные аргументы — BAD_ARGS, вторая
     часть круга — ONE_PER_ROUND, сверх PARTS_MAX — LIMIT (шаг без запуска). Иначе шаг `running` (событие и запись
     сразу), запрос части с подменой `messages`, `seen`, `part`, `part_deadline`, `spec_size` хода на её время, итог —
-    `text.strip()[:PART_RESULT_MAX]`. Отмена хода — шаг STOPPED и отмена дальше."""
+    `text.strip()[:PART_RESULT_MAX]`, подогнанный к остатку окна хода (`StreamTask._fit`: обрезка с пометкой или
+    ошибка NO_ROOM). Отмена хода — шаг STOPPED и отмена дальше."""
     parsed = _args(call)
     if parsed is None:
         return chat_tools.part_refusal(call, BAD_ARGS)
@@ -160,6 +161,9 @@ async def run(task, call) -> dict:
     result = text.strip()[:chat_tools.PART_RESULT_MAX]
     if error is None and not result:
         error = EMPTY
+    elif error is None:                               # итог — как результат «Интернета»: в остаток окна хода (`_fit`)
+        fitted = task._fit({"kind": "part", "text": result})
+        error, result = fitted.get("error"), fitted.get("text", "")
     step["ms"] = round((clock.NOW() - started) * 1000)
     if error is None:
         step |= {"state": "done", "text": result}
