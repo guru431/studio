@@ -15,7 +15,7 @@ import upstream
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 81
+SCHEMA_VERSION = 82
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -78,6 +78,105 @@ def test_step_79_preserves_cleaner_attachment_routes_after_a_model_change(env):
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def test_step_82_adds_skills_answer_stats_summary_and_previous_writer_works(env):
+    """Шаг 82: навыки, токены и время ответа, пересказ, закрепление, «прочитано», уровень рассуждения, параметры на
+    модель, сведения о модели и ссылки «Поделиться» озвучки чата и Open WebUI; прежний код пишет `chats`,
+    `messages`, `connections` и `connection_profiles` своими списками столбцов; сведения уходят с подключением,
+    ссылки — с последней озвучкой чата и с учёткой Open WebUI, навыки — с учёткой."""
+    from contextlib import closing
+    import sqlite3
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 81)                                # списки столбцов — как у прежнего кода
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created,code_quick_actions)"
+                     " VALUES(1,'owner','Owner','hash',0,'[]')")
+        chat = "INSERT INTO chats(id,user_id,title,created,updated) VALUES(?,1,'t',0,?)"
+        message = ("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                   " VALUES(?,?,'user','hi','done','server',0)")
+        connection = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
+                      " VALUES(?,1,'c','openai','https://x.test/v1',x'00','[]',0,1)")
+        profile = ("INSERT INTO connection_profiles(connection_id,system_text,params,suggestions,updated)"
+                   " VALUES(?,'s','{}','[]',0)")
+        conn.execute(chat, ("before", 7))
+        conn.execute(message, ("m1", "before"))
+        conn.execute(connection, (5,))
+        conn.execute(profile, (5,))
+        db.migrate(conn)
+        db.migrate(conn)
+
+        def columns(table):
+            return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+        def count(table):
+            return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION == 82
+        assert columns("skill_defaults") == {"id", "builtin", "lang", "name", "description", "text", "scope", "quick",
+                                             "parts", "position"}
+        assert columns("skills") == {"id", "user_id", "origin", "name", "description", "text", "scope", "quick",
+                                     "parts", "position", "updated"}
+        assert columns("model_facts") == {"connection_id", "model", "ratio", "window", "updated"}
+        assert {"skill", "usage", "gen_ms", "total_ms"} <= columns("messages")
+        assert {"summary", "summary_upto", "summary_at", "pinned", "seen", "effort"} <= columns("chats")
+        # прежние диалоги получают seen = updated; прочее — пусто
+        assert conn.execute("SELECT pinned, seen, effort, summary FROM chats WHERE id='before'").fetchone()[:] == (
+            0, 7, None, None)
+        assert conn.execute("SELECT skill, usage, gen_ms, total_ms FROM messages WHERE id='m1'").fetchone()[:] == (
+            None, None, None, None)
+        assert conn.execute("SELECT model_params FROM connection_profiles").fetchone()[0] == "{}"
+        assert conn.execute("SELECT code_quick_actions, skills_seeded FROM users").fetchone()[:] == ("[]", None)
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index')")}
+        assert {"skills_user", "model_facts_connection_delete", "chat_shares_speech_chats_gone",
+                "chat_shares_owui_gone"} <= names
+
+        # прежний писатель после шага
+        conn.execute(chat, ("previous", 9))
+        conn.execute(message, ("m2", "previous"))
+        conn.execute(connection, (6,))
+        conn.execute(profile, (6,))
+        assert conn.execute("SELECT pinned, seen FROM chats WHERE id='previous'").fetchone()[:] == (0, None)
+        assert conn.execute("SELECT model_params FROM connection_profiles WHERE connection_id=6").fetchone()[0] == "{}"
+
+        skill = "INSERT INTO skills(id,user_id,name,text,scope,position,updated) VALUES(?,1,'n','t',?,0,0)"
+        default = "INSERT INTO skill_defaults(lang,name,text,scope,position) VALUES(?,'n','t','chat',0)"
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(skill, ("s0", "all"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(default, ("de",))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE chats SET effort = 'max'")
+        conn.execute("UPDATE chats SET effort = 'high' WHERE id = 'before'")
+        conn.execute(skill, ("s1", "both"))
+        conn.execute(default, ("ru",))
+        assert conn.execute("SELECT description, quick, parts, origin FROM skills").fetchone()[:] == ("", 0, 0, None)
+
+        conn.execute("INSERT INTO model_facts(connection_id,model,ratio,window,updated) VALUES(5,'m',3.2,131072,0)")
+        assert conn.execute("SELECT window FROM model_facts").fetchone()[0] == 131072      # имя `window` без кавычек
+        conn.execute("DELETE FROM connections WHERE id=5")
+        assert count("model_facts") == 0
+
+        # ссылки озвучки чата уходят с последней озвучкой чата, не с первой; ссылки Open WebUI — с учёткой
+        speech = ("INSERT INTO speeches(id,user_id,model,voice,text,state,detail,created,chat_id)"
+                  " VALUES(?,1,'m','v','t','done','',0,?)")
+        share = ("INSERT INTO chat_shares(id,user_id,token_hash,token_enc,pin_hash,snapshot,created,item_kind,item_id)"
+                 " VALUES(?,1,?,x'00','p','{}',0,?,?)")
+        conn.execute(speech, ("sp1", "group"))
+        conn.execute(speech, ("sp2", "group"))
+        conn.execute(share, ("h1", "t1", "speech_chats", "group"))
+        for account, label in ((2, "a"), (20, "b")):
+            conn.execute("INSERT INTO owui_accounts(id,user_id,label,base_url,who_enc,secret_enc,created)"
+                         " VALUES(?,1,?,'https://o.test',x'00',x'00',0)", (account, label))
+        conn.execute(share, ("h2", "t2", "owui", "2:abc"))
+        conn.execute(share, ("h3", "t3", "owui", "20:abc"))
+        conn.execute("DELETE FROM speeches WHERE id = 'sp1'")
+        assert [r[0] for r in conn.execute("SELECT id FROM chat_shares WHERE item_kind = 'speech_chats'")] == ["h1"]
+        conn.execute("DELETE FROM speeches WHERE id = 'sp2'")
+        conn.execute("DELETE FROM owui_accounts WHERE id = 2")
+        assert [r[0] for r in conn.execute("SELECT item_id FROM chat_shares")] == ["20:abc"]
+
+        conn.execute("DELETE FROM users WHERE id=1")
+        assert count("skills") == 0 and count("skill_defaults") == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_shared_integration_migration_preserves_personal_rows_and_sequences(env):
     from contextlib import closing
 
@@ -123,7 +222,8 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-        assert columns("connection_profiles") == {"connection_id", "system_text", "params", "suggestions", "updated"}
+        assert columns("connection_profiles") - {"model_params"} == {      # параметры на модель — шаг 82
+            "connection_id", "system_text", "params", "suggestions", "updated"}
         assert columns("role_defaults") == {"id", "lang", "name", "text", "position", "builtin", "created", "updated"}
         assert columns("chat_roles") == {"id", "user_id", "name", "text", "position", "origin", "created", "updated"}
         assert columns("mcp_uploads") == {"attachment_id", "server_id", "artifact_id", "path", "stamp", "created"}

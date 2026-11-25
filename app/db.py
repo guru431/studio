@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 81
+VERSION = 82
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1117,6 +1117,44 @@ CREATE UNIQUE INDEX users_ldap_guid ON users(ldap_guid) WHERE ldap_guid IS NOT N
 """
 SCHEMA += LDAP_81
 
+#: навыки (skills.py): умолчания администратора и библиотека учётки (образец — роли, шаг 57), отметка навыка, токены и
+#: время ответа, пересказ, закрепление, «прочитано», уровень рассуждения диалога; параметры на модель и сведения о
+#: модели подключения (без внешнего ключа: строки уносит триггер — после пересборки шага 55 к `connections` таблицы
+#: привязаны триггером); ссылки «Поделиться» видов `speech_chats` и `owui` уходят с последней озвучкой чата и с учёткой
+SKILLS_82 = """CREATE TABLE skill_defaults(id INTEGER PRIMARY KEY AUTOINCREMENT, builtin TEXT,
+       lang TEXT NOT NULL CHECK (lang IN ('ru','en')), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+       text TEXT NOT NULL, scope TEXT NOT NULL CHECK (scope IN ('chat','agents','both')),
+       quick INTEGER NOT NULL DEFAULT 0, parts INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL);
+CREATE TABLE skills(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       origin TEXT, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', text TEXT NOT NULL,
+       scope TEXT NOT NULL CHECK (scope IN ('chat','agents','both')), quick INTEGER NOT NULL DEFAULT 0,
+       parts INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL, updated REAL NOT NULL);
+CREATE INDEX skills_user ON skills(user_id, position);
+ALTER TABLE users ADD COLUMN skills_seeded REAL;
+ALTER TABLE messages ADD COLUMN skill TEXT;
+ALTER TABLE messages ADD COLUMN usage TEXT;
+ALTER TABLE messages ADD COLUMN gen_ms INTEGER;
+ALTER TABLE messages ADD COLUMN total_ms INTEGER;
+ALTER TABLE chats ADD COLUMN summary TEXT;
+ALTER TABLE chats ADD COLUMN summary_upto TEXT;
+ALTER TABLE chats ADD COLUMN summary_at REAL;
+ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chats ADD COLUMN seen REAL;
+UPDATE chats SET seen = updated;
+ALTER TABLE chats ADD COLUMN effort TEXT CHECK (effort IN ('low','medium','high'));
+ALTER TABLE connection_profiles ADD COLUMN model_params TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE model_facts(connection_id INTEGER NOT NULL, model TEXT NOT NULL, ratio REAL, window INTEGER,
+       updated REAL NOT NULL, PRIMARY KEY (connection_id, model));
+CREATE TRIGGER model_facts_connection_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM model_facts WHERE connection_id = old.id; END;
+CREATE TRIGGER chat_shares_speech_chats_gone AFTER DELETE ON speeches
+  WHEN NOT EXISTS (SELECT 1 FROM speeches WHERE chat_id = old.chat_id) BEGIN
+  DELETE FROM chat_shares WHERE item_kind = 'speech_chats' AND item_id = old.chat_id; END;
+CREATE TRIGGER chat_shares_owui_gone AFTER DELETE ON owui_accounts BEGIN
+  DELETE FROM chat_shares WHERE item_kind = 'owui' AND item_id LIKE old.id || ':%'; END;
+"""
+SCHEMA += SKILLS_82
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1276,6 +1314,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     79: CLEANER_ATTACHMENTS_79,
     80: MCP_HISTORY_80,
     81: LDAP_81,
+    # навыки, токены и время ответа, пересказ, закрепление, параметры на модель, ссылки озвучки чата и Open WebUI
+    82: SKILLS_82,
 }
 
 
