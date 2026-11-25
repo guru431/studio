@@ -2300,6 +2300,8 @@ function build(view, ctx) {
         readAloud(displayed, { kind: 'chat', id: String(m.id || chatId) }, p.read);
       });
       p.actions.append(copy, read);
+      // защищённый источник: ответ не озвучить (409 `protected`, speeches.PROTECTED_READ) — кнопки нет
+      read.hidden = !!chat?.chat.protected;
     }
     const kept = unsaved.get(m.id);
     if (kept?.message === m && !kept.closed) {

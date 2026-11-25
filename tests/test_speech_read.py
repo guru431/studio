@@ -70,6 +70,24 @@ def test_read_without_voices_says_where_to_add_one(studio, fake_audio):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "voice"
 
 
+def test_read_of_a_protected_dialog_is_refused(studio, fake_audio):
+    """Ответ диалога с защищённым источником в «Озвучку» не идёт: запись «Озвучки» ушла бы ссылкой «Поделиться» чата
+    озвучки мимо chat.unprotected. Отказ — до выбора источника (и инструмента MCP «Озвучки»)."""
+    add_gateway(studio)
+    voice(studio, fake_audio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    state.DB.execute("INSERT INTO chats(id, user_id, title, model, created, updated, protected_used)"
+                     " VALUES ('pc', ?, 't', 'm', 0, 0, 1)", (uid,))
+    state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                     " VALUES ('pa', 'pc', 'assistant', 'тайна', 'done', 'server', 'm', 0)")
+    for origin in ("pa", "pc"):
+        r = read(studio, "тайна", oid=origin)
+        assert r.status_code == 409 and r.json()["detail"] == {"code": "protected", "message": speeches.PROTECTED_READ}
+    assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
+    state.DB.execute("UPDATE chats SET protected_used = 0")
+    assert read(studio, "тайна", oid="pa").status_code == 202
+
+
 def test_read_with_mcp_default_returns_read_mcp(studio):
     make_user(studio, "ann")
     signin(studio, "ann")

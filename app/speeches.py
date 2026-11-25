@@ -644,6 +644,18 @@ def _dialog_of(uid: int, origin_id: str) -> "tuple[int | None, bool]":
     return (row["connection_id"] if row is not None else None), bool(answer is not None and answer["cleaner_request"])
 
 
+#: «Прочитать» ответа диалога с защищённым источником (`chats.protected_used`) — 409 `protected`, как chat.unprotected:
+#: запись «Озвучки» ушла бы ссылкой «Поделиться» чата озвучки (chat_shares `speech_chats`) мимо защиты
+PROTECTED_READ = "в этом диалоге сработал защищённый источник — его ответ нельзя озвучить"
+
+
+def _unprotected_dialog(uid: int, origin_id: str) -> None:
+    row = state.DB.execute("SELECT 1 FROM chats WHERE user_id = ? AND protected_used AND (id = ? OR id ="
+                           " (SELECT chat_id FROM messages WHERE id = ?))", (uid, origin_id, origin_id)).fetchone()
+    if row is not None:
+        raise HTTPException(409, {"code": "protected", "message": PROTECTED_READ})
+
+
 def _translation_used_cleaner(uid: int, origin_id: str) -> bool:
     row = state.DB.execute("SELECT connection_id, cleaner_used, EXISTS (SELECT 1 FROM cleaner_contexts c"
                            " WHERE c.resource = 'translate' AND c.item_id = t.id AND c.user_id = t.user_id) AS has_context"
@@ -671,6 +683,8 @@ async def read(body: ReadIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
+    if body.origin.kind == "chat":                # до источника: и инструменту MCP «Озвучки» данные не уходят
+        _unprotected_dialog(uid, body.origin.id)
     conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
     if body.origin.kind == "chat":                # ответ диалога через Cleaner — восстановленный текст: не мимо Cleaner
         dialog, routed = _dialog_of(uid, body.origin.id)
