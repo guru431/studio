@@ -273,6 +273,7 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
                 pw.expect(page.locator(LAST + " .msg-meta")).to_have_text("")
                 until(page, lambda: len(puts) == 2)
                 assert puts[0] == puts[1]                # keepalive и итог страницы — одно тело
+                assert json.loads(puts[0])["total_ms"] >= 0      # числа ответа — в keepalive: при закрытии дойдёт он
                 status, answer = page.evaluate(last_saved)
                 assert status == "stopped"
                 if len(first) < 100:

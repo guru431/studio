@@ -505,13 +505,11 @@ async function readBrowser(job, turn) {
   // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
   // слова ошибки сервер хранит у ответа (`messages.error`): видны и после перечитывания диалога
   const error = status === 'error' ? clip(wellFormed(job.message.error || ''), ERROR_MAX) : '';
-  // токены и время ответа — серверу (решение 19 спеки 2026-11-25): целые от 0 до chat.MS_MAX
-  const ended = Date.now();
-  const ms = (since) => Math.min(86400000, Math.max(0, Math.round(ended - since)));
-  const numbers = { ...(job.usage ? { usage: job.usage } : {}), ...(job.firstAt ? { gen_ms: ms(job.firstAt) } : {}),
-    total_ms: ms(job.started) };
-  Object.assign(job.message, { usage: null, gen_ms: null }, numbers);
-  job.saving = { content: job.message.content, status, ...(error ? { error } : {}), ...numbers };
+  // вкладку закрывали — итог тот же, что ушёл keepalive, с его числами: при закрытии дойдёт только он
+  job.numbers = numbersOf(job);
+  job.saving = job.parted || { content: job.message.content, status, ...(error ? { error } : {}), ...job.numbers };
+  Object.assign(job.message, { usage: job.saving.usage || null, gen_ms: job.saving.gen_ms ?? null,
+    total_ms: job.saving.total_ms });
   await saveAnswer(job.chatId, job.message, job.saving);
   clearInterval(beat);
   finish(job);
@@ -527,10 +525,20 @@ const LEAVE_MS = 250;
 
 const bodyBytes = (body) => new TextEncoder().encode(JSON.stringify(body)).length;
 
-/** Итог «остановлен» с прочитанным: начало ответа, а не хвост, — остановленный ответ всегда начало сказанного
- * моделью, и история с контекстом следующего хода читаются связно; длиннее limit байт тела — начало, что влезает. */
-function partBody(content, limit = PART_BYTES) {
-  const size = (text) => bodyBytes({ content: text, status: 'stopped' });
+/** Токены и время ответа прямого подключения к этому мигу — серверу (решение 19 спеки 2026-11-25): целые от 0 до
+ * chat.MS_MAX. */
+function numbersOf(job) {
+  const ended = Date.now();
+  const ms = (since) => Math.min(86400000, Math.max(0, Math.round(ended - since)));
+  return { ...(job.usage ? { usage: job.usage } : {}), ...(job.firstAt ? { gen_ms: ms(job.firstAt) } : {}),
+    total_ms: ms(job.started) };
+}
+
+/** Итог «остановлен» с прочитанным и числами ответа: начало ответа, а не хвост, — остановленный ответ всегда начало
+ * сказанного моделью, и история с контекстом следующего хода читаются связно; длиннее limit байт тела — начало, что
+ * влезает. */
+function partBody(content, limit = PART_BYTES, numbers = {}) {
+  const size = (text) => bodyBytes({ content: text, status: 'stopped', ...numbers });
   let text = wellFormed(clip(content, limit));                  // знак — не меньше байта
   if (size(text) > limit) {
     let low = 0;
@@ -542,7 +550,7 @@ function partBody(content, limit = PART_BYTES) {
     }
     text = clip(text, low);
   }
-  return { content: text, status: 'stopped' };
+  return { content: text, status: 'stopped', ...numbers };
 }
 
 /* Вкладку закрывают или перезагружают, пока она читает ответ прямого подключения: прочитанное — PUT с keepalive
@@ -555,7 +563,9 @@ window.addEventListener('pagehide', () => {
   for (const job of jobs.values()) {
     if (job.message.via !== 'browser' || !job.message.id) continue;
     let body = job.saving || job.parted;
-    if (!body || bodyBytes(body) > left) body = partBody((job.saving || job.message).content, left);
+    if (!body || bodyBytes(body) > left) {
+      body = partBody((job.saving || job.message).content, left, job.saving ? job.numbers : numbersOf(job));
+    }
     if (bodyBytes(body) <= left) {
       if (!job.saving) job.parted = body;
       left -= bodyBytes(body);
