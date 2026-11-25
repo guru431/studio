@@ -135,6 +135,18 @@ def test_structured_content_is_cut_before_it_is_serialized():
         for room in (1, 5, 17, 1000, 60_000):
             assert mcp_client._json_head(value, room) == json.dumps(value, ensure_ascii=True)[:room]
     assert mcp_client._json_head({'a': 1}, 0) == ''
+    # вложенность глубже предела рекурсии Python — без рекурсии (ревью раунда 2, п. 1)
+    deep, nested = [], {}
+    for _ in range(50_000):
+        deep, nested = [deep], {'k': nested}
+    assert mcp_client._json_head(deep, 60_000) == ('[' * 50_001 + ']' * 50_001)[:60_000]
+    assert mcp_client._json_head(deep, 7) == '[' * 7
+    assert mcp_client._json_head(nested, 60_000) == ('{"k": ' * 50_000 + '{}' + '}' * 50_000)[:60_000]
+    # ключи не-строки — как у json.dumps; ключ, который JSON не кодирует, за пределом не мешает
+    keys = {1: 'a', 2.5: 'b', False: 'c', None: 'd', float('inf'): [float('nan'), -float('inf')]}
+    whole = json.dumps(keys, ensure_ascii=True)
+    assert mcp_client._json_head(keys, 1000) == whole
+    assert mcp_client._json_head({**keys, (): 'x'}, len(whole) - 1) == whole[:-1]
     # дальше предела кодирование не идёт: объект, который JSON не кодирует, после длинной строки не мешает
     assert mcp_client._json_head(['я' * 3_000_000, object()], 60_000) == ('["' + r'\u044f' * 10_000)[:60_000]
 

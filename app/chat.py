@@ -1848,10 +1848,12 @@ class StreamTask:
                         "question": hint["confirm"]["message"], "options": [], "allow_text": False})
                     return PAUSED
                 self.put("tool", {"kind": "mcp", "label": f"{server} · {tool}"})
-                step = ({"kind": "mcp", "server": server, "tool": tool, "error": TOO_MANY}
-                        if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
-                if not self.protected and self.mcp.reached_protected():
-                    self._protect()
+                try:
+                    step = ({"kind": "mcp", "server": server, "tool": tool, "error": TOO_MANY} if n >= CALLS_PER_ROUND
+                            else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
+                finally:                             # дошёл до защищённого источника — отметка при любом исходе
+                    if not self.protected and self.mcp.reached_protected():
+                        self._protect()
             elif (c.name == "run_part" and self.part is None and not self.builtin_off
                     and chat_tools.parts_offered(self.chat_id)):
                 held, self.round_images = self.round_images, []   # картинки части — в её запросе, не в круге хода

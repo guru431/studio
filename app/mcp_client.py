@@ -9,7 +9,6 @@
 """
 
 import asyncio
-import itertools
 import json
 import logging
 import re
@@ -598,31 +597,6 @@ RESULT_IMAGE_CHARS = (image_upload.MAX_UPLOAD + 2) // 3 * 4     # base64 кар�
 #: результат с картинкой больше ~750 КБ base64 отвергался бы целиком вместе с текстом)
 CALL_MAX_BYTES = RESULT_IMAGE_CHARS + MAX_BYTES
 RESULT_TEXT_MAX = 60_000             # знаков текста результата в шаге (с structuredContent)
-
-
-def _json_head(value, room: int) -> str:
-    """Начало `json.dumps(value, ensure_ascii=True)` не длиннее `room` знаков, без сериализации остального: строки и
-    ключи заранее режутся до `room` знаков (знак даёт до 6 знаков JSON), списки и словари — до `room` элементов,
-    кодирование ленивое и останавливается, как только набралось `room`."""
-    if room <= 0:
-        return ""
-
-    def cut(v):
-        if isinstance(v, str):
-            return v[:room]
-        if isinstance(v, list):
-            return [cut(x) for x in v[:room]]
-        if isinstance(v, dict):
-            return {(k[:room] if isinstance(k, str) else k): cut(x) for k, x in itertools.islice(v.items(), room)}
-        return v
-
-    parts, size = [], 0
-    for piece in json.JSONEncoder(ensure_ascii=True).iterencode(cut(value)):
-        parts.append(piece)
-        size += len(piece)
-        if size >= room:
-            break
-    return "".join(parts)[:room]
 ONLY_IMAGES = "Инструмент MCP вернул изображение"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 #: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
@@ -655,6 +629,97 @@ FILE_EXTS = frozenset(
     " jpg jpeg gif webp svg ico bmp tif tiff heic mp3 wav ogg flac m4a mp4 mkv mov webm avi srt vtt parquet".split())
 SECOND_LEVEL = frozenset("co com net org gov edu ac".split())
 URL_REFUSED = "Ссылки в аргументах после защищённого источника запрещены"
+_END = object()
+
+
+def _json_float(v: float) -> str:
+    """Число с точкой, как у `json.dumps` (allow_nan)."""
+    if v != v:
+        return "NaN"
+    if v in (float("inf"), float("-inf")):
+        return "Infinity" if v > 0 else "-Infinity"
+    return float.__repr__(v)
+
+
+def _json_head(value, room: int) -> str:
+    """Начало `json.dumps(value, ensure_ascii=True)` не длиннее `room` знаков без сериализации остального. Обход —
+    своим стеком, а не рекурсией (`structuredContent` любой глубины: `[[[…]]]` глубже предела рекурсии Python не
+    роняет ход), и ленивый: каждый пройденный элемент даёт хотя бы знак, поэтому работа — не больше `room` шагов;
+    строки и ключи режутся до `room` знаков заранее (знак даёт до 6 знаков JSON)."""
+    if room <= 0:
+        return ""
+    encode = json.encoder.encode_basestring_ascii
+
+    def scalar(v) -> str:
+        if isinstance(v, str):
+            return encode(v[:room])
+        if v is None:
+            return "null"
+        if v is True:
+            return "true"
+        if v is False:
+            return "false"
+        if isinstance(v, int):
+            return int.__repr__(v)
+        if isinstance(v, float):
+            return _json_float(v)
+        raise TypeError(f"Object of type {type(v).__name__} is not JSON serializable")
+
+    def key(k) -> str:
+        if isinstance(k, str):
+            return encode(k[:room])
+        if isinstance(k, float):
+            return encode(_json_float(k))
+        if k is True or k is False or k is None:
+            return f'"{scalar(k)}"'
+        if isinstance(k, int):
+            return f'"{int.__repr__(k)}"'
+        raise TypeError(f"keys must be str, int, float, bool or None, not {type(k).__name__}")
+
+    parts, size = [], 0
+
+    def full(piece: str) -> bool:
+        nonlocal size
+        parts.append(piece)
+        size += len(piece)
+        return size >= room
+
+    stack = []                           # [итератор, словарь?, первый элемент?]
+    item, fresh = value, True
+    while True:
+        if fresh:
+            if isinstance(item, (list, tuple)):
+                stop = full("[")
+                stack.append([iter(item), False, True])
+            elif isinstance(item, dict):
+                stop = full("{")
+                stack.append([iter(item.items()), True, True])
+            else:
+                stop = full(scalar(item))
+            if stop:
+                break
+        if not stack:
+            break
+        frame = stack[-1]
+        nxt = next(frame[0], _END)
+        if nxt is _END:
+            stack.pop()
+            if full("}" if frame[1] else "]"):
+                break
+            fresh = False
+            continue
+        sep = "" if frame[2] else ", "
+        frame[2] = False
+        if frame[1]:
+            k, item = nxt
+            stop = full(sep + key(k) + ": ")
+        else:
+            item = nxt
+            stop = bool(sep) and full(sep)
+        if stop:
+            break
+        fresh = True
+    return "".join(parts)[:room]
 
 
 def _host_like(text: str) -> bool:
@@ -886,7 +951,7 @@ class Tools:
                 step["images"] = images
         except HTTPException as exc:
             step["error"] = exc.detail["message"]
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             step["error"] = "Неверные аргументы или результат MCP"
         return step
 

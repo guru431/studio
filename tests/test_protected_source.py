@@ -5,6 +5,8 @@
 import json
 from urllib.parse import urlsplit
 
+import httpx
+
 import chat_tools
 import mcp_client
 import memory
@@ -13,7 +15,7 @@ import web
 from conftest import signin
 from test_chat import messages, new_chat, sse, turn
 from test_chat_pending import answer, pending_of
-from test_chat_web import EXA_KEY, call
+from test_chat_web import EXA_KEY, call, steps_of
 from test_mcp import URL as MCP_URL
 from test_mcp_dialog import methods, name_of, offered, setup, tool, view
 from test_takeout import download, unzip
@@ -78,6 +80,53 @@ def test_protected_error_result_locks_too(studio):
     assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
     assert "tools/call" in methods(calls)
     assert "error" in messages(studio, cid)[-1]["tools"][0]
+    assert flags(cid) == (1, 0)
+
+
+def deep_result(studio, depth):
+    """Ответ `tools/call` сервера /mcp — глубоко вложенный `structuredContent` (`[[[…]]]`) сырым JSON: так его не
+    закодировал бы и сам мок."""
+    shown = studio.gw.on["/mcp"]
+
+    async def handler(request):
+        payload = json.loads(request.content) if request.method == "POST" else {}
+        if payload.get("method") != "tools/call":
+            return await shown(request)
+        raw = ('{"jsonrpc": "2.0", "id": %d, "result": {"content": [{"type": "text", "text": "ok"}], "structuredContent": '
+               % payload["id"]) + "[" * depth + "]" * depth + "}}"
+        return httpx.Response(200, content=raw.encode(), headers={"content-type": "application/json"})
+
+    studio.gw.on["/mcp"] = handler
+
+
+def test_deeply_nested_result_does_not_break_the_turn_and_locks(studio):
+    """Ревью раунда 2, п. 1: `structuredContent` глубже предела рекурсии Python — ход не падает, текст шага — начало
+    JSON, отметка защищённого источника стоит."""
+    sid, _, _ = setup(studio)
+    protect(studio, sid)
+    deep_result(studio, 5000)
+    cid = web_dialog(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]}, ["Готово"]]
+    assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
+    (step,) = steps_of(messages(studio, cid)[-1]["id"])
+    assert "error" not in step and step["text"].startswith("ok\n[[[[")
+    assert flags(cid) == (1, 0)
+
+
+def test_any_failure_of_a_reached_protected_call_still_locks(studio, monkeypatch):
+    """Сбой после того, как вызов дошёл до защищённого источника (здесь — разбор результата), — отметка всё равно."""
+    sid, _, _ = setup(studio)
+    protect(studio, sid)
+    cid = web_dialog(studio)
+
+    def broken(value, room):
+        raise RuntimeError("сбой разбора")
+
+    monkeypatch.setattr(mcp_client, "_json_head", broken)
+    deep_result(studio, 3)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]}, ["Готово"]]
+    sse(turn(studio, cid, "Use tool"))
+    assert messages(studio, cid)[-1]["status"] == "error"
     assert flags(cid) == (1, 0)
 
 
