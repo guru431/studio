@@ -1,5 +1,8 @@
 """Список диалогов «Чата» (спека 2026-11-25, п. 23): метки «идёт ответ» и «не прочитано» (`chat_list.marks`),
 закрепление (`PATCH {pinned}`) и отметка взгляда на диалог (`POST /api/chats/{id}/seen`)."""
+import pathlib
+import re
+
 import chat
 import state
 from conftest import add_connection, add_gateway, make_user, signin
@@ -52,3 +55,17 @@ def test_seen_of_a_trashed_chat_is_gone(studio):
     assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
     r = studio.c.post(f"/api/chats/{cid}/seen")
     assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_every_chat_insert_names_the_seen_column():
+    """Ревью 14, п. 7: каждый `INSERT INTO chats` в app/ (кроме пересборок схемы db.py) пишет `seen` — иначе такой
+    диалог никогда не станет «не прочитано» (`seen` NULL — строка прежнего кода)."""
+    found = []
+    for path in sorted(pathlib.Path(chat.__file__).parent.glob("*.py")):
+        if path.name == "db.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"INSERT\s+(?:OR\s+\w+\s+)?INTO\s+chats\b(\s*\(([^)]*)\))?", text):
+            columns = re.split(r"[\s,\"']+", match.group(2) or "")
+            found.append((path.name, "seen" in columns))
+    assert found and all(ok for _, ok in found), found
