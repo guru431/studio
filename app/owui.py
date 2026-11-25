@@ -612,14 +612,19 @@ async def models(aid: int, request: Request):
     return {"models": found, "default": default or (found[0]["id"] if found else None)}
 
 
-@router.get("/accounts/{aid}/chats/{chat}")
-async def chat_view(aid: int, chat: str, request: Request):
-    acc = load(request.state.user.id, aid)
+async def read_chat(acc, chat: str) -> dict:
+    """Текущая ветка чата в виде Студии (`owui_view.branch`); чужой и несуществующий — 404 `not_found`."""
     chat = _owui_id(chat, NO_CHAT)
     response = await call(acc, "GET", f"/api/v1/chats/{chat}")
     if response.status_code in (401, 403, 404):        # Open WebUI на чужой и несуществующий чат отвечает 401
         raise HTTPException(404, NO_CHAT)
-    view = _view(acc, owui_view.branch, _ok(acc, response, dict))
+    return _view(acc, owui_view.branch, _ok(acc, response, dict))
+
+
+@router.get("/accounts/{aid}/chats/{chat}")
+async def chat_view(aid: int, chat: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    view = await read_chat(acc, chat)
     tasks = await call(acc, "GET", f"/api/tasks/chat/{chat}")
     body = upstream.json_body(tasks) if tasks.status_code == 200 else {}
     ids = body.get("task_ids")

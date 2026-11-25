@@ -12,9 +12,10 @@ PIN check grants a separate, expiring read token, never a Studio account session
 со снимком при первом же обращении к ссылкам или старте. Неверные PIN считаются и без окна (`fails`): `FAILS_MAX`
 отзывает ссылку, владельцу — push/ntfy без содержимого и `share_locked` в журнале безопасности.
 
-Кроме чатов — запись другого раздела (`ITEMS`, шаг 69): расшифровка, перевод, скан, картинка, ролик; снимок —
-`item_snapshot`, маршруты — `…/<id>/share` под префиксом раздела (блокировка раздела — та же). «Обновить снимок»
-(PUT) заменяет содержимое под тем же адресом, сроком и PIN, счётчики остаются.
+Кроме чатов — запись другого раздела (`ITEMS`, шаг 69): расшифровка, перевод, скан, картинка, ролик, чат «Озвучки»
+(шаг 82); снимок — `item_snapshot`, маршруты — `…/<id>/share` под префиксом раздела (блокировка раздела — та же).
+Переписка Open WebUI — свой вид `OWUI` (снимок и маршруты — owui_share.py). «Обновить снимок» (PUT) заменяет
+содержимое под тем же адресом, сроком и PIN, счётчики остаются.
 """
 import asyncio
 import base64
@@ -38,9 +39,11 @@ import media
 import lock_policy
 import ocr
 import operations
+import owui
 import push
 import security
 import security_log
+import speeches
 import state
 import transcripts
 import translate
@@ -72,10 +75,17 @@ PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
 #: «Доступы и ссылки», журнал) и префикс маршрутов раздела. Окончательное удаление записи уносит ссылку триггером
 #: (db.SHARES_69), запись в корзине — `LIVE`
 ITEMS = {"transcripts": ("transcribe", "/api/transcripts"), "translations": ("translate", "/api/translate"),
-         "scans": ("ocr", "/api/ocr"), "images": ("photo", "/api/images"), "videos": ("video", "/api/videos")}
-#: своя запись не из корзины, иначе 404 (`_row` раздела)
+         "scans": ("ocr", "/api/ocr"), "images": ("photo", "/api/images"), "videos": ("video", "/api/videos"),
+         # чат «Озвучки» (шаг 82): группа записей с одним `speeches.chat_id`, `item_id` — этот chat_id
+         "speech_chats": ("speech", "/api/speeches/chats")}
+#: своя запись не из корзины, иначе 404 (`_row` раздела; у чата «Озвучки» — его записи)
 _ROWS = {"transcripts": transcripts._row, "translations": translate._row, "scans": ocr._row, "images": images._row,
-         "videos": videos._row}
+         "videos": videos._row, "speech_chats": speeches._chat_rows}
+#: переписка Open WebUI (шаг 82, owui_share.py): свой `item_kind`, а не вид «как у Агентов» — прежний код (откат) его
+#: не знает и ссылку не открывает; `item_id` — "<owui_accounts.id>:<id чата>"
+OWUI = "owui"
+#: вид записи ссылки → раздел (блокировка, «Доступы и ссылки», журнал)
+SECTIONS = {kind: section for kind, (section, _) in ITEMS.items()} | {OWUI: "owui"}
 
 
 async def public_guard(request: Request, call_next):
@@ -194,10 +204,10 @@ def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, sessi
 
 
 def _detail(agent_id, item_kind) -> str:
-    """Код подробности журнала: `chat`, `code` или раздел записи (`ITEMS`)."""
+    """Код подробности журнала: `chat`, `code` или раздел записи (`SECTIONS`)."""
     if agent_id:
         return "code"
-    return ITEMS[item_kind][0] if item_kind in ITEMS else "chat"
+    return SECTIONS[item_kind] if item_kind in SECTIONS else "chat"
 
 
 def _out(row) -> dict:
@@ -232,17 +242,20 @@ async def _store(request: Request, body: RefreshIn, snapshot: dict, expected, fi
                               chat=source["session_id"], before=None, limit=1)
         _own_computer(request, source["agent_id"])
     kind = source.get("item_kind")
-    _owner_open(request, "code" if source.get("agent_id") else ITEMS[kind][0] if kind else "chat")
+    _owner_open(request, "code" if source.get("agent_id") else SECTIONS[kind] if kind else "chat")
     if source.get("chat_id"):
         chat.unprotected(chat._chat_row(request.state.user.id, source["chat_id"]))
-    if kind:
+    if kind in _ROWS:
         _ROWS[kind](request.state.user.id, source["item_id"])     # запись не ушла в корзину, пока собирали снимок
+    elif kind == OWUI:                                             # учётку Open WebUI не удалили, пока читали чат
+        owui.load(request.state.user.id, int(source["item_id"].split(":", 1)[0]))
     current = _owned(request, **source)
     if (current["id"] if current else None) != (expected["id"] if expected else None):
         raise _refuse(409, "share_changed", "настройки ссылки изменились — откройте окно заново")
     if refresh and current is None:
         _gone()
-    label = security.encrypt(snapshot["title"]) if source.get("agent_id") else None
+    # название чата без своей строки в базе Студии — шифром у ссылки («Доступы и ссылки»)
+    label = security.encrypt(snapshot["title"]) if source.get("agent_id") or kind == OWUI else None
     token, share_id, now = security.new_token(), uuid.uuid4().hex, clock.NOW()
     state.DB.execute("BEGIN")
     try:
@@ -520,7 +533,8 @@ def _not_ready(message: str) -> HTTPException:
 async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False) -> tuple[dict, list[str]]:
     """Снимок записи раздела (`ITEMS`) и id его файлов. Что видит получатель: у расшифровки — реплики с собеседником
     и временем (с правками владельца), у перевода — исходный текст и перевод, у скана — текст страниц, у картинки и
-    ролика — сам файл, промпт и модель. `source` — ещё исходный файл записи (запись разговора, документ) для
+    ролика — сам файл, промпт и модель, у чата «Озвучки» — готовые записи по порядку (текст, голос, mp3; запись
+    вне `speeches.TERMINAL` — 409 `running`). `source` — ещё исходный файл записи (запись разговора, документ) для
     скачивания. `messages` — заглушка `PLACEHOLDER`: её покажет прежний код (откат), новый смотрит `item`."""
     row = _ROWS[kind](uid, item_id)
     item, title, attach = {"kind": kind}, "", None
@@ -547,6 +561,15 @@ async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False)
         row = ocr._readable(uid, item_id)
         item["pages"] = [{"n": p["n"], "state": p["state"], "text": p["text"]} for p in ocr._page_list(item_id)]
         title, attach = row["name"], row["source_media_id"]
+    elif kind == "speech_chats":
+        if any(r["state"] not in speeches.TERMINAL for r in row):
+            raise _not_ready("дождитесь озвучки или отмените её")
+        records = [{"text": r["text"], "voice": r["voice_name"] or r["voice"], "duration": r["duration"], "file": shown}
+                   for r in row if r["state"] == "done" and (shown := _media(uid, r["media_id"]))]
+        if not records:
+            raise _not_ready("в чате ещё нет готовых озвучек")
+        item["records"] = records
+        title = row[0]["text"][:80]
     else:
         if row["state"] != "done" or not row["media_id"]:
             raise _not_ready("картинка ещё не готова" if kind == "images" else "ролик ещё не готов")
@@ -555,7 +578,7 @@ async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False)
             raise HTTPException(404, media.GONE)
         item |= {"prompt": row["prompt"], "model": row["model"], "file": shown}
         item |= {"size": row["size"]} if kind == "images" else {"seconds": row["seconds"]}
-    files = [item["file"]["file"]] if "file" in item else []
+    files = [item["file"]["file"]] if "file" in item else [r["file"]["file"] for r in item.get("records", ())]
     if source and (extra := _media(uid, attach)):
         item["attachments"] = [extra]
         files.append(extra["file"])
@@ -612,11 +635,17 @@ def _same_origin(request):
 
 #: ссылка обычного чата в корзине «недоступна», после «Вернуть» — снова открывается (строка и снимок — на месте);
 #: чата, где сработал защищённый источник (`chats.protected_used`), — «недоступна» с того же мгновения и навсегда;
-#: ссылка записи раздела (`ITEMS`) — так же, пока запись в корзине
+#: ссылка записи раздела (`ITEMS`) — так же, пока запись в корзине; чата «Озвучки» — пока у него нет живых записей;
+#: переписки Open WebUI — пока учётка Open WebUI подключена. Вид, которого здесь нет, недоступен — так прежний код
+#: (откат) не открывает ссылки новых видов
+_ALIVE = {**{t: f"s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL)"
+             for t in ("transcripts", "translations", "scans", "images", "videos")},
+          "speech_chats": "s.item_id IN (SELECT chat_id FROM speeches WHERE deleted IS NULL AND user_id = s.user_id)",
+          OWUI: "CAST(substr(s.item_id, 1, instr(s.item_id, ':') - 1) AS INTEGER) IN"
+                " (SELECT id FROM owui_accounts WHERE user_id = s.user_id)"}
 LIVE = (" AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL"
         " AND protected_used = 0)) AND (s.item_kind IS NULL OR "
-        + " OR ".join(f"(s.item_kind = '{t}' AND s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL))"
-                      for t in ITEMS) + ")")
+        + " OR ".join(f"(s.item_kind = '{kind}' AND {alive})" for kind, alive in _ALIVE.items()) + ")")
 
 
 def _public_share(token_hash):

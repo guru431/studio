@@ -74,8 +74,13 @@ Open WebUI тоже попадает в `relogin`.
 цикл и пропавший родитель — конец ветки. У сообщения — текст, рассуждение (текст и секунды), инструменты (результат
 обрезан до `owui_view.RESULT_MAX` (2000) знаков), файлы, прочие элементы `output` типами («элемент <тип>»), `done`,
 `error`, `pending`; плюс `active` чата (`GET /api/tasks/chat/{id}`). Неизвестный и чужой чат Open WebUI отдаёт
-**401**, а не 404: Студия отвечает 404 без обновления токена (сверка `owui._rejected`).
+**401**, а не 404: Студия отвечает 404 без обновления токена (сверка `owui._rejected`). Чтение и разбор ветки —
+`owui.read_chat`, ею пользуются и ссылка, и экспорт.
 `GET …/files/{fid}` — поток с `no-store`, `nosniff`, `sandbox`; не картинка, звук или видео — `attachment`.
+
+«Поделиться» и экспорт (`owui_share.py`): `GET/POST/PUT/DELETE …/chats/{chat}/share` — ссылка `chat_shares` своего
+вида `chat_shares.OWUI` (снимок и название — шифром `STUDIO_DATA_KEY`, файлы остаются в Open WebUI, рассуждение не
+идёт); `POST …/chats/{chat}/export {format, lang}` — Markdown или PDF. Подробно — [sharing-export](sharing-export.md#записи-разделов).
 
 ## Отправка, стоп, пауза, вложения
 

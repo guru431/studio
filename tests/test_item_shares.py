@@ -10,6 +10,7 @@ import media
 import state
 from conftest import erase_history, make_user, signin
 from test_chat_shares import create, regular, unlock
+from test_owui_read import BASE, setup, talk  # noqa: F401 — `setup` — фикстура
 
 
 def owner(s):
@@ -68,6 +69,18 @@ def video(uid):
 
 ITEMS = {"transcripts": (transcript, "t1"), "translations": (translation, "tl"), "scans": (scan, "sc"),
          "images": (image, "im"), "videos": (video, "vd")}
+
+
+def speech_chat(uid):
+    """Чат озвучки `sc1`: две готовые записи с mp3 голосом «Анна» и отменённая третья."""
+    a = media.save(uid, b"mp3-1", "audio/mpeg", "one.mp3")
+    b = media.save(uid, b"mp3-2", "audio/mpeg", "two.mp3")
+    state.DB.executemany(
+        "INSERT INTO speeches(id, user_id, model, voice, voice_name, text, media_id, duration, state, detail, created,"
+        " chat_id, chat_created) VALUES (?, ?, 'qwen3-tts', 'v1', 'Анна', ?, ?, 2.5, ?, 'готово', ?, 'sc1', 0)",
+        [("s1", uid, "Первый текст", a, "done", 1), ("s2", uid, "Второй текст", b, "done", 2),
+         ("s3", uid, "Третий текст", None, "cancelled", 3)])
+    return "/api/speeches/chats/sc1/share", (a, b)
 
 
 def test_recipient_sees_each_record_and_previous_code_reads_only_a_placeholder(studio):
@@ -202,3 +215,63 @@ def test_refresh_of_a_record_link_replaces_its_files(studio):
     assert studio.c.put(endpoint, json={}).status_code == 200
     assert studio.c.post("/share/file", json={"access": access, "file": audio}).status_code == 404
     assert "attachments" not in unlock(studio, token).json()["item"]
+
+
+def test_speech_chat_link_carries_texts_and_audio_of_ready_records(studio):
+    uid = owner(studio); endpoint, (a, b) = speech_chat(uid); out, token = create(studio, endpoint)
+    assert studio.c.get(endpoint).json() == out
+    opened = unlock(studio, token).json()
+    assert opened["messages"] == chat_shares.PLACEHOLDER["messages"] and opened["title"] == "Первый текст"
+    assert [(r["text"], r["voice"], r["file"]["mime"]) for r in opened["item"]["records"]] == [
+        ("Первый текст", "Анна", "audio/mpeg"), ("Второй текст", "Анна", "audio/mpeg")]
+    assert opened["item"]["kind"] == "speech_chats" and opened["item"]["records"][0]["duration"] == 2.5
+    second = opened["item"]["records"][1]["file"]["file"]
+    assert second == b
+    assert studio.c.post("/share/file", json={"access": opened["access"], "file": second}).content == b"mp3-2"
+    row = state.DB.execute("SELECT item_kind, item_id FROM chat_shares").fetchone()
+    assert tuple(row) == ("speech_chats", "sc1")
+    listed = studio.c.get("/api/me/access").json()["shares"]
+    assert [(s["kind"], s["item_id"], s["title"], s["trashed"]) for s in listed] == [("speech", "sc1", "Первый текст", False)]
+    kinds = [(e["kind"], e["detail"]) for e in studio.c.get("/api/me/security-events").json()["items"]]
+    assert ("share_create", "speech") in kinds
+    # блокировка раздела «Озвучка» закрывает и ссылку
+    state.DB.execute("UPDATE users SET screen_lock=1, screen_lock_sections='[\"speech\"]' WHERE id=?", (uid,))
+    state.DB.execute("UPDATE sessions SET seen=0")
+    locked = studio.c.put(endpoint, json={})
+    assert locked.status_code == 423 and locked.json()["detail"]["code"] == "screen_locked"
+    state.DB.execute("UPDATE users SET screen_lock=0 WHERE id=?", (uid,))
+    assert studio.c.put(endpoint, json={}).status_code == 200
+    # чат с идущей записью и чат без готовых — 409 `running`, ссылки нет
+    state.DB.executemany(
+        "INSERT INTO speeches(id, user_id, model, voice, voice_name, text, state, detail, created, chat_id, chat_created)"
+        " VALUES (?, ?, 'qwen3-tts', 'v1', 'Анна', 'Ещё', ?, '', ?, ?, 5)",
+        [("r1", uid, "done", 5, "sc2"), ("r2", uid, "working", 6, "sc2"), ("r3", uid, "cancelled", 7, "sc3")])
+    for cid in ("sc2", "sc3"):
+        refused = studio.c.post(f"/api/speeches/chats/{cid}/share", json={"pin": "0123"})
+        assert refused.status_code == 409 and refused.json()["detail"]["code"] == "running"
+    assert state.DB.execute("SELECT count(*) FROM chat_shares").fetchone()[0] == 1
+    # чужой чат — 404 на все четыре метода
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    for method in ("GET", "POST", "PUT", "DELETE"):
+        assert studio.c.request(method, endpoint, json={"pin": "0123"}).status_code == 404
+    signin(studio, "owner")
+    assert studio.c.delete("/api/speeches/chats/sc1").status_code == 204             # чат — в корзину
+    assert unlock(studio, token).status_code == 404 and studio.c.get("/api/me/access").json()["shares"][0]["trashed"] is True
+    state.DB.execute("UPDATE speeches SET deleted = NULL WHERE chat_id = 'sc1'"); assert unlock(studio, token).status_code == 200
+    state.DB.execute("DELETE FROM speeches WHERE id = 's1'"); assert state.DB.execute("SELECT count(*) FROM chat_shares").fetchone()[0] == 1
+    assert lock_policy.media_sections(uid, a) == {"speech"}      # файл удалённой записи держит только снимок ссылки
+    state.DB.execute("DELETE FROM speeches WHERE chat_id = 'sc1'"); assert state.DB.execute("SELECT count(*) FROM chat_shares").fetchone()[0] == 0
+
+
+def test_previous_live_rule_hides_links_of_the_new_kinds(setup):                    # откат: SQL-обход не нужен
+    s, fake, aid = setup
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    create(s, f"{BASE}/{aid}/chats/{talk(fake)}/share")
+    create(s, speech_chat(uid)[0])
+    old = (" AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL AND protected_used = 0))"
+           " AND (s.item_kind IS NULL OR " + " OR ".join(f"(s.item_kind = '{t}' AND s.item_id IN (SELECT id FROM {t}"
+           " WHERE deleted IS NULL))" for t in ("transcripts", "translations", "scans", "images", "videos")) + ")")
+    for kind in ("speech_chats", "owui"):                # строки ссылок обоих видов созданы новым кодом
+        assert state.DB.execute("SELECT 1 FROM chat_shares s WHERE s.item_kind = ?" + old, (kind,)).fetchone() is None
+        assert state.DB.execute("SELECT 1 FROM chat_shares s WHERE s.item_kind = ?" + chat_shares.LIVE, (kind,)).fetchone()

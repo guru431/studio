@@ -267,17 +267,27 @@ def _label(blob) -> "str | None":
 
 
 def _item_share(row) -> dict:
-    """Строка ссылки как dict; у ссылки на запись раздела (`chat_shares.ITEMS`) — ещё `section`, название записи
-    (имя, у картинки и ролика — начало промпта) и в корзине ли она: тогда получателю ссылка недоступна."""
+    """Строка ссылки как dict; у ссылки на запись раздела (`chat_shares.SECTIONS`) — ещё `section`, название записи
+    (имя, у картинки и ролика — начало промпта, у чата «Озвучки» — начало первой записи, у переписки Open WebUI —
+    `label`) и в корзине ли она: тогда получателю ссылка недоступна."""
     import chat_shares
     out = dict(row) | {"section": None}
-    if row["item_kind"] in chat_shares.ITEMS:
-        column = "prompt" if row["item_kind"] in ("images", "videos") else "name"
+    kind = row["item_kind"]
+    if kind == chat_shares.OWUI:                # переписка Open WebUI: название — шифром у ссылки
+        return out | {"section": chat_shares.SECTIONS[kind], "title": _label(row["label"]), "trashed": False}
+    if kind == "speech_chats":                  # чат «Озвучки»: название — первая запись, в корзине — нет живых
+        item = state.DB.execute(
+            "SELECT substr(text, 1, 80) AS title, NOT EXISTS (SELECT 1 FROM speeches WHERE chat_id = ? AND user_id = ?"
+            " AND deleted IS NULL) AS trashed FROM speeches WHERE chat_id = ? AND user_id = ? ORDER BY created, rowid"
+            " LIMIT 1", (row["item_id"], row["user_id"], row["item_id"], row["user_id"])).fetchone()
+    elif kind in chat_shares.ITEMS:
+        column = "prompt" if kind in ("images", "videos") else "name"
         item = state.DB.execute(f"SELECT substr({column}, 1, 80) AS title, deleted IS NOT NULL AS trashed"
-                                f" FROM {row['item_kind']} WHERE id = ?", (row["item_id"],)).fetchone()
-        out |= {"section": chat_shares.ITEMS[row["item_kind"]][0], "title": item["title"] if item else None,
-                "trashed": bool(item and item["trashed"])}
-    return out
+                                f" FROM {kind} WHERE id = ?", (row["item_id"],)).fetchone()
+    else:
+        return out
+    return out | {"section": chat_shares.SECTIONS[kind], "title": item["title"] if item else None,
+                  "trashed": bool(item and item["trashed"])}
 
 
 def _file_links(uid) -> int:
@@ -299,7 +309,7 @@ async def access(request: Request):
     shares = [_item_share(r) for r in state.DB.execute(
         "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, s.session_id, c.title, s.label, s.created,"
         " s.expires, c.deleted IS NOT NULL AS trashed, c.protected_used = 1 AS protected,"
-        " s.views, s.viewed, s.fails, s.item_kind, s.item_id FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
+        " s.views, s.viewed, s.fails, s.item_kind, s.item_id, s.user_id FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
         " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
         " ORDER BY s.created DESC", (uid, clock.NOW()))]
     aids = sorted({r["agent_id"] for r in members} | {r["agent_id"] for r in shares if r["agent_id"] is not None})

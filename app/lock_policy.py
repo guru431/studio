@@ -115,6 +115,8 @@ def media_sections(uid: int, media_id: str) -> set[str]:
                                 (uid, media_id)).fetchall():
         if row["item_kind"] == "scans":
             found |= scan_sections(uid, row["item_id"])
+        elif row["item_kind"] == "speech_chats":    # чат «Озвучки» (шаг 82): mp3 его записей
+            found.add("speech")
         elif row["item_kind"]:      # снимок записи раздела (chat_shares.ITEMS) — раздел её таблицы
             found |= {section for section, tables in MEDIA_SOURCES.items()
                       if any(table == row["item_kind"] for table, _ in tables)}
