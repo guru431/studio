@@ -107,8 +107,9 @@ def test_message_nav_walks_own_messages_and_toggles_steps(browser, live, width):
 
 
 def test_dialog_drafts_are_scoped_announced_and_cleared(browser, live):
+    # Свой экземпляр модуля (адрес с запросом): «Чат» страницы уже открыл своё хранилище черновиков и прочёл сессию.
     v = probe(browser, live, """(async () => {
-      const m = await import('/static/js/dialog-drafts.js');
+      const m = await import('/static/js/dialog-drafts.js?probe');
       const { me } = await import('/static/js/api.js');
       const events = [];
       document.addEventListener('studio-dialog-draft', ({ detail }) => events.push([detail.store, detail.id, detail.draft]));
