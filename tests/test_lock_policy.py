@@ -381,6 +381,11 @@ ROUTES = {
         ("GET", "/api/admin/shared/mcp/{sid}/policy"), ("PUT", "/api/admin/shared/mcp/{sid}/policy"),
         ("GET", "/api/admin/roles"), ("POST", "/api/admin/roles"), ("PATCH", "/api/admin/roles/{did}"),
         ("DELETE", "/api/admin/roles/{did}"),
+        ("GET", "/api/admin/skills"), ("POST", "/api/admin/skills"), ("PUT", "/api/admin/skills/{did}"),
+        ("DELETE", "/api/admin/skills/{did}"),
+        # навыки учётки: правка — как PATCH /api/me (быстрые действия «Агентов» — навыки с отметкой)
+        ("POST", "/api/skills"), ("PUT", "/api/skills/order"), ("POST", "/api/skills/defaults"),
+        ("PUT", "/api/skills/{skill_id}"), ("DELETE", "/api/skills/{skill_id}"),
         ("GET", "/api/admin/knowledge"), ("PUT", "/api/admin/knowledge"), ("POST", "/api/admin/knowledge/bases"),
         ("DELETE", "/api/admin/knowledge/bases/{kb_id}"), ("PUT", "/api/admin/knowledge/bases/{kb_id}/access"),
         ("POST", "/api/admin/knowledge/bases/{kb_id}/documents"),
@@ -429,7 +434,7 @@ ROUTES = {
         ("GET", "/api/connections/{conn_id}/profile"),
         ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/notify"),
-        ("GET", "/api/me/storage"),
+        ("GET", "/api/me/storage"), ("GET", "/api/skills"), ("GET", "/api/skills/{skill_id}"),
         ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections"), ("GET", "/api/trash"),
         ("GET", "/api/help"), ("GET", "/api/help/studio"), ("POST", "/api/help/server")]},
     **{(m, p): "lock" for m, p in [

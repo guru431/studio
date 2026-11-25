@@ -255,6 +255,7 @@ def studio_db():
     import roles
     import search
     import sections
+    import skills
     import state
 
     with closing(db.connect(":memory:")) as conn, pytest.MonkeyPatch.context() as patch:
@@ -263,6 +264,7 @@ def studio_db():
         patch.setattr(clock, 'NOW', lambda: T0)
         sections.adopt('translate', 'chat')
         roles.seed_defaults()
+        skills.seed_defaults()
         search.compose_once(conn)
         return conn.serialize()
 

@@ -161,4 +161,6 @@ def blocks(request, uid: int, digest: str) -> bool:
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/notify", "/api/me/exa-key")
                 and request.method != "GET")
             or (head == "connections" and request.method != "GET")
+            # навыки: чтение открыто (кнопки пустого чата, как `GET /api/me`), правка — как `PATCH /api/me`
+            or (head == "skills" and request.method != "GET")
             or (head == "connections" and path.endswith("/token") and protected(row, "chat")))

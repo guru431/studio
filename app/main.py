@@ -78,6 +78,7 @@ import screenlock
 import security
 import search
 import sections
+import skills
 import speeches
 import state
 import static_assets
@@ -124,6 +125,7 @@ async def lifespan(_app):
     sections.retire_photo_models()
     sections.drop_cleaner_strays()               # связи Cleaner вне чата и перевода (до запрета, откат) — прочь
     roles.seed_defaults()                        # раз на базу: встроенные роли — в умолчания администратора
+    skills.seed_defaults()                       # раз на базу: встроенные навыки — в умолчания администратора
     search.compose_once(state.DB)                # раз на базу: прежние тела индекса — в NFC
     chat_exports.clean_tmp()
     audio.clean_tmp()
@@ -215,6 +217,7 @@ app.include_router(chat.router)
 app.include_router(chat_pending.router)
 app.include_router(knowledge.router)
 app.include_router(roles.router)
+app.include_router(skills.router)
 app.include_router(memory.router)
 app.include_router(mcp_contracts.router)       # раньше mcp_client: /api/mcp/status — не id сервера
 app.include_router(mcp_client.router)

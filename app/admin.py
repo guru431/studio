@@ -48,6 +48,7 @@ import roles
 import sections
 import security
 import security_log
+import skills
 import state
 import upstream
 
@@ -949,6 +950,29 @@ async def patch_role_default(did: int, request: Request):
 @router.delete("/roles/{did}", status_code=204)
 async def delete_role_default(did: int):
     roles.delete_default(did)
+    return Response(status_code=204)
+
+
+# ---- умолчания навыков (skills.py): меняют только посев новых учёток и «Добавить умолчания» ----------------
+
+@router.get("/skills")
+async def list_skill_defaults(lang: "skills.Lang | None" = Query(None)):
+    return {"items": skills.defaults(lang)}
+
+
+@router.post("/skills", status_code=201)
+async def create_skill_default(request: Request):
+    return skills.create_default(await skills.read(request, skills.DefaultIn))
+
+
+@router.put("/skills/{did}")
+async def put_skill_default(did: int, request: Request):
+    return skills.update_default(did, await skills.read(request, skills.SkillIn))
+
+
+@router.delete("/skills/{did}", status_code=204)
+async def delete_skill_default(did: int):
+    skills.delete_default(did)
     return Response(status_code=204)
 
 

@@ -88,6 +88,8 @@ README = """Выгрузка истории студии
 Что внутри:
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
   (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок),
+  навыки (skills: имя, описание, текст, где доступен — chat, agents или both, кнопкой в пустом чате
+  «Агентов» — quick, по частям — parts, порядок, origin — из какого умолчания засеян),
   личная память чата (memory_on — включена ли, memory — записи: текст и время, новые первыми),
   тон и глоссарий перевода (translate: tone, glossary — пары термин и перевод по порядку).
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
@@ -177,6 +179,8 @@ def _settings(user_id: int) -> dict | None:
         "roles": [{k: r[k] for k in r.keys() if k != "user_id"}
                   for r in state.DB.execute("SELECT * FROM chat_roles WHERE user_id = ? ORDER BY position, created, id",
                                             (user_id,))],
+        "skills": [{k: r[k] for k in r.keys() if k != "user_id"}
+                   for r in state.DB.execute("SELECT * FROM skills WHERE user_id = ? ORDER BY position, id", (user_id,))],
         "memory_on": bool(user["memory_on"]),
         "memory": memory.list_for(user_id),            # личная память «Чата» — расшифрованной, новые первыми
         "translate": {"tone": user["translate_tone"],  # тон и глоссарий «Перевода» (translate.preferences)

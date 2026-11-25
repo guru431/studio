@@ -28,6 +28,7 @@ import release
 import sections
 import security
 import security_log
+import skills
 import state
 import totp
 import trash
@@ -133,6 +134,7 @@ def _me(request: Request) -> dict:
                            " password_reset, email, email_codes, memory_on, login_notice, ldap_guid FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
+    quick = skills.quick_actions(uid)       # засеянная библиотека навыков — кнопки из навыков с отметкой
     views = json.loads(row["views"])
     accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -146,8 +148,8 @@ def _me(request: Request) -> dict:
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
-            "code_quick_actions": code_actions.for_account(row["code_quick_actions"]),
-            "code_quick_actions_default": row["code_quick_actions"] is None,
+            "code_quick_actions": code_actions.for_account(row["code_quick_actions"]) if quick is None else quick,
+            "code_quick_actions_default": row["code_quick_actions"] is None if quick is None else False,
             "code_quick_actions_set": code_actions.DEFAULTS,     # «Добавить из набора» редактора
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
