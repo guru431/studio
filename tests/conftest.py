@@ -343,6 +343,8 @@ def studio(env, studio_db, monkeypatch, request):
     takeout.RUNNING.clear()
     claude_code.PDFS.clear()
     claude_code.code_visualizations.VIEWS.clear()
+    import chat_preview
+    chat_preview.VIEWS.clear()           # окна HTML прошлого теста (ключ — uid той базы)
     claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()

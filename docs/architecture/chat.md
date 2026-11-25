@@ -539,6 +539,9 @@ Studio проксирует файлы через исходное подклю�
   «недоступна» с того же мгновения и навсегда, идущий архив обрывается, выгрузка истории оставляет только сведения
   диалога — [sharing-export](sharing-export.md#защищённый-источник). Ссылка «Моих файлов» на файл защищённого
   сервера — 409 `protected`, прежняя — одинаковый 404 ([mcp-contracts](mcp-contracts.md)).
+- Окно HTML и SVG ответа ([ниже](#окно-html-и-svg-спека-2026-11-25-studio-skills-status-local-models-п-25)) —
+  409 `protected` (`chat.PROTECTED_PREVIEW`), выданный раньше адрес окна — 404 `gone`: песочница закрывает не все
+  сетевые пути скрипта (решение 17 спеки 2026-11-25).
 
 ## План работы и личная память (спека 2026-11-21-studio-source-capabilities-design, п. 18, шаг схемы 58)
 
@@ -690,6 +693,22 @@ Studio проксирует файлы через исходное подклю�
   `include_usage` — подключение отмечено в памяти вкладки, запрос повторяется один раз без параметра. Кусок потока с
   `usage` — `usageOf` (только целые от 0 до `chat.USAGE_MAX`); в PUT итога — `usage`, `gen_ms` (от первого текста) и
   `total_ms` (от начала хода), тело `pagehide` — без чисел. Под ответом — «модель · N ток/с» (`withSpeed`).
+
+## Окно HTML и SVG (спека 2026-11-25-studio-skills-status-local-models, п. 25)
+
+- `POST /api/chats/{chat_id}/preview {kind: "html" | "svg", text}` (`chat_preview.open_preview`) → 201 `{token}`:
+  свой диалог не из корзины (иначе 404 `gone`), без `protected_used` (иначе 409 `protected`), текст не больше
+  `chat_preview.PREVIEW_MAX` (2097152) байт UTF-8 (больше или одиночный суррогат — 413 `preview_size`). Документ — в
+  памяти процесса (`chat_preview.VIEWS`, одно окно на учётку: новое заменяет прежнее), срок `chat_preview.TTL_SEC`
+  (300); `svg` оборачивается в пустую страницу HTML. В журнал — id диалога и размер, текст — никогда.
+- `GET /api/chats/preview/{token}` (`chat_preview.preview`) — документ только той же учётке и той же сессии, пока
+  срок не вышел, а диалог свой, не в корзине и без защищённого источника; иначе запись стирается и 404 `gone`.
+  Заголовки — `Content-Security-Policy` `chat_preview.CSP`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`.
+- Сеть закрыта тремя слоями: CSP ответа (`default-src 'none'`, скрипты и стили — только встроенные, картинки, шрифты
+  и звук — `data:`, `connect-src` нет), кадр `iframe sandbox="allow-scripts"` без `allow-same-origin` (ни cookie,
+  ни хранилища, ни страницы Студии) и `default-src 'self'` самой страницы (переход кадра на чужой адрес запрещён).
+  Не `srcdoc` и не `blob:`: кадр унаследовал бы CSP страницы — встроенные скрипты блока не пошли бы, а `'self'`
+  остался бы достижим. Образец — визуализации «Агентов» (`code_visualizations`).
 
 ## Документы и сканы в чате
 
