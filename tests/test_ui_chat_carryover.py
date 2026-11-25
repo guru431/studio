@@ -94,6 +94,36 @@ def test_queue_sends_once_after_the_answer(browser, live):                 # Rev
     assert not problems(r), problems(r)
 
 
+def test_queue_takes_text_without_the_skill_chip(browser, live):
+    """Навык (чип над полем) в очередь не встаёт — отказ словами; сообщение очереди уходит без чипа, выбранного в поле
+    после постановки, а чип и набранное остаются в поле."""
+    live.add_user("queue-skill")
+    live.gw.chat_hold = held_until("go-skill")
+    skill = """(async () => { const m = await import('/static/js/api.js');
+      await m.api('POST', '/api/skills', { name: 'Сократить', text: 'Ты — редактор.', scope: 'chat' }); return true; })()"""
+    chip = "document.querySelector('#chat-skill')"
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-skill"), ("eval", "skill", skill),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("type", "#chat-input", "Потом"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            ("type", "#chat-input", "/сокр"), ("wait", "document.querySelector('#slash-menu:not([hidden]) .slash-option')"),
+            ("press", "Enter"), ("wait", f"!{chip}.hidden"),
+            ("type", "#chat-input", "Ещё"), ("press", "Enter"), ("wait", ERROR),
+            ("eval", "refused", f"[{ERROR}, {QUEUED}, {FIELD}]"),
+            release("go-skill"),
+            ("wait", f"{USERS}.length === 2 && {ANSWERED} && {QUEUED}.length === 0"),
+            pause(500),
+            ("eval", "after", f"[{USERS}, !{chip}.hidden, {FIELD}]")])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["refused"] == ["В очередь встаёт только текст — навык выберите после ответа", ["Потом"], "Ещё"]
+    assert v["after"] == [["Первый", "Потом"], True, "Ещё"]
+    assert live.gw.chat_requests[-1]["messages"][-1]["content"] == "Потом"     # без текста навыка
+    assert not problems(r), problems(r)
+
+
 def test_queue_survives_a_turn_from_another_device(browser, live):         # Review Focus 4: 409 busy
     """Перед POST хода «Второй» из очереди тот же API начинает удержанный ход «с телефона»: отказ 409 `busy` — элемент
     остаётся в очереди и уходит один раз, когда ответ «телефона» кончился."""

@@ -1291,6 +1291,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Сообщение из очереди требует подтверждения — отправьте его сами": "This queued message needs confirmation — send it yourself",
   "Сообщение уже отправлено": "The message has already been sent",
   "Очередь сообщений": "Message queue",
+  "В очередь встаёт только текст — навык выберите после ответа": "Only text can be queued — choose the skill after the answer",
   "Сообщение из очереди не отправлено — «Продолжить очередь» снова покажет, что получит модель": "The queued message was not sent — “Resume queue” will show again what the model receives",
   "Не удалось узнать, ушло ли сообщение — «Продолжить очередь» повторит его без задвоения": "Could not find out whether the message was sent — “Resume queue” will retry it without sending it twice",
   "Сообщение из очереди": "Queued message",

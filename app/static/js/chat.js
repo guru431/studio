@@ -1414,13 +1414,17 @@ function build(view, ctx) {
     });
   }
 
-  /* «После ответа» (chat-queue.js): текст поля — в очередь открытого диалога; правка сообщения и вложения в очередь
-     не встают. Принято — поле и черновик диалога пусты */
+  /* «После ответа» (chat-queue.js): текст поля — в очередь открытого диалога; правка сообщения, вложения и навык
+     (чип chat-skills.js) в очередь не встают. Принято — поле и черновик диалога пусты */
   function enqueue() {
     const text = input.value;
-    if (editing || !chatId || !text.trim()) return;
+    if (editing || !chatId || (!text.trim() && !skills.chosen())) return;
     if (atts.length) {
       notice.textContent = tr("В очередь встаёт только текст — вложения отправьте после ответа");
+      return;
+    }
+    if (skills.chosen()) {
+      notice.textContent = tr("В очередь встаёт только текст — навык выберите после ответа");
       return;
     }
     // текст черновика с квитанцией (ушло ли — неизвестно) встаёт в очередь с тем же `request_id`
@@ -1448,6 +1452,8 @@ function build(view, ctx) {
       notice.textContent = tr("Сообщение из очереди требует подтверждения — отправьте его сами");
       return 'failed';
     }
+    const heldSkill = skills.chosen();               // чип навыка — у набранного в поле, не у сообщения очереди
+    if (heldSkill) skills.clear();
     queuing = { item, typed: input.value, back: false };
     input.value = item.text;
     input.readOnly = true;
@@ -1458,6 +1464,7 @@ function build(view, ctx) {
       atts = [...held, ...atts];
       unqueueField();
       queuing = null;
+      if (heldSkill && !skills.chosen()) skills.restore(heldSkill);
       paintAtts();
     }
     if (pendingTurn?.queued === item.id && pendingTurn.uncertain) return 'unknown';
