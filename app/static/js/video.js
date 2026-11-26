@@ -24,7 +24,7 @@ import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
-import { enterSends, fieldBox } from './field.js';
+import { enterSends, fieldBox, imagePaste } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
@@ -186,7 +186,10 @@ function build(view, ctx) {
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
   const mcp = sectionMcp('video', { native: !ctx.hint, fields: ['prompt', 'seconds', 'quality', 'smooth'],
-    onChange: paintModel, onBusy: paintGo });
+    onChange: paintModel, onBusy: paintGo, onVideo: (item) => {
+      if (feedModel.value && item.model !== feedModel.value) feedModel.set(null);
+      feed.reload();
+    } });
   const promptBox = fieldBox(prompt, { attach: pick });
   const qualityWrap = el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu);
   const form = el('form', { class: 'composer', id: 'video-composer', hidden: !!ctx.hint }, sourceBox, photoContext, promptBox.box, promptBox.error,
@@ -204,7 +207,11 @@ function build(view, ctx) {
     key: (item) => item.id,
     render: card,
     quiet: ['elapsed', 'progress', 'detail', 'chain'],      // ход, слова и время — таймер tick; цепочка — не в карточке
-    load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${modelQuery()}${pageQuery(last)}`)).items,
+    load: async (last) => {
+      const { items } = await api('GET', `/api/videos?limit=${PAGE}${modelQuery()}${pageQuery(last)}`);
+      if (alive) for (const item of items) if (item.mcp_job_id) feedModel.add(item.model);
+      return items;
+    },
     empty: ctx.hint ? tr("Здесь появятся ваши ролики.") : tr("Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить»."),
     head: tableHead(['', tr("Промпт"), tr("Ролик"), 'Seed', tr("Время"), '']),
     onChange: () => {
@@ -389,6 +396,11 @@ function build(view, ctx) {
     }
     if (!alive || running.get(id) !== entry) return;
     if (item && !entry.again) {
+      if (item.id !== id) {
+        forget(id);
+        feed.reload();
+        return;
+      }
       feed.update(item);
       watch(item);
     }
@@ -398,10 +410,12 @@ function build(view, ctx) {
   function busyText(entry) {
     const item = entry.item;
     const spent = clock(item.elapsed + (Date.now() - entry.at) / 1000);
-    return item.state === 'in_progress' ? `${item.progress}% · ${spent}` : spent;
+    return item.state === 'in_progress' && item.progress != null ? `${item.progress}% · ${spent}` : spent;
   }
 
   function clipParams(item) {
+    if (item.mcp_job_id) return [item.model && modelLabel(item.model), item.mcp_server,
+      item.seconds != null && tr("{0} с", item.seconds), item.size || RESOLUTION[item.quality] || item.quality].filter(Boolean).join(' · ');
     return [modelLabel(item.model || 'wan'), tr("{0} с", item.seconds),
       item.model === 'h3' ? H3_RESOLUTION[item.quality] : RESOLUTION[item.quality] || item.quality,
       item.model === 'h3' ? '24 fps' : item.smooth ? tr("32 к/с") : tr("16 к/с")].join(' · ');
@@ -432,13 +446,15 @@ function build(view, ctx) {
   function overlay(item) {
     const over = el('div', { class: 'video-over' });
     if (RUNNING.has(item.state)) {
-      const bar = el('span');
-      bar.style.width = `${item.progress}%`;
       over.append(el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('p', { class: 'video-state' }, withCard(cap(serverMessage(item.detail)) || tr("В очереди"), item.card)),
-        el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': tr("Ход ролика"), 'aria-valuemin': '0',
-          'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar),
-        el('b', { class: 'card-time' }, busyText(running.get(item.id))));
+        el('p', { class: 'video-state' }, withCard(cap(serverMessage(item.detail)) || tr("В очереди"), item.card)));
+      if (item.progress != null) {
+        const bar = el('span');
+        bar.style.width = `${item.progress}%`;
+        over.append(el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': tr("Ход ролика"),
+          'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar));
+      }
+      over.append(el('b', { class: 'card-time' }, busyText(running.get(item.id))));
     } else over.append(el('p', { class: item.state === 'failed' ? 'video-fail' : '' }, failText(item)));
     return over;
   }
@@ -452,6 +468,7 @@ function build(view, ctx) {
   }
 
   function cancelButton(item, cls) {
+    if (item.mcp_job_id) return null;
     return button(tr("Отменить"), { class: `${cls} card-cancel` }, (event) => cancel(item, event.currentTarget));
   }
 
@@ -480,11 +497,13 @@ function build(view, ctx) {
   }
 
   function repeatButton(item, cls, after) {
+    if (item.mcp_job_id && !item.source_media_id) return null;
     return button(tr("Повторить"), { class: `${cls} card-repeat`, title: tr("Тот же кадр, промпт и параметры, новый seed") },
       (event) => repeat(item, 1, event.currentTarget, after).catch(() => {}));
   }
 
   function variantsButton(item, cls, after) {
+    if (item.mcp_job_id && !item.source_media_id) return null;
     return button(tr("Ещё варианты"), { class: `${cls} card-variants` }, () => chooseVariants(item, after));
   }
 
@@ -507,17 +526,22 @@ function build(view, ctx) {
 
   /** «В поле»: кадр (тем же файлом истории), описание фото и движение, модель, длительность, качество и «плавно»
    * ролика — в поле и чипы; свой непустой промпт заменяется после вопроса. Ничего не хранится. */
-  function toField(item, viewer) {
+  function toField(item, viewer, fail) {
     const parts = /^Описание исходного фото:\n([\s\S]*)\n\nДвижение в видео:\n([\s\S]*)$/.exec(item.prompt || '');
     const motion = parts ? parts[2] : item.prompt || '';
     const apply = () => {
+      if (item.mcp_job_id && !mcp.selectSource(`${item.mcp_server_id}:${item.mcp_tool}`, item.model, item.mcp_arguments)) {
+        fail.textContent = tr("Инструмент MCP недоступен");
+        return;
+      }
+      if (!item.mcp_job_id) mcp.useNative();
       viewer.close();
       const same = [...modelPick.options].filter((o) => o.value.split(':').slice(1).join(':') === (item.model || 'wan'));
       if (same.length) modelPick.value = (same.find((o) => o.value === modelPick.value) || same[0]).value;
       if (QUALITIES.some(([value]) => value === item.quality)) quality = item.quality;
-      smooth = item.smooth;
+      if (item.smooth != null) smooth = item.smooth;
       chipSmooth.setAttribute('aria-pressed', String(smooth));
-      seconds.value = String(item.seconds);
+      if (item.seconds != null) seconds.value = String(item.seconds);
       setSource(item.source_media_id ? { mediaId: item.source_media_id, url: media(item.source_media_id, '?thumb=1'),
         photoPrompt: parts ? parts[1] : '' } : null);
       prompt.value = motion;
@@ -589,16 +613,18 @@ function build(view, ctx) {
         poster, src: media(item.media_id), 'data-src': media(item.media_id) });
       players.observe(player);
       node.append(player);
-      body.append(el('p', { class: 'video-line' }, `${cap(serverMessage(item.detail)) || tr("Готово")} · ${clock(item.elapsed)}`));
-      acts.append(button(tr("Открыть"), { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
+      body.append(el('p', { class: 'video-line' }, [cap(serverMessage(item.detail)) || tr("Готово"),
+        item.elapsed != null && clock(item.elapsed)].filter(Boolean).join(' · ')));
+      acts.append(...[button(tr("Открыть"), { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
         button(tr("Скачать"), { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
         repeatButton(item, 'btn btn-sm'), variantsButton(item, 'btn btn-sm'),
-        button(tr("Удалить"), { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
+        button(tr("Удалить"), { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item))].filter(Boolean));
     } else if (RUNNING.has(item.state)) {
-      acts.append(cancelButton(item, 'btn btn-sm'));
+      const stop = cancelButton(item, 'btn btn-sm');
+      if (stop) acts.append(stop);
       node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
     } else {
-      acts.append(repeatButton(item, 'btn btn-sm'), deleteButton(item, 'btn btn-sm btn-danger'));
+      acts.append(...[repeatButton(item, 'btn btn-sm'), deleteButton(item, 'btn btn-sm btn-danger')].filter(Boolean));
       node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
     }
     body.append(el('p', { class: 'video-meta' }, metaText(item)));
@@ -612,12 +638,13 @@ function build(view, ctx) {
   /** Вид «Плитка»: только кадр; действия идущего и неудачного — ссылками поверх. */
   function tileCard(item, node) {
     if (item.state === 'done' && item.media_id) {
-      node.append(openButton(item, el('span', { class: 'card-cap' }, tr("{0} с", item.seconds))));
+      node.append(openButton(item, item.seconds != null ? el('span', { class: 'card-cap' }, tr("{0} с", item.seconds)) : null));
       return node;
     }
     const over = overlay(item);
-    if (RUNNING.has(item.state)) over.append(cancelButton(item, 'btn-link'));
-    else over.append(repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link'));
+    const actions = RUNNING.has(item.state) ? [cancelButton(item, 'btn-link')]
+      : [repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link')];
+    over.append(...actions.filter(Boolean));
     node.append(el('div', { class: 'video-stage' }, still(item), over));
     return node;
   }
@@ -626,7 +653,7 @@ function build(view, ctx) {
   function row(item, node) {
     const done = item.state === 'done' && item.media_id;
     const busy = RUNNING.has(item.state);
-    const when = done ? el('span', {}, `${timeOf(item.created)} · ${clock(item.elapsed)}`)
+    const when = done ? el('span', {}, [timeOf(item.created), item.elapsed != null && clock(item.elapsed)].filter(Boolean).join(' · '))
       : busy ? el('b', { class: 'card-time', title: cap(serverMessage(item.detail)) }, busyText(running.get(item.id)))
         : el('span', { class: item.state === 'failed' ? 'error' : 'muted' }, failText(item));
     const save = el('button', { type: 'button', class: 'icon-btn card-download', 'aria-label': tr("Скачать"), title: tr("Скачать") },
@@ -659,6 +686,7 @@ function build(view, ctx) {
     const dialog = el('dialog', { id: 'video-viewer', class: 'viewer', 'aria-label': tr("Просмотр ролика") });
     const act = (text, cls, fn) => button(text, { class: `btn btn-sm ${cls}` }, fn);
     const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
+    const details = api('GET', `/api/videos/${encodeURIComponent(item.id)}`);
     let chain = el('ol', { class: 'viewer-chain' });
     dialog.append(el('div', { class: 'viewer-top' }, close), el('div', { class: 'viewer-stage' }, player),
       el('div', { class: 'viewer-bar' }, el('p', { class: 'viewer-meta' }, metaText(item)), chain, missing,
@@ -668,14 +696,21 @@ function build(view, ctx) {
             tr("Ролик"), api, { kind: 'videos' })),
           repeatButton(item, 'btn btn-sm act-repeat', () => dialog.close()),
           variantsButton(item, 'btn btn-sm act-variants', () => dialog.close()),
-          ctx.hint ? null : act(tr("В поле"), 'act-to-field', () => toField(item, dialog)),
+          ctx.hint && !item.mcp_job_id ? null : act(tr("В поле"), 'act-to-field', async () => {
+            try {
+              const full = item.mcp_job_id ? await details : item;
+              if (dialog.open) toField(full, dialog, missing);
+            } catch (err) {
+              if (dialog.open) missing.textContent = words(err);
+            }
+          }),
           act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       player.pause();
       dialog.remove();
     });
-    api('GET', `/api/videos/${encodeURIComponent(item.id)}`).then((full) => {
+    details.then((full) => {
       if (!dialog.open) return;
       const next = chainList(full.chain, { current: null, onOpen: (id) => {
         dialog.close();
@@ -709,7 +744,10 @@ function build(view, ctx) {
       const time = card.querySelector('.card-time');
       if (time) {
         time.textContent = busyText(entry);
-        if (time.closest('.cell-when')) time.title = cap(serverMessage(item.detail));           // вид «Таблица»
+        if (time.closest('.cell-when')) {
+          time.title = cap(serverMessage(item.detail));
+          if (item.mcp_job_id) time.textContent = [time.title, time.textContent].filter(Boolean).join(' · ');
+        }
       }
       const state = card.querySelector('.video-state');
       if (state) state.textContent = withCard(cap(serverMessage(item.detail)) || tr("В очереди"), item.card);
@@ -752,7 +790,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
     const dialog = openDialog(root, { id: 'video-delete-dialog', title: tr("Удалить ролик?"),
-      body: [el('p', {}, RUNNING.has(item.state)
+      body: [el('p', {}, item.mcp_job_id ? tr("Ролик и его ссылка будут удалены.") : RUNNING.has(item.state)
         ? tr("Генерация остановится. Запись уйдёт в корзину на 14 дней и вернётся со статусом «Отменено».")
         : tr("Ролик уйдёт в корзину на 14 дней вместе с файлом — оттуда его можно вернуть.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
@@ -835,12 +873,16 @@ function build(view, ctx) {
     smooth = !smooth;
     chipSmooth.setAttribute('aria-pressed', String(smooth));
   });
-  file.addEventListener('change', () => {
-    const f = file.files[0];
+  function attachSource(f) {
     if (f) setSource({ file: f, url: URL.createObjectURL(f) });
-  });
-  sourceClear.addEventListener('click', () => {
+  }
+  file.addEventListener('change', () => {
+    const selected = file.files[0];
     file.value = '';
+    attachSource(selected);
+  });
+  const unbindImagePaste = imagePaste(file, attachSource);
+  sourceClear.addEventListener('click', () => {
     setSource(null);
   });
   prompt.addEventListener('input', autosize);
@@ -868,6 +910,7 @@ function build(view, ctx) {
     destroy() {
       draft.save();
       alive = false;
+      unbindImagePaste();
       mcp.destroy();
       sourceVersion += 1;
       selection.destroy();

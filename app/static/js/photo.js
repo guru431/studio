@@ -45,7 +45,7 @@ import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
 import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
 import { createFeed, pageQuery } from './feed.js';
-import { enterSends, fieldBox } from './field.js';
+import { enterSends, fieldBox, imagePaste } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
@@ -1387,12 +1387,7 @@ function build(view, ctx) {
     file.value = '';
     attachSource(selected);
   });
-  prompt.addEventListener('paste', (event) => {
-    const image = [...(event.clipboardData?.files || [])].find(value => value.type.startsWith('image/'));
-    if (!image) return;
-    event.preventDefault();
-    attachSource(image);
-  });
+  const unbindImagePaste = imagePaste(file, attachSource);
   form.addEventListener('dragover', (event) => {
     if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
   });
@@ -1481,6 +1476,7 @@ function build(view, ctx) {
     destroy() {
       draft.save();
       alive = false;
+      unbindImagePaste();
       mcp.destroy();
       if (shutDescribe) shutDescribe();
       selection.destroy();

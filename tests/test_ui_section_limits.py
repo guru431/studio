@@ -84,6 +84,15 @@ def start(login):
                               f"{{ name: 'Spark', url: '{URL}', token: '{TOKEN}' }})).id)()")]
 
 
+def paste_image(selector):
+    return ("eval", "paste", f"""(() => {{ const data = new DataTransfer();
+      const bytes = Uint8Array.from(atob({base64.b64encode(PNG_REAL).decode()!r}), c => c.charCodeAt(0));
+      data.items.add(new File([bytes], 'pasted.png', {{ type: 'image/png' }}));
+      data.setData('text/plain', 'https://example.com/pasted.png');
+      return !document.querySelector({selector!r}).dispatchEvent(new ClipboardEvent('paste',
+        {{ clipboardData: data, bubbles: true, cancelable: true }})); }})()""")
+
+
 SECONDS = ("[document.querySelector('#video-seconds').maxLength, document.querySelector('#video-seconds').getAttribute('aria-label'),"
            " document.querySelector('#chip-seconds').title, document.querySelector('#video-seconds').value]")
 SIZES = "[...document.querySelectorAll('#chip-size-menu [data-value]')].map(b => b.dataset.value)"
@@ -100,7 +109,8 @@ def test_section_forms_take_limits_from_the_tool_schema(browser, live, width):
     result = browser.drive(live.url + "/", [*start(login),
         ("eval", "video", "location.hash='#/video'"), ("wait", ready("video_create")), choose("video_create"),
         ("eval", "videoLimits", SECONDS),
-        put_files("#video-file", [("source.png", PNG_REAL)]), ("type", "#video-prompt", "Кот моргает"),
+        ("type", "#video-prompt", "Кот моргает"), paste_image("#video-prompt"),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth > 0"),
         set_value("#video-seconds", "700"), ("click", "#video-go"), ("wait", ERROR), ("eval", "tooLong", ERROR),
         set_value("#video-seconds", "120"), ("click", "#video-go"), ("wait", DONE),
         choose("video_estimate"), ("eval", "estimateLimits", SECONDS), ("eval", "videoFits", NO_OVERFLOW),
@@ -112,6 +122,8 @@ def test_section_forms_take_limits_from_the_tool_schema(browser, live, width):
         ("click", "#photo-go"), ("wait", DONE), ("eval", "photoFits", NO_OVERFLOW)], width=width, mobile=width == 320)
     assert not result.get("failed"), result
     values = result["values"]
+    assert values["paste"]
+    assert base64.b64decode(calls[0][1]["data_base64"]) == PNG_REAL
     assert values["videoLimits"] == [3, "Длительность: 1–600 с", "Длительность: 1–600 с", "5"]
     assert values["tooLong"] == "Длительность — целое число секунд от 1 до 600"
     # 120 с вне пределов оценки (1–60) — умолчание её схемы
@@ -239,10 +251,8 @@ def test_photo_reference_stays_visible_and_requires_a_tool_that_accepts_it(brows
         ("wait", "document.querySelector('#photo-source img')?.naturalWidth > 0"),
         ("eval", "preview", "!document.querySelector('#photo-source').hidden"),
         ("click", "#photo-source-clear"),
-        ("eval", "paste", "(() => { const data = new DataTransfer();"
-         " data.items.add(new File(['image'], 'pasted.png', { type: 'image/png' }));"
-         " document.querySelector('#photo-prompt').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data })); })()"),
-        ("wait", "!document.querySelector('#photo-source').hidden"),
+        paste_image("body"),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth > 0"),
         ("click", "#photo-source-clear"),
         ("eval", "drop", "(() => { const data = new DataTransfer();"
          f" data.items.add(new File([Uint8Array.from(atob({base64.b64encode(PNG_REAL).decode()!r}), c => c.charCodeAt(0))],"
@@ -255,7 +265,7 @@ def test_photo_reference_stays_visible_and_requires_a_tool_that_accepts_it(brows
         ("eval", "retained", "[!document.querySelector('#photo-source').hidden, document.querySelector('#photo-prompt').value]"),
         ("click", "#photo-go"), ("wait", DONE)], width=1280)
     assert not result.get("failed"), result
-    assert result["values"]["clip"] and result["values"]["preview"]
+    assert result["values"]["clip"] and result["values"]["preview"] and result["values"]["paste"]
     assert "исходное фото" in result["values"]["blocked"]
     assert result["values"]["retained"] == [True, "Keep the composition"]
     assert [name for name, _ in calls] == ["artifact_upload", "image_edit"]

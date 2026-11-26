@@ -62,6 +62,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Неверная страница истории MCP": "Invalid MCP history page",
   "Ответы через MCP недоступны при обязательном Cleaner": "MCP replies are unavailable while Cleaner is required",
   "Подключение или права MCP изменились": "The MCP connection or permissions changed",
+  "Для повтора выберите исходное фото": "Choose the source photo to repeat the video",
+  "Ролик и его ссылка будут удалены.": "The video and its share link will be deleted.",
   "Сервер моделей MCP недоступен": "The MCP model server is unavailable",
   "Файл слишком велик для предпросмотра": "The file is too large to preview",
   "Обновите мост на компьютере для настройки MCP": "Update the bridge on the computer to configure MCP",

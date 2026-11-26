@@ -45,7 +45,7 @@ export function paramParts(step) {
 function meta(step, n) {
   const date = step.created ? dateOnly(step.created, { day: 'numeric', month: 'short' }) : '';
   const parts = step.kind === 'video'
-    ? [tr("{0} с", step.seconds), RESOLUTION[step.quality] || step.quality]
+    ? [step.seconds != null ? tr("{0} с", step.seconds) : null, RESOLUTION[step.quality] || step.quality]
     : paramParts(step);
   return [`${n}. ${KINDS[step.kind] || step.kind}`, ...parts, step.model ? step.server : null, date].filter(Boolean).join(' · ');
 }

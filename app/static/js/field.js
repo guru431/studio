@@ -83,6 +83,22 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   return { box, error };
 }
 
+/** Вставка исходного фото в открытом разделе работает и без фокуса в промпте. */
+export function imagePaste(input, attach) {
+  function paste(event) {
+    const data = event.clipboardData;
+    if (!data || event.defaultPrevented || !input.isConnected || input.closest('[hidden], [inert]')
+      || document.querySelector('dialog[open]')) return;
+    const image = [...data.files].find(file => file.type.startsWith('image/'))
+      || [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
+    if (!image) return;
+    event.preventDefault();
+    attach(image);
+  }
+  document.addEventListener('paste', paste);
+  return () => document.removeEventListener('paste', paste);
+}
+
 /** Сенсорный экран без мыши: на экранной клавиатуре нет Shift+Enter. */
 const TOUCH = '(pointer: coarse) and (hover: none)';
 

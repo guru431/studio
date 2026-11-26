@@ -9,7 +9,7 @@ from PIL import Image
 
 from fakes import PNG_REAL
 from test_mcp import TOKEN, URL
-from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, put_files, set_value  # noqa: F401
+from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, put_files, set_value, viewer_details  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -75,6 +75,8 @@ def bridge(gateway):
                 data = {"id": args["job_id"], "status": "running" if polls[args["job_id"]] == 1 else "completed"}
             elif name == "job_result":
                 data = {"result": {"text": "", "artifacts": [results[args["job_id"]]]}}
+                if args["job_id"] == JOBS["video_create"]:
+                    data["result"]["text"] = "640×640, 5 с (1 отрезк.), seed 424648865. Запрос для Wan: expanded prompt."
             else:
                 raise AssertionError(name)
             result = {"content": [{"type": "text", "text": json.dumps(data)}], "structuredContent": data}
@@ -104,6 +106,8 @@ def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live,
                            f"s.value = [...s.options].find(o => o.value.endsWith(':{tool}')).value;"
                            "s.dispatchEvent(new Event('change', { bubbles: true })); })()")
     ready = lambda tool: f"""document.querySelector('#section-mcp-tool option[value$=":{tool}"]')"""
+    clip = "#video-feed .video-card[data-state=done]"
+    two_clips = f"document.querySelectorAll('{clip}').length === 2"
     result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
         ("eval", "settings", "location.hash='#/settings/chat'"), ("wait", "document.querySelector('#mcp-add')"),
         ("click", "#mcp-add"), ("type", "#mcp-name", "Spark"), ("type", "#mcp-url", URL),
@@ -118,7 +122,20 @@ def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live,
         ("eval", "videoTools", options), choose("video_create"),
         put_files("#video-file", [("source.png", PNG_REAL)]),
         ("type", "#video-prompt", "Кот моргает"), set_value("#video-seconds", "5"), ("click", "#video-go"),
-        ("wait", "document.querySelector('#section-mcp-result [src^=\"/api/media/\"], #section-mcp-result [href^=\"/api/media/\"]')"),
+        ("wait", f"""document.querySelector('{clip} video[src^="/api/media/"]')"""),
+        ("eval", "inlineVideo", "!!document.querySelector('#section-mcp-result video')"),
+        ("click", "#video-view"), ("click", "#video-view-table"),
+        ("eval", "videoRow", f"document.querySelector('{clip}').textContent"),
+        ("click", f"{clip} .video-open"),
+        ("wait", "document.querySelector('#video-viewer .chain-prompt')?.textContent.includes('Кот моргает')"),
+        ("eval", "viewerFile", "document.querySelector('#video-viewer video').getAttribute('src')"),
+        *viewer_details(width, "#video-viewer"),
+        ("click", "#video-viewer .act-to-field"),
+        ("wait", "!document.querySelector('#video-viewer') && document.querySelector('#video-source img')?.naturalWidth > 0"),
+        ("eval", "restored", "[document.querySelector('#video-prompt').value, document.querySelector('#video-seconds').value]"),
+        ("click", f"{clip} .card-repeat"), ("wait", two_clips),
+        ("eval", "away", "location.hash='#/photo'"), ("wait", "document.querySelector('#photo-feed')"),
+        ("eval", "back", "location.hash='#/video'"), ("wait", two_clips),
         ("eval", "videoFits", NO_OVERFLOW),
         ("eval", "ocr", "location.hash='#/ocr'"), ("wait", "document.querySelector('#ocr-upload')?.offsetWidth > 0"),
         ("eval", "ocrTools", options),
@@ -131,11 +148,15 @@ def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live,
     assert values["photoTools"] == "image_generate,upscale_image" and values["videoTools"] == "video_create"
     assert values["ocrTools"] == "ocr_image"
     assert values["photoFits"] and values["videoFits"] and values["ocrFits"]
+    assert not values["inlineVideo"] and values["viewerFile"].startswith("/api/media/")
+    assert "Кот моргает" in values["videoRow"] and "seed 424648865" in values["videoRow"]
+    assert values["restored"] == ["Кот моргает", "5"]
     sent = [(name, args) for name, args in calls if name not in ("job_status", "job_result")]
     assert sent[0] == ("image_generate", {"prompt": "Рыжий кот", "size": "1024x1024", "n": 1})
     assert sent[1][0] == "artifact_upload" and sent[1][1]["mime_type"] == "image/png"
     assert sent[2] == ("video_create", {"artifact_id": UPLOADED, "prompt": "Кот моргает", "seconds": 5})
-    assert sent[3][0] == "artifact_upload" and sent[4] == ("ocr_image", {"artifact_id": UPLOADED})
+    assert sent[3][0] == "artifact_upload" and sent[4] == sent[2]
+    assert sent[5][0] == "artifact_upload" and sent[6] == ("ocr_image", {"artifact_id": UPLOADED})
     assert not problems(result), result.get("log")
 
 

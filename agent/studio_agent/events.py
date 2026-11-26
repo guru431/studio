@@ -5,7 +5,7 @@ import json
 
 from claude_agent_sdk import AssistantMessage, StreamEvent, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 
-from . import diffs, limits, timeline
+from . import diffs, history_images, limits, timeline
 
 HIDDEN = {"…": "ввод не показан — слишком большой"}
 
@@ -108,7 +108,7 @@ class Feed:
         """Новый блок текста после текста не на `\\n` — сперва пустая строка."""
         return self._text("\n\n") if self.text and not self.text.endswith("\n") else []
 
-    def events(self, message) -> list[dict]:
+    def events(self, message, *, remember_images=None) -> list[dict]:
         if getattr(message, "parent_tool_use_id", None) is not None:
             return []  # подагент
         if isinstance(message, StreamEvent):
@@ -132,17 +132,26 @@ class Feed:
                 elif isinstance(block, TextBlock) and block.text and not self._deltas:
                     out += self._gap() + self._text(block.text)
         elif isinstance(message, UserMessage) and isinstance(message.content, list):
+            images = []
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
                     e = bound({"k": "result", "id": block.tool_use_id, "text": clip(text_of(block.content)),
                                "error": bool(block.is_error)})
                     step = self._by_id.get(block.tool_use_id)
+                    pictures = [] if e["error"] else history_images.claude_result_blocks(block.content)
+                    pictures = pictures[:history_images.COUNT - len(images)]
                     if step is not None:
                         step.update(text=e["text"], error=e["error"])
                         changes = diffs.for_tool(step["tool"], step["input"]) if not e["error"] else []
                         if changes:
                             e["changes"] = step["changes"] = changes
+                        if refs := history_images.claude_result_refs(message.uuid, len(images), pictures, step["input"]):
+                            e["images"] = step["images"] = refs
+                    images.extend({"mime": picture["source"]["media_type"], "data": picture["source"]["data"]}
+                                  for picture in pictures)
                     out.append(e)
+            if remember_images and message.uuid and images:
+                remember_images(message=history_images.CLAUDE_RESULT_PREFIX + message.uuid, images=images)
         return out
 
 

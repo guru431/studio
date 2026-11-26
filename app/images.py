@@ -918,7 +918,8 @@ async def delete_image(image_id: str, request: Request):
     uid = request.state.user.id
     remote = _mcp_photo_row(uid, image_id)
     if remote is not None:
-        await delete_mcp_photo(remote)
+        from mcp_sections import delete_gallery_file
+        await delete_gallery_file(remote)
         return Response(status_code=204)
     row = _row(uid, image_id)
     if row["state"] not in TERMINAL:
@@ -928,28 +929,6 @@ async def delete_image(image_id: str, request: Request):
     log.info("картинка %s: в корзине", image_id[:8])
     return Response(status_code=204)
 
-
-async def delete_mcp_photo(row):
-    uid, job_id, mid = row["user_id"], row["mcp_job_id"], row["media_id"]
-    if row["status"] in {"queued", "waiting_gpu", "running", "saving"}:
-        raise HTTPException(409, {"code": "running", "message": "Дождитесь завершения задания MCP"})
-    state.DB.execute("BEGIN")
-    try:
-        state.DB.execute("DELETE FROM mcp_section_files WHERE job_id = ? AND user_id = ? AND media_id = ?", (job_id, uid, mid))
-        remaining = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ? AND EXISTS"
-                                    " (SELECT 1 FROM mcp_section_files WHERE job_id = ?)", (job_id, job_id)).fetchone()
-        if remaining is None:
-            state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (job_id,))
-        elif remaining["result"]:
-            result = json.loads(remaining["result"])
-            result["files"] = [file for file in result["files"] if file["url"] != f"/api/media/{mid}"]
-            state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), job_id))
-        state.DB.execute("COMMIT")
-    except BaseException:
-        state.DB.execute("ROLLBACK")
-        raise
-    if mid and not media.referenced(uid, mid):
-        await media.delete_async(uid, mid)
 
 
 async def purge(user_id: int, item_id: str) -> None:

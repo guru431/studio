@@ -892,6 +892,29 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return { segments, active: parts.at(-1)?.kind === 'text' ? segments.at(-1) : null };
   }
 
+  /** The latest preview of the same file wins within one answer. Bytes use the history-image budget. */
+  function paintResultImages(view, steps) {
+    if (engine !== 'claude' || !agent?.history_images) return;
+    const previews = new Map();
+    for (const step of Array.isArray(steps) ? steps : []) {
+      if (step?.error || !Array.isArray(step?.images)) continue;
+      const path = step.tool === 'Read' && step.images.length === 1 && step.input?.file_path;
+      for (const picture of step.images) {
+        if (typeof picture?.message_id !== 'string' || !Number.isInteger(picture.index) || picture.index < 0) continue;
+        previews.set(typeof path === 'string' && path || `${picture.message_id}/${picture.index}`, picture);
+      }
+    }
+    const next = new Map();
+    for (const picture of [...previews.values()].slice(-32)) {
+      const key = `${picture.message_id}/${picture.index}`;
+      next.set(key, view.previewNodes.get(key) || pictures.node(picture.message_id, picture, { expand: true }));
+    }
+    if (next.size === view.previewNodes.size && [...next.keys()].every(key => view.previewNodes.has(key))) return;
+    view.previewNodes = next;
+    view.previews.replaceChildren(...next.values());
+    view.previews.hidden = !next.size;
+  }
+
   function messageNode(m) {
     if (m.role === 'user') {
       if (engine === 'claude' && !m.images?.length) {
@@ -915,8 +938,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const progress = progressView({ onChanges: paintChangedFiles,
       openChild: children ? (row) => children.open(row) : null });
     progress.update(m.progress || {}, m.steps || []);
-    const view = { body, progress, ...renderTimeline(body, m) };
-    const node = el('div', { class: 'code-msg assistant' }, progress.root, body);
+    const previews = el('div', { class: 'code-result-images', hidden: true });
+    const view = { body, progress, previews, previewNodes: new Map(), ...renderTimeline(body, m) };
+    const node = el('div', { class: 'code-msg assistant' }, progress.root, body, previews);
+    paintResultImages(view, m.steps || []);
     messageViews.set(node, view);
     if (!m.live) answerTools(node, { text: m.text, model: displayModel(m.model) });
     return node;
@@ -1404,6 +1429,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         grow(() => {
           Object.assign(t.view, renderTimeline(t.steps, { ...data, live: true }));
           t.view.progress.update(data.progress || {}, t.models, true);
+          paintResultImages(t.view, t.models);
           // Карточка того же запроса остаётся прежней: набранный ответ, «вместо этого» и отметки снимок не стирает.
           const shownAsks = new Map([...feed.querySelectorAll('.code-ask')].map((card) => [card.dataset.request, card]));
           t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map((a) => {
@@ -1513,7 +1539,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
             completed ? { status: data.status || (data.error ? 'failed' : 'completed') } : {});
           grow(() => stepPaint.get(step)?.());
         }
-        if (turn) grow(() => turn.view.progress.update({}, turn.models));
+        if (turn) grow(() => {
+          turn.view.progress.update({}, turn.models);
+          if (completed) paintResultImages(turn.view, turn.models);
+        });
         continueActivity();
         return false;
       }

@@ -80,7 +80,7 @@ ITEMS = {"transcripts": ("transcribe", "/api/transcripts"), "translations": ("tr
          "speech_chats": ("speech", "/api/speeches/chats")}
 #: своя запись не из корзины, иначе 404 (`_row` раздела; у чата «Озвучки» — его записи)
 _ROWS = {"transcripts": transcripts._row, "translations": translate._row, "scans": ocr._row, "images": images._row,
-         "videos": videos._row, "speech_chats": speeches._chat_rows}
+         "videos": videos.share_row, "speech_chats": speeches._chat_rows}
 #: переписка Open WebUI (шаг 82, owui_share.py): свой `item_kind`, а не вид «как у Агентов» — прежний код (откат) его
 #: не знает и ссылку не открывает; `item_id` — "<owui_accounts.id>:<id чата>"
 OWUI = "owui"
@@ -643,7 +643,10 @@ def _same_origin(request):
 #: переписки Open WebUI — пока учётка Open WebUI подключена. Вид, которого здесь нет, недоступен — так прежний код
 #: (откат) не открывает ссылки новых видов
 _ALIVE = {**{t: f"s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL)"
-             for t in ("transcripts", "translations", "scans", "images", "videos")},
+             for t in ("transcripts", "translations", "scans", "images")},
+          "videos": "(s.item_id IN (SELECT id FROM videos WHERE deleted IS NULL AND user_id = s.user_id)"
+                    " OR EXISTS (SELECT 1 FROM (" + videos.MCP_VIDEOS + ") v"
+                    " WHERE v.user_id = s.user_id AND v.media_id = s.item_id))",
           "speech_chats": "s.item_id IN (SELECT chat_id FROM speeches WHERE deleted IS NULL AND user_id = s.user_id)",
           OWUI: "CAST(substr(s.item_id, 1, instr(s.item_id, ':') - 1) AS INTEGER) IN"
                 " (SELECT id FROM owui_accounts WHERE user_id = s.user_id)"}

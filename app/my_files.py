@@ -288,7 +288,7 @@ async def _declared(uid):
 STUDIO_FILES = """
 WITH files(id, section) AS (
     SELECT f.media_id, j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id
-      WHERE f.user_id = :uid
+      WHERE f.user_id = :uid AND f.media_id IS NOT json_extract(j.result, '$.video.source_media_id')
     UNION ALL SELECT media_id, 'photo' FROM images WHERE user_id = :uid AND deleted IS NULL
     UNION ALL SELECT media_id, 'video' FROM videos WHERE user_id = :uid AND deleted IS NULL
     UNION ALL SELECT media_id, 'speech' FROM speeches WHERE user_id = :uid AND deleted IS NULL

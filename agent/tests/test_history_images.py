@@ -6,9 +6,9 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from claude_agent_sdk import SessionMessage
+from claude_agent_sdk import AssistantMessage, SessionMessage, ToolResultBlock, ToolUseBlock, UserMessage
 
-from studio_agent import codex, history_images, opencode, projects, sessions
+from studio_agent import codex, events, history_images, opencode, projects, sessions
 from studio_agent.errors import Refused
 from test_agent import CHAT, agent, opened, req, root
 from test_codex import runner
@@ -42,6 +42,42 @@ def test_large_image_data_does_not_consume_the_history_page_budget(monkeypatch, 
     page = sessions.history(tmp_path, CHAT, None, 100)
     assert page["items"][0]["images"] == [{"index": 0, "name": "Изображение 1"}]
     assert len(json.dumps(page, ensure_ascii=True)) < 1024
+
+
+def test_claude_tool_images_keep_the_same_reference_in_live_and_saved_chat(monkeypatch, tmp_path):
+    picture = claude_message().message["content"][0]
+    image_result = [{"type": "text", "text": "preview"}, picture]
+    args = {"file_path": r"C:\workspace\project\.tmp\overview.png"}
+    invoke = {"type": "tool_use", "id": "read", "name": "Read", "input": args}
+    other = {"type": "tool_use", "id": "other", "name": "Read", "input": {}}
+    failed = {"type": "tool_result", "tool_use_id": "other", "content": [picture], "is_error": True}
+    success = {"type": "tool_result", "tool_use_id": "read", "content": image_result}
+    result = claude_message("result")
+    result.message["content"] = [failed, success]
+    reply = SessionMessage(type="assistant", uuid="answer", session_id=CHAT,
+                           message={"content": [other, invoke]})
+    monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **kw: [reply, result])
+    page = sessions.history(tmp_path, CHAT, None, 100)
+    saved = page["items"][0]["steps"][1]["images"]
+    assert saved == [{"index": 0, "name": "overview.png", "message_id": "tool:result"}]
+    assert "images" not in page["items"][0]["steps"][0] and len(page["items"]) == 1
+    assert PNG["data"] not in json.dumps(page)
+    assert sessions.history_image(tmp_path, CHAT, "tool:result", 0) == PNG
+    with pytest.raises(Refused, match="not_found"):
+        sessions.history_image(tmp_path, CHAT, "result", 0)
+
+    feed = events.Feed()
+    feed.events(AssistantMessage(model="claude", content=[ToolUseBlock(id="other", name="Read", input={}),
+                                                         ToolUseBlock(id="read", name="Read", input=args)]))
+    cache = history_images.LiveImages()
+    live = feed.events(UserMessage(uuid="result", content=[
+        ToolResultBlock(tool_use_id="other", content=[picture], is_error=True),
+        ToolResultBlock(tool_use_id="read", content=image_result)]),
+        remember_images=lambda **data: cache.remember(project=tmp_path, chat=CHAT, **data))
+    assert live[1]["images"] == feed.steps[1]["images"] == saved
+    assert PNG["data"] not in json.dumps(live)
+    assert cache.get(tmp_path, CHAT, "tool:result", 0) == PNG
+    assert cache.get(tmp_path, "different", "tool:result", 0) is None
 
 
 async def test_codex_image_reference_survives_history_and_is_read_only_from_the_selected_chat(runner):

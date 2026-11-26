@@ -48,6 +48,7 @@ import connections
 import db
 import forms
 import media
+import mcp_sections
 import operations
 import push
 import sections
@@ -62,6 +63,31 @@ router = APIRouter(prefix="/api/videos")
 #: Контракт API видео шлюза (спека 2026-10-19-srvllm-studio-video, «Решения исполнителя»).
 VIDEO_MODEL = "wan2.2-remix-i2v-v3"
 MODELS = {"wan": VIDEO_MODEL, "h3": "minimax-h3-dr34ml4y"}
+
+# Each playable file is an entry. The tool names in the SQL are from the Studio allowlist.
+MCP_VIDEOS = f"""
+SELECT COALESCE(f.media_id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server_id, j.server, j.tool, j.stamp,
+       j.status, j.error, COALESCE(NULLIF(j.model, ''), CASE
+           WHEN instr(substr(json_extract(j.result, '$.text'), 1, 256), '. Запрос для Wan:') > 0 THEN 'wan' ELSE '' END
+       ) AS model, j.prompt, j.created, f.media_id,
+       json_extract(j.result, '$.video') AS video, substr(json_extract(j.result, '$.text'), 1, 256) AS report,
+       source.id AS source_media_id
+FROM mcp_section_jobs j
+LEFT JOIN (
+    SELECT f.job_id, f.user_id, f.media_id FROM mcp_section_files f JOIN media m ON m.id = f.media_id
+    WHERE m.user_id = f.user_id AND m.mime LIKE 'video/%'
+) f ON f.job_id = j.id AND f.user_id = j.user_id
+LEFT JOIN media source ON source.id = json_extract(j.result, '$.video.source_media_id') AND source.user_id = j.user_id
+WHERE j.section = 'video' AND j.tool IN {tuple(sorted(mcp_sections.VIDEO_TOOLS))}
+  AND (f.media_id IS NOT NULL OR j.status <> 'completed')
+"""
+MCP_VIDEO_STATES = {"queued": ("queued", "В очереди"), "waiting_gpu": ("queued", "Ожидает GPU"),
+                    "running": ("in_progress", "Генерирую"), "saving": ("in_progress", "Сохраняю"),
+                    "cancelled": ("cancelled", "Отменено")}
+MCP_VIDEO_REPORT = re.compile(
+    r"^([1-9][0-9]{0,4}[×x][1-9][0-9]{0,4}), ([0-9]{1,3}(?:\.[0-9]{1,3})?) с(?: \([^)]{1,40}\))?,"
+    r" seed ([0-9]{1,16})\."
+)
 VIDEO_ID_RE = re.compile(r"video_[0-9a-f]{24}")
 # загрузка картинки и ответ `queued` — ролик шлюз не ждёт; чтение mp4 — тот же срок на кусок
 VIDEO_TIMEOUT_SEC = 120
@@ -156,6 +182,49 @@ def _out(row, with_chain=True, steps=None) -> dict:
     if with_chain:
         out["chain"] = chains.annotate(row["user_id"], chain)
     return card.mark(out, "video", row)
+
+
+def _mcp_video(uid, video_id, *, job=False):
+    query = " AND j.user_id = ? AND COALESCE(f.media_id, j.id) = ?"
+    args = (uid, video_id)
+    if job:
+        query = " AND j.user_id = ? AND (COALESCE(f.media_id, j.id) = ? OR j.id = ?) ORDER BY f.media_id LIMIT 1"
+        args += (video_id,)
+    return state.DB.execute(MCP_VIDEOS + query, args).fetchone()
+
+
+def _mcp_video_out(row, *, with_chain=True):
+    metadata = json.loads(row["video"]) if row["video"] else {}
+    arguments = metadata.get("arguments", {})
+    seconds = arguments.get("seconds")
+    seed, size = metadata.get("seed", arguments.get("seed")), None
+    if type(seed) is not int or not 0 <= seed <= 2**53 - 1:
+        seed = None
+    # Spark's older jobs have a report and saved files, with no structured video metadata.
+    if match := MCP_VIDEO_REPORT.match(row["report"] or ""):
+        size = match[1].replace("x", "×")
+        seconds = float(match[2])
+        if int(match[3]) <= 2**53 - 1:
+            seed = int(match[3])
+    source, result = row["source_media_id"], row["media_id"]
+    status, detail = ("done", "Готово") if result else MCP_VIDEO_STATES.get(row["status"], ("failed", "Ошибка"))
+    finished = metadata.get("finished")
+    if status in ACTIVE:
+        finished = clock.NOW()
+    out = {"id": row["id"], "mcp_job_id": row["mcp_job_id"], "mcp_server_id": row["server_id"],
+           "mcp_server": row["server"], "mcp_tool": row["tool"],
+           "state": status, "detail": row["error"] or detail, "progress": None, "prompt": row["prompt"],
+           "prompt_source": "given" if row["prompt"] else None, "seconds": seconds, "quality": arguments.get("quality"),
+           "smooth": arguments.get("smooth"), "seed": seed, "model": row["model"], "size": size, "source_media_id": source,
+           "media_id": result, "created": row["created"],
+           "elapsed": int(max(0, finished - row["created"])) if finished is not None else None,
+           "steps": 2 if source else 1}
+    if with_chain:
+        out["mcp_arguments"] = arguments
+        step = chains.video_step(video_id=row["id"], prompt=out["prompt"], prompt_source=out["prompt_source"],
+                                 seconds=seconds, quality=out["quality"], created=out["created"])
+        out["chain"] = chains.annotate(row["user_id"], chains.of_source(row["user_id"], source) + [step])
+    return out
 
 
 def _settle(video_id: str, state_: str, detail: str, media_id: "str | None" = None) -> bool:
@@ -456,11 +525,14 @@ async def repeat_video(video_id: str, request: Request):
     (`given`) повторяется, придуманный шлюзом — снова на усмотрение шлюза. Задания уходят шлюзу по одному
     (очередь — у шлюза); отказ после первого — уже принятые остаются, в ответе `message` словами."""
     uid = request.state.user.id
-    row = _row(uid, video_id)
     try:
         body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
+    remote = _mcp_video(uid, video_id)
+    if remote is not None:
+        return await _repeat_mcp(uid, remote, body.count)
+    row = _row(uid, video_id)
     # Если прежнее подключение недоступно, берём доступную связь раздела с моделью ролика.
     conn_id = row["connection_id"] if _connection(row, gate=True) is not None else None
     conn = _video_connection(uid, conn_id, row["model"])
@@ -485,6 +557,30 @@ async def repeat_video(video_id: str, request: Request):
     return {"items": [_out(r) for r in rows if r is not None], "message": message}
 
 
+async def _repeat_mcp(uid, row, count):
+    if row["status"] in mcp_sections.GALLERY_ACTIVE or not row["source_media_id"]:
+        raise HTTPException(409, {"code": "source", "message": "Для повтора выберите исходное фото"})
+    metadata = json.loads(row["video"])
+    arguments = {key: value for key, value in metadata["arguments"].items() if key != "seed"}
+    if row["prompt"]:
+        arguments["prompt"] = row["prompt"]
+    body = mcp_sections.RunIn(tool=row["tool"], arguments=arguments, record=True,
+                             files={"artifact_id": mcp_sections.FileIn(media_id=row["source_media_id"])})
+    items, message = [], None
+    for _ in range(count):
+        try:
+            reply = await mcp_sections.run_tool("video", row["server_id"], uid, body, stamp=row["stamp"])
+        except HTTPException as exc:
+            if not items:
+                raise
+            message = exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc.detail)
+            break
+        job_id = reply["history"]["id"]
+        entries = state.DB.execute(MCP_VIDEOS + " AND j.user_id = ? AND j.id = ? ORDER BY f.media_id", (uid, job_id))
+        items.extend(_mcp_video_out(entry, with_chain=False) for entry in entries)
+    return {"items": items, "message": message}
+
+
 @router.get("")
 async def list_videos(request: Request, before: "float | None" = None,
                       before_id: "str | None" = Query(None, max_length=64), after: "float | None" = None,
@@ -497,15 +593,27 @@ async def list_videos(request: Request, before: "float | None" = None,
         raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
     uid = request.state.user.id
     extra, args = (" AND deleted IS NULL AND model = ?", (model,)) if model else (" AND deleted IS NULL", ())
-    rows = db.page(state.DB, "videos", uid, before, before_id, limit, extra=extra, extra_args=args,
-                   after=None if after is None else (after, after_id)).fetchall()
-    steps = chains.video_counts(uid, rows)
-    return {"items": [_out(r, with_chain=False, steps=steps[r["id"]]) for r in rows]}
+    newer = None if after is None else (after, after_id)
+    native = db.page(state.DB, "videos", uid, before, before_id, limit, extra=extra, extra_args=args, after=newer).fetchall()
+    remote = db.page(state.DB, "(" + MCP_VIDEOS + ")", uid, before, before_id, limit,
+                     extra=" AND model = ?" if model else "", extra_args=args, after=newer)
+    steps = chains.video_counts(uid, native)
+    items = [_out(row, with_chain=False, steps=steps[row["id"]]) for row in native]
+    items.extend(_mcp_video_out(row, with_chain=False) for row in remote)
+    items.sort(key=lambda item: (item["created"], item["id"]), reverse=True)
+    return {"items": items[-limit:] if newer else items[:limit]}
 
 
 @router.get("/{video_id}")
 async def video_status(video_id: str, request: Request):
-    return _out(_row(request.state.user.id, video_id))
+    uid = request.state.user.id
+    remote = _mcp_video(uid, video_id, job=True)
+    return _mcp_video_out(remote) if remote is not None else _out(_row(uid, video_id))
+
+
+def share_row(uid, video_id):
+    remote = _mcp_video(uid, video_id)
+    return _mcp_video_out(remote, with_chain=False) if remote is not None else _row(uid, video_id)
 
 
 @router.post("/{video_id}/cancel")
@@ -527,6 +635,10 @@ async def delete_video(video_id: str, request: Request):
     """Идущий — сначала снять у шлюза (отказ — 502, ролик идёт дальше); затем в корзину (`deleted`, trash.py),
     идущий — ещё и отменённым: наблюдатель его больше не ждёт. Строка и файлы — до `purge`."""
     uid = request.state.user.id
+    remote = _mcp_video(uid, video_id)
+    if remote is not None:
+        await mcp_sections.delete_gallery_file(remote, source_id=remote["source_media_id"], share_kind="videos")
+        return Response(status_code=204)
     row = _row(uid, video_id)
     if row["state"] in ACTIVE:
         words = await _drop(row)

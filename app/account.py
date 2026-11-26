@@ -286,6 +286,10 @@ def _item_share(row) -> dict:
         column = "prompt" if kind in ("images", "videos") else "name"
         item = state.DB.execute(f"SELECT substr({column}, 1, 80) AS title, deleted IS NOT NULL AS trashed"
                                 f" FROM {kind} WHERE id = ?", (row["item_id"],)).fetchone()
+        if kind == "videos" and item is None:
+            from videos import MCP_VIDEOS
+            item = state.DB.execute("SELECT substr(prompt, 1, 80) AS title, 0 AS trashed FROM (" + MCP_VIDEOS + ")"
+                                    " WHERE user_id = ? AND media_id = ?", (row["user_id"], row["item_id"])).fetchone()
     else:
         return out
     return out | {"section": chat_shares.SECTIONS[kind], "title": item["title"] if item else None,

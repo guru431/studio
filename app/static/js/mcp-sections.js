@@ -18,6 +18,7 @@ const imageNames = {
 };
 
 const PHOTO_TOOLS = new Set(['image_generate', 'image_edit', 'generate_image', 'edit_image', 'upscale_image']);
+const VIDEO_TOOLS = new Set(['video_create', 'generate_video']);
 const JOB_WORDS = {
   queued: tr("В очереди"), waiting_gpu: tr("Ожидает GPU"), running: tr("Выполняется"),
   completed: tr("Готово"), cancelled: tr("Отменено"), failed: tr("Ошибка"),
@@ -195,7 +196,8 @@ function showResult(host, output, urls, render) {
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, onPhoto, key: place = section }) {
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, onPhoto, onVideo,
+  key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
   const suffix = place === section ? '' : `-${place.replace(/[^\w-]/g, '-')}`;
   const controller = new AbortController();
@@ -224,15 +226,23 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     el('summary', {}, tr("История MCP")), list);
   const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss, past);
   let historyLoaded = false;
+  const galleryTools = onVideo ? VIDEO_TOOLS : onPhoto ? PHOTO_TOOLS : null;
+  const galleryMime = onVideo ? 'video/' : 'image/';
+  const hasGalleryFile = output => output?.files?.some(file => file.mime.startsWith(galleryMime));
+  const inGallery = item => galleryTools?.has(item.tool) &&
+    (item.status !== 'completed' || (onVideo ? item.has_video : item.has_photo) || hasGalleryFile(item.result));
 
   async function loadHistory(before = '') {
     if (place !== section) return;
-    const page = await api('GET', base + '/history' + (before ? '?before=' + encodeURIComponent(before) : ''),
+    const query = new URLSearchParams();
+    if (before) query.set('before', before);
+    if (onVideo) query.set('without_clips', 'true');
+    const page = await api('GET', base + '/history' + (query.toString() ? '?' + query : ''),
       undefined, { signal: controller.signal });
     if (controller.signal.aborted) return;
     if (!before) list.replaceChildren();
     for (const item of page.items) {
-      if (onPhoto && PHOTO_TOOLS.has(item.tool) && (item.has_photo || item.status !== 'completed')) continue;
+      if (inGallery(item)) continue;
       const detail = el('div', { class: 'mcp-result' });
       const label = [dateTime(item.created), item.server, item.model && modelLabel(item.model), JOB_WORDS[item.status] || item.status]
         .filter(Boolean).join(' · ');
@@ -274,9 +284,10 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       list.append(more);
     }
     past.hidden = !list.childElementCount;
-    const active = !before && page.items.find(item => item.active);
+    const active = !before && (page.active || page.items.find(item => item.active));
     if (!historyLoaded && active && !record()) {
-      records.set(place, { id: active.id, job: active.id, state: active.status, photo: onPhoto && PHOTO_TOOLS.has(active.tool), key: active.server_id + ':' + active.tool });
+      records.set(place, { id: active.id, job: active.id, state: active.status, gallery: galleryTools?.has(active.tool),
+        inGallery: inGallery(active), key: active.server_id + ':' + active.tool });
       if (options.has(record().key)) {
         select.value = record().key;
         paintFields();
@@ -295,21 +306,28 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   const has = key => Object.hasOwn(picked()?.tool.schema.properties || {}, key);
   const hasFile = key => Object.hasOwn(picked()?.tool.files || {}, key);
 
+  function galleryChanged(current, item) {
+    current.inGallery = inGallery(item);
+    if (current.gallery && !controller.signal.aborted) (onVideo || onPhoto)(item);
+  }
+
   function paint() {
     if (controller.signal.aborted) return;
     const current = record();
     const active = busy();
-    const content = current?.photo && current.output?.files?.some(file => file.mime.startsWith('image/'))
-      ? null : current?.output;
+    const content = current?.gallery && hasGalleryFile(current.output) ? null : current?.output;
+    const inVideoFeed = onVideo && current?.inGallery && !current.retry;
+    const visibleError = inVideoFeed ? '' : current?.error;
+    const visibleActive = !inVideoFeed && active;
     select.disabled = active;
     extra?.disable(active);
     paintState();
     retry.hidden = !current?.retry;
-    dismiss.hidden = active || !(content || current?.error);
-    output.hidden = notice.hidden && past.hidden && !active && !(current?.error || content);
-    status.classList.toggle('error', !!current?.error);
-    status.classList.toggle('mcp-job-active', active);
-    status.textContent = current?.error || (active ? JOB_WORDS[current?.state] || tr("Отправляется…")
+    dismiss.hidden = active || !(content || visibleError);
+    output.hidden = notice.hidden && past.hidden && !visibleActive && !(visibleError || content);
+    status.classList.toggle('error', !!visibleError);
+    status.classList.toggle('mcp-job-active', visibleActive);
+    status.textContent = visibleError || (visibleActive ? JOB_WORDS[current?.state] || tr("Отправляется…")
       : content ? tr("Готово") : '');
     if (rendered !== content) {
       rendered = content;
@@ -342,7 +360,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
         current.job = null;
         current.error = reply.error || (!current.id && reply.status ? tr("Задание MCP завершилось со статусом «{0}»", reply.status) : '');
         current.output = current.id ? reply.result : !current.error ? reply : undefined;
-        if (current.photo) onPhoto(reply);
+        galleryChanged(current, reply);
         if (current.id) loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
       }
     } catch (err) {
@@ -360,7 +378,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const choice = source ? options.get(source) : picked();
     if (!choice || busy()) return false;
     const { server, tool } = choice;
-    const current = { starting: true, key: source || select.value, photo: onPhoto && PHOTO_TOOLS.has(tool.name) };
+    const current = { starting: true, key: source || select.value, gallery: galleryTools?.has(tool.name) };
     records.set(place, current);
     paint();
     try {
@@ -385,7 +403,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
         current.state = saved.status;
         current.output = saved.result;
         current.error = saved.error;
-        if (current.photo && !controller.signal.aborted) onPhoto(saved);
+        galleryChanged(current, saved);
         loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
       } else if (reply.job) {
         current.job = reply.job;
@@ -495,13 +513,19 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
         && (!withPrompt || Object.hasOwn(tool.schema.properties || {}, 'prompt')))?.[0];
     },
     sourceName(key) { return options.get(key)?.server.name; },
-    selectSource(key, model) {
+    selectSource(key, model, values = {}) {
       if (!options.has(key)) return false;
       select.value = key;
       paintFields();
-      const field = extra?.querySelector('[data-field="model"]');
-      if (field && model && (field.tagName !== 'SELECT' || [...field.options].some(o => o.value === model))) {
-        field.value = model;
+      for (const field of extra?.querySelectorAll('[data-field]') || []) {
+        const value = field.dataset.field === 'model' ? model : values[field.dataset.field];
+        if (value === undefined || value === null || value === '') continue;
+        if (field.tagName === 'BUTTON') {
+          field.setAttribute('aria-pressed', String(value === true));
+          continue;
+        }
+        if (field.tagName === 'SELECT' && ![...field.options].some(o => o.value === String(value))) continue;
+        field.value = String(value);
         field.dispatchEvent(new Event('change', { bubbles: true }));
       }
       paintState();

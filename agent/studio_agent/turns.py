@@ -593,12 +593,16 @@ class Runner:
                 t.start_attempted = True
                 await self._query(t, text, images)
                 self._accepted(t)
+
+                def remember_tool_images(**data):
+                    self._live_images.remember(project=t.project, chat=t.chat, **data)
+
                 while t.waiting:
                     received_result = False
                     async for message in self._stream(t):
                         self._subtask(t, message)
                         self._observe_answer(t, message)
-                        for e in t.feed.events(message):
+                        for e in t.feed.events(message, remember_images=remember_tool_images):
                             self._send(t, e)
                         result_message = isinstance(message, ResultMessage)
                         idle_message = (isinstance(message, SystemMessage)

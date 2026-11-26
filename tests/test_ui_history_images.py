@@ -7,7 +7,8 @@ import pytest
 from fake_bridge import T0, pid
 from fakes import PNG_REAL
 from test_codex import CATALOG
-from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_free_machine, code_online, code_session, live
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_loaded,
+                             code_online, code_send, code_session, go, live, problems, signin)
 from test_ui_desktop import desktop_browser
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -104,3 +105,45 @@ def test_image_is_restored_after_switching_chat_and_revoked_on_leave(desktop_bro
             assert not errors, errors
     finally:
         channel.stop()
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_claude_previews_tool_images_inline_during_the_turn_and_after_reopening(browser, live, width):
+    login = f"tool-image-{width}"
+    live.add_user(login)
+    path = r"C:\root\alpha\.tmp\overview.png"
+    earlier = {"index": 0, "name": "overview.png", "message_id": "tool:earlier"}
+    saved = {"index": 0, "name": "overview.png", "message_id": "tool:saved"}
+    live_image = {"index": 0, "name": "detail.png", "message_id": "tool:live"}
+    steps = [{"id": mid, "tool": "Read", "input": {"file_path": path}, "images": [image], "text": "[изображение]",
+              "error": False} for mid, image in [("old", earlier), ("new", saved)]]
+    first = code_session("Макеты", messages=[{"id": "answer", "role": "assistant", "text": "Общий план",
+                                             "steps": steps, "time": T0}])
+    png = {"mime": "image/png", "data": base64.b64encode(PNG_REAL).decode()}
+    first["image_data"] = {(saved["message_id"], 0): png, (live_image["message_id"], 0): png}
+    machine = code_free_machine({CODE_CHAT_A: first, CODE_CHAT_B: code_session("Другой чат")})
+    machine.history_images = True
+    machine.script = [{"k": "step", "id": "detail", "tool": "Read", "input": {"file_path": "detail.png"}},
+                      {"k": "result", "id": "detail", "text": "[изображение]", "images": [live_image]},
+                      {"k": "text", "text": "Фрагмент карты"}]
+    aid, channel = code_online(live, login, machine)
+    images = ".code-msg.assistant .code-result-images img"
+    ready = lambda name: f"""document.querySelector('{images}[alt="{name}"]')?.naturalWidth === 64"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", ready("overview.png")),
+            ("eval", "savedCount", f"document.querySelectorAll('{images}').length"),
+            ("click", ".code-result-image"), ("wait", "document.querySelector('#code-result-preview[open] img')?.naturalWidth === 64"),
+            ("click", "#code-result-preview .dialog-close"),
+            *code_send("Покажи фрагмент"), ("wait", ready("detail.png")),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_B}"), code_loaded(CODE_CHAT_B),
+            ("eval", "otherCount", f"document.querySelectorAll('{images}').length"),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A), ("wait", ready("detail.png"))],
+            width=width, mobile=width == 320)
+    finally:
+        channel.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["savedCount"] == 1 and result["values"]["otherCount"] == 0
+    requested = {frame["message_id"] for frame in machine.requests if frame["op"] == "history_image"}
+    assert requested == {"tool:saved", "tool:live"}
+    assert not problems(result), problems(result)

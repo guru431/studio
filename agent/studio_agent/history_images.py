@@ -11,6 +11,7 @@ from .errors import Refused
 
 COUNT = 32
 KINDS = ("image", "localImage", "input_image")
+CLAUDE_RESULT_PREFIX = "tool:"
 
 
 class LiveImages:
@@ -57,6 +58,32 @@ def reference(index):
 
 def references(content):
     return [reference(index) for index, _ in enumerate(blocks(content))]
+
+
+def claude_result_blocks(content):
+    """Inline raster images a Claude tool returned, with stable offsets across a raw message."""
+    found = []
+    for block in blocks(content):
+        source = block.get("source")
+        if (block.get("type") == "image" and isinstance(source, dict) and source.get("type") == "base64"
+                and source.get("media_type") in image_input.MIMES and isinstance(source.get("data"), str)
+                and 0 < len(source["data"]) <= (image_input.FILE_MAX + 2) // 3 * 4):
+            found.append(block)
+    return found
+
+
+def claude_result_refs(message_id, start, images, tool_input):
+    if not isinstance(message_id, str) or not message_id or not images:
+        return []
+    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    name = path.replace("\\", "/").rsplit("/", 1)[-1][:120] if isinstance(path, str) else ""
+    refs = []
+    for index in range(start, start + len(images)):
+        item = reference(index) | {"message_id": CLAUDE_RESULT_PREFIX + message_id}
+        if name and len(images) == 1:
+            item["name"] = name
+        refs.append(item)
+    return refs
 
 
 def _deepseek(block, root):

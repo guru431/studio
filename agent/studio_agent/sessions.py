@@ -61,15 +61,22 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
             continue
         content = m.message.get("content") if isinstance(m.message, dict) else None
         if m.type == "user":
+            image_offset = 0
             for block in content if isinstance(content, list) else []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     step = steps.get(block.get("tool_use_id"))
+                    pictures = [] if block.get("is_error") else history_images.claude_result_blocks(block.get("content"))
+                    pictures = pictures[:history_images.COUNT - image_offset]
                     if step is not None:
                         step["text"] = clip(text_of(block.get("content")))
                         step["error"] = bool(block.get("is_error"))
                         changes = diffs.for_tool(step["tool"], step["input"]) if not step["error"] else []
                         if changes:
                             step["changes"] = changes
+                        refs = history_images.claude_result_refs(m.uuid, image_offset, pictures, step["input"])
+                        if refs:
+                            step["images"] = refs
+                    image_offset += len(pictures)
             images = history_images.references(content)
             text = text_of([block for block in content if not isinstance(block, dict) or block.get("type") != "image"]
                            if images and isinstance(content, list) else content)
@@ -184,9 +191,15 @@ def history(project: Path, chat: str, before: int | None, limit: int, *, index=N
 
 def history_image(project, chat, message_id, index):
     """Изображение только сообщения главного агента в выбранной сессии проекта."""
+    tool_result = message_id.startswith(history_images.CLAUDE_RESULT_PREFIX)
+    message_id = message_id.removeprefix(history_images.CLAUDE_RESULT_PREFIX)
     for message in get_session_messages(chat, directory=str(project)):
         if message.uuid == message_id and message.type == "user" and message.parent_tool_use_id is None:
             content = message.message.get("content") if isinstance(message.message, dict) else None
+            if tool_result:
+                content = [image for block in (content if isinstance(content, list) else [])
+                           if isinstance(block, dict) and block.get("type") == "tool_result" and not block.get("is_error")
+                           for image in history_images.claude_result_blocks(block.get("content"))]
             return history_images.payload(content, index, "claude", project)
     raise Refused("not_found", "Сообщение отсутствует в этом чате")
 

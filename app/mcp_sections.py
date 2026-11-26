@@ -37,10 +37,11 @@ import upstream
 import voices
 
 router = APIRouter(prefix="/api/mcp-tools")
+VIDEO_TOOLS = {"video_create", "generate_video"}
 TOOLS = {
     "chat": {"llm_ask"},
     "photo": {"image_generate", "image_edit", "image_describe", "generate_image", "edit_image", "describe_image", "upscale_image"},
-    "video": {"video_create", "video_estimate", "generate_video"},
+    "video": VIDEO_TOOLS | {"video_estimate"},
     "speech": {"speech_synthesize", "synthesize_speech", "text_to_speech"},
     "transcribe": {"audio_transcribe", "transcribe_audio"},
     "ocr": {"document_read", "read_document", "ocr_image"},
@@ -61,6 +62,7 @@ TICKET_AGE = 3 * 60 * 60
 JOB_ID = re.compile(r"job_[0-9a-f]{32}")
 ARTIFACT_ID = re.compile(r"art_[0-9a-f]{32}")
 ACTIVE = {"queued", "running", "waiting_gpu"}
+GALLERY_ACTIVE = ACTIVE | {"saving"}
 INLINE_MIME = {mime for mime in media.EXT if mime.startswith(("image/", "audio/", "video/"))}
 TICKET_MIME = INLINE_MIME | {"text/plain", "text/markdown", "application/json", "application/octet-stream", media.DOCX}
 SRT_MAX = 2 << 20                # файл .srt итога «Расшифровки», который Studio читает сама для вида расшифровки
@@ -492,7 +494,7 @@ def accepts_name(tools) -> bool:
     return isinstance(schema, dict) and isinstance(schema.get("properties"), dict) and "name" in schema["properties"]
 
 
-async def upload(session, kind, file, *, named=False, original_size=False):
+async def prepare_upload(session, kind, file, *, named=False, original_size=False):
     name = file.name.strip() if named and isinstance(file.name, str) and file.name.strip() else None
     if file.media_id is not None:
         if kind != "image" or file.data is not None:
@@ -526,6 +528,11 @@ async def upload(session, kind, file, *, named=False, original_size=False):
                 raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
     if original_size and len(data) > forms.MAX_UPLOAD:
         raise mcp.refused("После подготовки фото больше 10 МиБ", "too_big", 413)
+    return data, mime, name
+
+
+async def upload(session, kind, file, *, named=False, original_size=False):
+    data, mime, name = await prepare_upload(session, kind, file, named=named, original_size=original_size)
     return (await upload_artifact(session, data, mime, name))["id"]
 
 
@@ -611,23 +618,32 @@ def check_bounds(tool: dict, args: dict) -> None:
 async def run(section: str, sid: int, request: Request):
     if section == "chat":
         raise mcp.refused("Для модели MCP откройте диалог", "not_found", 404)
-    names = section_tools(section)
-    uid = request.state.user.id
-    item = mcp.row(uid, sid)
-    session = mcp.Session(item, uid=uid)
     try:
         body = RunIn.model_validate_json(await forms.read_body(request, UPLOAD_MAX * 4 // 3 + PARAMS_MAX))
+    except ValidationError:
+        raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422) from None
+    return await run_tool(section, sid, request.state.user.id, body)
+
+
+async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None):
+    names = section_tools(section)
+    item = mcp.row(uid, sid)
+    if stamp is not None and stamp != mcp_sources.stamp(item["secret_enc"]):
+        raise mcp.refused("Подключение или права MCP изменились")
+    try:
         arguments = json.dumps(body.arguments, allow_nan=False)
-    except (ValidationError, ValueError, RecursionError):
+    except (ValueError, RecursionError):
         raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422) from None
     if body.tool not in names or len(arguments) > PARAMS_MAX or not access.tool_allowed(uid, sid, body.tool):
         raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
-    if body.photo_job_id:
-        prior = history_row(uid, "photo", body.photo_job_id)
-        if section != "photo" or (prior["server_id"], prior["tool"], prior["stamp"]) != (
-                sid, body.tool, mcp_sources.stamp(session.stamp)):
-            raise mcp.refused("Подключение или права MCP изменились")
+    session = mcp.Session(item, uid=uid)
+    video_source = new_source = None
     try:
+        if body.photo_job_id:
+            prior = history_row(uid, "photo", body.photo_job_id)
+            if section != "photo" or (prior["server_id"], prior["tool"], prior["stamp"]) != (
+                    sid, body.tool, mcp_sources.stamp(session.stamp)):
+                raise mcp.refused("Подключение или права MCP изменились")
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
             listed = await session.tools()
         tools = list(supported(section, listed, uid=uid, sid=sid, item=item))
@@ -649,8 +665,16 @@ async def run(section: str, sid: int, request: Request):
         else:
             check_bounds(tool, args)
             for key, file in body.files.items():
-                args[key] = await upload(session, tool["files"][key], file, named=named,
-                                         original_size=body.tool == "upscale_image")
+                if body.record and section == "video" and body.tool in VIDEO_TOOLS and key == "artifact_id":
+                    image, mime, name = await prepare_upload(session, "image", file, named=named)
+                    args[key] = (await upload_artifact(session, image, mime, name))["id"]
+                    video_source = file.media_id
+                    if video_source is None:
+                        operations.check(uid)
+                        new_source = video_source = await media.save_async(uid, image, mime, "studio-video-source.png", thumb=True)
+                else:
+                    args[key] = await upload(session, tool["files"][key], file, named=named,
+                                             original_size=body.tool == "upscale_image")
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
@@ -661,14 +685,19 @@ async def run(section: str, sid: int, request: Request):
         jid = data.get("id") if isinstance(data, dict) else None
         if body.record:
             remote_id = jid if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid) else None
-            return await record_result(session, section, item["name"], body.tool, args, result, remote_id, body.files)
+            return await record_result(session, section, item["name"], body.tool, args, result, remote_id, body.files,
+                                       video_source=video_source)
         if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid):
             return {"job": ticket(session, section, "job", jid), "status": "queued"}
         return await shown(session, section, result)
     except TimeoutError:
         raise mcp.refused("MCP не успел вернуть список инструментов") from None
     finally:
-        await session.close()
+        try:
+            await session.close()
+        finally:
+            if new_source and not media.referenced(uid, new_source):
+                await media.delete_async(uid, new_source)
 
 
 class JobIn(BaseModel):
@@ -709,10 +738,11 @@ def history_view(row, *, details=True):
     }
     if not details:
         output["has_photo"] = bool(row["has_photo"])
+        output["has_video"] = bool(row["has_video"])
     return output
 
 
-async def record_result(session, section, server, tool, args, result, remote_id, input_files):
+async def record_result(session, section, server, tool, args, result, remote_id, input_files, *, video_source=None):
     operations.check(session.uid)
     rid = uuid.uuid4().hex
     stamp = mcp_sources.stamp(session.stamp)
@@ -731,10 +761,23 @@ async def record_result(session, section, server, tool, args, result, remote_id,
             metadata["seed"] = seed
         if type(strength) in (int, float) and 0 <= strength <= 1:
             metadata["strength"] = strength
-    state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, "
-                     "created, stamp, remote_id, status, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (rid, session.uid, section, session.sid, server, tool, model, prompt, clock.NOW(), stamp,
-                      remote_id, "queued" if remote_id else "saving", json.dumps({"photo": metadata}) if metadata else None))
+    initial = {"photo": metadata} if metadata else {}
+    if section == "video" and tool in VIDEO_TOOLS:
+        initial["video"] = {"source_media_id": video_source,
+                            "arguments": {key: value for key, value in args.items() if key not in {"artifact_id", "prompt"}}}
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, "
+                         "created, stamp, remote_id, status, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (rid, session.uid, section, session.sid, server, tool, model, prompt, clock.NOW(), stamp,
+                          remote_id, "queued" if remote_id else "saving", json.dumps(initial) if initial else None))
+        if video_source and media.alive(session.uid, video_source):
+            state.DB.execute("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
+                             (rid, session.uid, video_source))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
     if remote_id is None:
         try:
             await save_history(session, section, rid, result)
@@ -792,13 +835,24 @@ async def save_history(session, section, rid, result):
             seed = data.get("seed")
             if type(seed) is int and 0 <= seed <= 2**53 - 1:
                 output["photo"]["seed"] = seed
+    elif section == "video":
+        stored = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()[0]
+        metadata = json.loads(stored).get("video") if stored else None
+        if metadata is not None:
+            metadata["finished"] = clock.NOW()
+            seed = data.get("seed") if isinstance(data, dict) else None
+            if type(seed) is int and 0 <= seed <= 2**53 - 1:
+                metadata["seed"] = seed
+            output["video"] = metadata
     state.DB.execute("BEGIN")
     try:
         state.DB.executemany("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
                              ((rid, session.uid, mid) for mid in media_ids))
         state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?",
                          (json.dumps(output, ensure_ascii=False), rid))
-        end_history(rid, "completed" if saved or output["text"] or not missing else "failed",
+        video_missing = "video" in output and not any(file["mime"].startswith("video/") for file in saved)
+        failed = missing and (video_missing or not (saved or output["text"]))
+        end_history(rid, "failed" if failed else "completed",
                     "Часть файлов MCP не удалось сохранить" if missing and saved else
                     "Файлы MCP не удалось сохранить" if missing else "")
         state.DB.execute("COMMIT")
@@ -872,7 +926,7 @@ async def watch_history():
 
 
 @router.get("/{section}/history")
-async def history(section: str, request: Request, before: str = ""):
+async def history(section: str, request: Request, before: str = "", without_clips: bool = False):
     section_tools(section)
     uid = request.state.user.id
     if before and not forms.MEDIA_ID_RE.fullmatch(before):
@@ -882,13 +936,23 @@ async def history(section: str, request: Request, before: str = ""):
     if before and cursor is None:
         raise mcp.refused("Запись истории MCP недоступна", "not_found", 404)
     extra = " AND (created, rowid) < (?, ?)" if cursor else ""
+    has_video = ("EXISTS (SELECT 1 FROM mcp_section_files f JOIN media m ON m.id = f.media_id"
+                 " WHERE f.job_id = j.id AND f.user_id = j.user_id AND m.mime LIKE 'video/%')")
+    filtered = without_clips and section == "video"
+    if filtered:
+        extra += f" AND NOT (j.tool IN {tuple(sorted(VIDEO_TOOLS))} AND (j.status <> 'completed' OR {has_video}))"
     rows = state.DB.execute("SELECT j.*, EXISTS (SELECT 1 FROM mcp_section_files f JOIN media m ON m.id = f.media_id"
-                            " WHERE f.job_id = j.id AND m.mime LIKE 'image/%') AS has_photo"
-                            " FROM mcp_section_jobs j WHERE user_id = ? AND section = ?" + extra
-                            + " ORDER BY created DESC, rowid DESC LIMIT ?",
+                            " WHERE f.job_id = j.id AND m.mime LIKE 'image/%') AS has_photo,"
+                            f" {has_video} AS has_video FROM mcp_section_jobs j WHERE user_id = ? AND section = ?"
+                            + extra + " ORDER BY created DESC, rowid DESC LIMIT ?",
                             (uid, section, *(tuple(cursor) if cursor else ()), HISTORY_PAGE + 1)).fetchall()
-    return {"items": [history_view(row, details=False) for row in rows[:HISTORY_PAGE]],
+    page = {"items": [history_view(row, details=False) for row in rows[:HISTORY_PAGE]],
             "next": rows[HISTORY_PAGE - 1]["id"] if len(rows) > HISTORY_PAGE else None}
+    if filtered and not before:
+        active = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE user_id = ? AND section = 'video'"
+                                  " AND remote_id IS NOT NULL ORDER BY created DESC, rowid DESC LIMIT 1", (uid,)).fetchone()
+        page["active"] = history_view(active) if active is not None else None
+    return page
 
 
 def history_row(uid, section, rid):
@@ -913,11 +977,49 @@ async def delete_history(section: str, rid: str, request: Request):
     if row["remote_id"] or row["status"] == "saving":
         raise mcp.refused("Дождитесь завершения задания MCP")
     mids = state.DB.execute("SELECT media_id FROM mcp_section_files WHERE job_id = ?", (rid,)).fetchall()
-    state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (rid,))
+    state.DB.execute("BEGIN")
+    try:
+        if section == "video":
+            state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = 'videos' AND item_id IN"
+                             " (SELECT media_id FROM mcp_section_files WHERE job_id = ?)", (uid, rid))
+        state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (rid,))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
     for (mid,) in mids:
         if not media.referenced(uid, mid):
             await media.delete_async(uid, mid)
     return Response(status_code=204)
+
+
+async def delete_gallery_file(row, *, source_id=None, share_kind=None):
+    """Drop one result, retaining the job and source while another output still refers to them."""
+    uid, job_id, mid = row["user_id"], row["mcp_job_id"], row["media_id"]
+    if row["status"] in GALLERY_ACTIVE:
+        raise HTTPException(409, {"code": "running", "message": "Дождитесь завершения задания MCP"})
+    state.DB.execute("BEGIN")
+    try:
+        if share_kind and mid:
+            state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = ? AND item_id = ?",
+                             (uid, share_kind, mid))
+        state.DB.execute("DELETE FROM mcp_section_files WHERE job_id = ? AND user_id = ? AND media_id = ?", (job_id, uid, mid))
+        remaining = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ? AND EXISTS"
+                                    " (SELECT 1 FROM mcp_section_files WHERE job_id = ? AND media_id IS NOT ?)",
+                                    (job_id, job_id, source_id)).fetchone()
+        if remaining is None:
+            state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (job_id,))
+        elif remaining["result"]:
+            result = json.loads(remaining["result"])
+            result["files"] = [file for file in result.get("files", []) if file["url"] != f"/api/media/{mid}"]
+            state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), job_id))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    for media_id in {mid, source_id} - {None}:
+        if not media.referenced(uid, media_id):
+            await media.delete_async(uid, media_id)
 
 
 class ArtifactStream(StreamingResponse):

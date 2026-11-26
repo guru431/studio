@@ -1,7 +1,7 @@
 import { tr } from './i18n.js';
 /* История хранит ссылки на картинки; бинарные данные загружаются только рядом с экраном.
  * Blob остаётся в памяти открытого чата и освобождается при прокрутке и уходе. */
-import { el } from './ui.js';
+import { el, openDialog } from './ui.js';
 
 const TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -19,7 +19,7 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
     entry.url = null;
     entry.size = 0;
     entry.image.removeAttribute('src');
-    entry.image.hidden = true;
+    entry.display.hidden = true;
     entry.note.hidden = false;
   }
   function visible(entry) {
@@ -58,7 +58,7 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
       entry.size = blob.size;
       used += blob.size;
       entry.image.src = entry.url;
-      entry.image.hidden = false;
+      entry.display.hidden = false;
       entry.note.hidden = true;
     } catch (error) {
       if (!alive || own.signal.aborted || !entry.node.isConnected) return;
@@ -99,13 +99,27 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
   scroller.addEventListener('scroll', pump, { passive: true });
 
   return {
-    node(message, picture) {
-      const image = el('img', { class: 'code-sent-image', alt: picture.name || tr("Изображение"), hidden: true });
+    node(message, picture, { expand = false } = {}) {
+      const name = typeof picture.name === 'string' && picture.name ? picture.name : tr("Изображение");
+      const image = el('img', { class: 'code-sent-image', alt: name });
+      const display = expand
+        ? el('button', { class: 'code-result-image', type: 'button', 'aria-label': tr("Открыть изображение") },
+          image, el('span', {}, name))
+        : image;
+      display.hidden = true;
       const note = el('span', { class: 'muted small' }, tr("Загрузка изображения…"));
       const retry = el('button', { class: 'btn btn-sm', type: 'button', hidden: true }, tr("Повторить загрузку"));
-      const node = el('div', { class: 'code-history-image' }, image, note, retry);
-      const entry = { node, image, note, retry, message, index: picture.index,
+      const node = el('div', { class: 'code-history-image' }, display, note, retry);
+      const entry = { node, image, display, note, retry, message, index: picture.index,
         url: null, size: 0, controller: null, failed: false, suspended: false, near: false };
+      if (expand) display.addEventListener('click', () => {
+        if (!entry.url) return;
+        const picture = el('img', { class: 'code-result-full', src: entry.url, alt: name });
+        const download = el('a', { class: 'btn btn-sm', href: entry.url, download: name }, tr("Скачать"));
+        const dialog = openDialog(feed, { id: 'code-result-preview', title: name, body: [picture], actions: [download],
+          cancelText: tr("Закрыть") });
+        dialog.classList.add('code-result-preview');
+      });
       retry.addEventListener('click', () => { entry.failed = false; pump(); });
       image.addEventListener('error', () => {
         if (!entry.url) return;
