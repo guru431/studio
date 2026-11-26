@@ -106,7 +106,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const sortBox = el('button', { type: 'button', id: 'code-project-sort-open', class: 'input code-project-sort',
     'aria-label': tr("Поиск и сортировка проектов") }, sortText);
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, tr("Ещё не обновлено"));
-  const newProject = el('button', { id: 'code-project-create', class: 'btn', type: 'button', hidden: true,
+  const newProject = el('button', { id: 'code-project-create', class: 'btn code-project-create-button', type: 'button', hidden: true,
     title: tr("Новый проект"), 'aria-label': tr("Новый проект"), 'aria-haspopup': 'dialog' },
     icon('plus'), el('span', { class: 'code-project-create-label' }, tr("Новый проект")));
   // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.

@@ -32,7 +32,6 @@ def test_list_marks_pin_and_title_search(browser, live, width):
     login = f"list-{width}"
     uid = live.add_user(login)
     mobile = width == 320
-    drawer = [("click", "#chats-toggle"), ("wait", "document.querySelector('.chat.panel-open')")] if mobile else []
     a, b = ROW.format("A"), ROW.format("B")
     # ответ Б идёт, пока человек не закрепил А: метка «идёт ответ» видна, потом опрос списка приносит «не прочитано»
     live.gw.chat_hold = lambda: state.DB.execute(
@@ -48,7 +47,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
               sessionStorage.setItem('test-chats', JSON.stringify([window.A, window.B]));   // переживут перезагрузку
               location.hash = '#/chat/' + window.A; return [window.A, window.B]; }})()"""),
             ("wait", f"{a}?.querySelector('[aria-current=page]') && {b}?.querySelector('.chat-mark[data-mark=busy]')"),
-            *drawer,
+            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "busy", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({b}.querySelector('.chat-mark'))"),
             ("eval", "pin", f"{a}.querySelector('.chat-pin').click()"),
             ("wait", f"{FIRST}[0] === 'Закреплённые' && {FIRST}[2] === 'true'"),
@@ -65,7 +64,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("eval", "reload", "location.reload()"),
             ("wait", f"{READY} && {FIRST}[0] === 'Закреплённые'"),
             ("eval", "again", "[window.A, window.B] = JSON.parse(sessionStorage.getItem('test-chats'))"),
-            *drawer,
+            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "kept", f"JSON.stringify({FIRST}) === JSON.stringify(['Закреплённые', 'Отчёт за квартал', 'true'])"),
             ("eval", "spy", """(() => { window.asked = 0; const real = window.fetch;
               window.fetch = (...args) => { window.asked += 1; return real(...args); }; return true; })()"""),
@@ -82,7 +81,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
               .draftStore('studio-chat-drafts').save(window.A, 'текст'))()"""),
             ("wait", f"{a}?.querySelector('.chat-mark[data-mark=draft]')"),
             ("eval", "draft", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({a}.querySelector('.chat-mark[data-mark=draft]'))"),
-            ("eval", "fits", f"""(() => {{ const side = document.querySelector('#chats').getBoundingClientRect();
+            ("eval", "fits", f"""(() => {{ const side = document.querySelector('.project-history').getBoundingClientRect();
               return {NO_OVERFLOW} && [...document.querySelectorAll('.chat-list .chat-pin')].every((pin) => {{
                 const r = pin.getBoundingClientRect();
                 return r.width > 0 && r.left >= side.left && r.right <= side.right;
@@ -147,7 +146,6 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
     login = f"tabs-{width}-{lang}"
     uid = live.add_user(login)
     mobile = width == 320
-    drawer = [("click", "#chats-toggle"), ("wait", "document.querySelector('.chat.panel-open')")] if mobile else []
     live.gw.chat_hold = True                                 # ответ диалога 6 идёт весь сценарий
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
@@ -161,10 +159,11 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
             *open_chat(0),
             ("eval", "one", "document.querySelector('#chat-tabs').hidden"),
             ("click", "#chat-tab-add"),
-            ("wait", "document.querySelector('#chat-tab-menu:popover-open')"),
-            set_value("#chat-tab-menu input", "Диалог 2"),
-            ("wait", "document.querySelectorAll('#chat-tab-menu .code-chat-link').length === 1"),
-            ("click", "#chat-tab-menu .code-chat-link"),
+            ("wait", "location.hash.includes('new=1') && !document.querySelector('.project-conversation').hidden"),
+            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            set_value("#chat-search", "Диалог 2"),
+            ("wait", "document.querySelectorAll('.chat-list .code-chat-link').length === 1"),
+            ("click", ".chat-list .code-chat-link"),
             ("wait", f"{ACTIVE}?.dataset.chat === window.ids[1]"),
             *open_chat(1), *open_chat(2),
             ("wait", "!document.querySelector('#chat-tabs').hidden"),
@@ -181,10 +180,10 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
             ("eval", "reloading", "location.reload()"),
             ("wait", f"{READY} && {ACTIVE}?.dataset.chat === location.hash.split('/')[2] && document.querySelector('.chat-item')"),
             ("eval", "reload", f"{TABS}.length"),
-            *drawer,
+            ("eval", "return_id", "window.toReturn = location.hash.split('/')[2]"),
+            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "mark", """(() => {
               window.toDelete = JSON.parse(localStorage.getItem('studio-chat-tabs')).ids[2];
-              window.toReturn = location.hash.split('/')[2];
               document.querySelector('.chat-item[data-id="' + window.toDelete + '"]').classList.add('under-test');
               return true;
             })()"""),

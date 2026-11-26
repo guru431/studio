@@ -105,9 +105,7 @@ def test_opening_chat_focuses_composer_only_on_desktop(focus_browser, live, sect
                     active_tab.locator('.code-tab-title').click()
                     check_focus()
             if section == "chat":
-                if width < 760:
-                    page.locator('#chats-toggle').click()
-                page.locator('#chat-new').click()
+                page.locator('#chat-tab-add').click()
                 check_focus()
                 chat_id = page.evaluate("""async () => {
                     const {api} = await import('/static/js/api.js');

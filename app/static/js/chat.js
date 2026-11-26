@@ -16,7 +16,7 @@ import { placeSummary } from './chat-summary.js';
 import { chatSkills, humanText, skillMessage } from './chat-skills.js';
 import { noteParts, partNode, partsButton } from './chat-parts.js';
 import { mcpStateWords } from './mcp-sections.js';
-/* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
+/* Раздел «Проекты» (#/chat?p=<проект> — история, &new=1 — новый диалог, #/chat/<id> — диалог): чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
  * Чип модели — отмеченные модели раздела «Чат» по подключениям (GET /api/sections), новый диалог —
@@ -108,7 +108,6 @@ import { mcpStateWords } from './mcp-sections.js';
 import { api, me, unknownOutcome } from './api.js';
 import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
-import { calendarDay } from './time.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { chatDrafts } from './chat-drafts.js';
@@ -218,11 +217,6 @@ document.addEventListener('studio-before-auto-refresh', (event) => {
 function elapsed(since) {
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function groupOf(updated) {
-  const days = calendarDay(Date.now() / 1000).number - calendarDay(updated).number;
-  return days <= 0 ? tr("Сегодня") : days === 1 ? tr("Вчера") : tr("Ранее");
 }
 
 /** Начало text не длиннее max единиц UTF-16 и без половины эмодзи на краю: одиночный старший
@@ -730,8 +724,13 @@ function sourcesNode(steps, ended) {
 
 /* ---- экран -------------------------------------------------------------------- */
 
+function newDialogRoute(pid = null) {
+  return pid ? `chat?p=${pid}&new=1` : 'chat?new=1';
+}
+
 function build(view, ctx) {
   let chatId;                  // показанный диалог; null — новый, ещё не созданный
+  let inHistory = false;
   let projects = [];
   let projectId = null;
   let draftProject = null;
@@ -778,24 +777,18 @@ function build(view, ctx) {
   const unfolded = new Set();  // id ответов, чьё рассуждение человек раскрыл: лента перестраивается целиком
 
   /* разметка */
-  const list = el('nav', { class: 'chat-list', 'aria-label': tr("Диалоги") });
-  const fresh = el('button', { type: 'button', class: 'btn chat-new', id: 'chat-new' }, icon('plus'), tr("Новый чат"));
+  const list = el('ul', { class: 'chat-list code-chats', 'aria-label': tr("Диалоги") });
   const projectsUI = projectsPanel({
-    chats: el('div', { class: 'project-chats' }, fresh, list),
+    user: ctx.me.id,
     select: (id) => ctx.navigate(`chat?p=${id}`),
     create: () => projectEditor(root, null, (item) => {
+      if (!alive) return;
       projects = [...projects.slice(0, 1), item, ...projects.slice(1)];
       ctx.navigate(`chat?p=${item.id}`);
     }),
-    edit: (item) => projectEditor(root, item, (saved) => {
-      projects = projects.map((p) => p.id === saved.id ? saved : p);
-      paintProjects();
-    }),
-    memory: (item) => projectMemory(root, item),
   });
-  const aside = el('aside', { id: 'chats', class: 'chats' }, projectsUI.node);
-  const backdrop = el('div', { class: 'chats-backdrop', hidden: true });
-  const toggle = iconButton('list', tr("Диалоги"), { id: 'chats-toggle', class: 'icon-btn chats-toggle', 'aria-controls': 'chats',
+  const backdrop = el('div', { class: 'code-backdrop', hidden: true });
+  const toggle = iconButton('list', tr("Проекты"), { id: 'chats-toggle', class: 'icon-btn code-panel-toggle', 'aria-controls': 'chats',
     'aria-expanded': 'false' });
   const chipName = el('span', { class: 'chip-name' });
   // чип модели — первым в ряду под полем, как выбор модели «Агентов»; подключение — подсказкой чипа и для скринридера
@@ -812,7 +805,26 @@ function build(view, ctx) {
   // название в шапке, действия с открытым диалогом над полем ввода (chat-title.js)
   const title = chatTitle({ rename: renameDialog, remove: deleteDialog, move: moveProject, pinItem,
     said: (text) => { notice.textContent = text; } });
-  const head = el('header', { class: 'head chat-head' }, toggle, title.label, title.note);
+  const projectLabel = el('span', { class: 'code-place-agent', hidden: true });
+  const projectSep = el('span', { class: 'code-place-sep', 'aria-hidden': 'true', hidden: true }, ' / ');
+  const filesLink = el('a', { class: 'chip', title: tr("Файлы проекта") }, tr("Файлы"));
+  const memoryButton = button(tr("Память"), { class: 'chip' }, () => projectMemory(root, currentProject()));
+  const settingsButton = button(tr("Настройки"), { class: 'chip' }, () => projectEditor(root, currentProject(), (saved) => {
+    if (!alive) return;
+    projects = projects.map((p) => p.id === saved.id ? saved : p);
+    paintProjects();
+  }));
+  const historyLink = el('a', { id: 'chat-project-history', class: 'chip', href: '#/chat' }, tr("Диалоги"));
+  const projectTools = el('div', { class: 'code-views project-actions' }, filesLink, memoryButton, settingsButton, historyLink);
+  const head = el('header', { class: 'code-head' },
+    el('div', { class: 'code-location' }, toggle,
+      el('div', { class: 'code-place' }, projectLabel, projectSep, title.label)), title.note,
+    el('div', { class: 'code-project-tools', hidden: true }, projectTools));
+  const tabsHost = el('div', { class: 'code-tabs-host' });
+  const top = el('div', { class: 'code-top' }, head, tabsHost);
+  const description = el('p', { class: 'muted small project-description', hidden: true });
+  const projectHistory = el('section', { class: 'code-body project-history', 'aria-label': tr("Диалоги"), hidden: true },
+    description, list);
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -909,8 +921,9 @@ function build(view, ctx) {
   });
   fieldTools.prepend(projectAttach);
   let suggestKey = null;       // подсказки пустого экрана: { query, items } последнего запроса (items — когда пришли)
-  const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
-  const root = el('div', { class: 'chat' }, aside, backdrop, main);
+  const conversation = el('div', { class: 'project-conversation' }, modelNote, scroller, answering, form);
+  const main = el('section', { class: 'code-main chat-main' }, top, notice, projectHistory, conversation);
+  const root = el('div', { class: 'code-ws chat project-workspace' }, projectsUI.node, main, backdrop);
   view.append(root);
   const findHost = el('div', { class: 'chat-find' });
   scroller.before(findHost);
@@ -998,16 +1011,21 @@ function build(view, ctx) {
     root.classList.toggle('panel-open', open);
     backdrop.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
+    if (!open) projectsUI.close();
   }
 
   // список (chat-list.js): метки, звезда, поиск по названиям; вкладки диалогов над лентой (chat-tabs.js)
-  const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : newChat()), info: tabInfo,
-    items: () => listed });
-  const listing = chatList(list, { row: listItem, group: groupOf, pinItem, project: () => currentProject()?.id,
+  const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : ctx.navigate(projectRoute())),
+    create: newChat, info: tabInfo });
+  const listing = chatList(list, { row: listItem, pinItem, project: () => currentProject()?.id,
     failed: (err) => { notice.textContent = words(err); },
-    loaded: (items) => { listed = items; tabs.sync(items.map((c) => c.id)); } });
-  fresh.after(listing.search);
-  modelNote.after(tabs.node);
+    loaded: (items) => {
+      listed = items;
+      tabs.sync(items.map((c) => c.id));
+      projectsUI.paint(projects, currentProject(), listed);
+    } });
+  list.before(el('div', { class: 'code-session-search' }, listing.search));
+  tabsHost.append(tabs.node);
 
   function currentProject() {
     return projects.find((item) => item.id === projectId) || projects.find((item) => item.inbox);
@@ -1015,13 +1033,30 @@ function build(view, ctx) {
 
   function projectCaption() {
     const project = currentProject();
-    return project && !project.inbox ? projectName(project) : tr("Проекты");
+    return project ? projectName(project) : tr("Проекты");
+  }
+
+  function projectRoute() {
+    const project = currentProject();
+    return project && !project.inbox ? `chat?p=${project.id}` : 'chat?history=1';
   }
 
   function paintProjects() {
-    projectsUI.paint(projects, currentProject());
-    projectAttach.hidden = !currentProject();
-    if (!chat && !chatId) title.set(null, projectCaption());
+    const current = currentProject();
+    projectsUI.paint(projects, current, listed);
+    projectTools.parentElement.hidden = !current;
+    projectAttach.hidden = !current;
+    if (current) {
+      filesLink.href = `#/myfiles?p=${current.id}`;
+      historyLink.href = `#/${projectRoute()}`;
+      description.textContent = current.description;
+    }
+    description.hidden = !current?.description;
+    if (inHistory) historyLink.setAttribute('aria-current', 'page');
+    else historyLink.removeAttribute('aria-current');
+    projectLabel.hidden = projectSep.hidden = !chatId || !current;
+    projectLabel.textContent = current ? projectName(current) : '';
+    if (!chatId) title.set(null, projectCaption());
     listing.paint();
   }
 
@@ -1071,14 +1106,18 @@ function build(view, ctx) {
   }
 
   function listItem(item) {
-    const link = el('a', { href: `#/chat/${item.id}`, class: 'chat-link', 'aria-current': item.id === chatId ? 'page' : null },
-      el('span', { class: 'chat-link-title' }, item.title || tr("Новый диалог")), chatTime(item.updated));
+    const text = item.title || tr("Новый диалог");
+    const time = chatTime(item.updated);
+    time.classList.add('code-chat-time');
+    const link = el('a', { href: `#/chat/${item.id}`, class: 'code-chat-link chat-link',
+      'aria-current': item.id === chatId ? 'page' : null },
+    el('span', { class: 'code-chat-title chat-link-title', title: text }, text), time);
     link.addEventListener('click', () => {
       panel(false);
       // уже открытый диалог адрес не меняет — нажатие перечитывает его (ход могли сделать с другого устройства)
       if (item.id === chatId && !sending && !jobs.has(chatId)) reload();
     });
-    return el('div', { class: 'chat-item', 'data-id': item.id }, link);
+    return el('li', { class: 'chat-item', 'data-id': item.id, 'data-chat': item.id }, link);
   }
 
   function renameDialog(item) {
@@ -1128,7 +1167,7 @@ function build(view, ctx) {
       const job = jobs.get(item.id);
       if (job) job.controller.abort();
       dialog.close();
-      if (chatId === item.id) newChat();
+      if (chatId === item.id) ctx.navigate(projectRoute());
       loadList();
     });
   }
@@ -1150,8 +1189,8 @@ function build(view, ctx) {
   function newChat() {
     panel(false);
     const project = currentProject();
-    const route = project && !project.inbox ? `chat?p=${project.id}` : 'chat';
-    if (location.hash === `#/${route}`) open(null, false, project?.id);
+    const route = newDialogRoute(project && !project.inbox ? project.id : null);
+    if (location.hash === `#/${route}`) focusDesktop(input);
     else ctx.navigate(route);
   }
 
@@ -1795,8 +1834,7 @@ function build(view, ctx) {
   }
 
   async function fromTranscript(tid, ask) {
-    history.replaceState(history.state, '', '#/chat');      // перезагрузка не сделает второе вложение
-    open(null);
+    history.replaceState(history.state, '', `#/${newDialogRoute()}`);  // перезагрузка не сделает второе вложение
     if (ctx.hint) return;                           // без модели чата новый диалог не начать
     notice.textContent = '';
     putAsk(ASKS[ask] || '');
@@ -1823,8 +1861,7 @@ function build(view, ctx) {
   /* из «Распознавания» (#/chat?ocr=<id>&ask=…): как из расшифровки, но модель — умолчание раздела и без окна
      внешней модели (спека OCR 6.4: документ свой) */
   async function fromScan(sid, ask) {
-    history.replaceState(history.state, '', '#/chat');      // перезагрузка не сделает второе вложение
-    open(null);
+    history.replaceState(history.state, '', `#/${newDialogRoute()}`);  // перезагрузка не сделает второе вложение
     if (ctx.hint) return;
     notice.textContent = '';
     putAsk(SCAN_ASKS[ask] || '');
@@ -2610,13 +2647,13 @@ function build(view, ctx) {
     scrollDown(false);
   }
 
-  async function open(id, restore = false, requested = null) {
+  async function open(id, restore = false, query = null) {
     panel(false);
     models.close();
     roles.close();
-    if (!ctx.hint || id !== null) focusDesktop(input);
-    const newProject = id === null && requested && !requested.startsWith('inbox-') ? requested : null;
-    if (id === chatId && (id === null ? newProject === draftProject : chat)) return;
+    const requested = query?.get('p') || null;
+    const historyView = id === null && !['new', 'transcript', 'ocr'].some((key) => query?.has(key));
+    if (id === chatId && (id === null ? historyView === inHistory && requested === projectId : chat)) return;
     find.reset();
     dropPreviews(root);
     root.querySelector('#project-file-picker[open]')?.close();
@@ -2627,9 +2664,14 @@ function build(view, ctx) {
     if (chatId !== undefined) dialogDrafts.leave(chatId);   // первое открытие — черновика прежнего диалога нет
     if (talking) talking();                          // «Разговор» — у своего диалога, другой его останавливает
     const mine = ++opened;
+    const previous = currentProject()?.id;
     chatId = id;
-    draftProject = newProject;
-    projectId = id ? listed.find((item) => item.id === id)?.project_id : requested;
+    inHistory = historyView;
+    draftProject = !historyView && id === null && requested && !requested.startsWith('inbox-') ? requested : null;
+    projectId = id ? listed.find((item) => item.id === id)?.project_id || null : requested;
+    if (previous !== currentProject()?.id) listing.search.value = '';
+    projectHistory.hidden = !inHistory;
+    conversation.hidden = inHistory;
     paintProjects();
     lastChat = id;
     dialogDrafts.enter(id);
@@ -2669,6 +2711,7 @@ function build(view, ctx) {
     syncBusy();
     paintChip();
     form.hidden = id === null && !!ctx.hint && !mcpModelServers.length;         // без модели новый диалог не начать; прежний — по правилам сервера
+    if (!inHistory && (!ctx.hint || id !== null)) focusDesktop(input);
     if (id === null) {
       feed.replaceChildren(form.hidden ? ctx.hint() : emptyNote());
       return;
@@ -2905,7 +2948,7 @@ function build(view, ctx) {
       draftKbs = knew;
       if (alive && location.hash === `#/chat/${id}`) {
         lastChat = null;
-        history.replaceState(history.state, '', draftProject ? `#/chat?p=${draftProject}` : '#/chat');
+        history.replaceState(history.state, '', `#/${newDialogRoute(draftProject)}`);
       }
       shareContext();
       feed.replaceChildren(emptyNote());
@@ -3239,7 +3282,6 @@ function build(view, ctx) {
     status.paint();                                // время стадии и «последнее событие N с назад»
   }, 1000);
 
-  fresh.addEventListener('click', newChat);
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   webToggle.addEventListener('click', switchWeb);
@@ -3352,6 +3394,7 @@ function build(view, ctx) {
       msgMenu.unmount();
       listing.unmount();
       tabs.unmount();
+      projectsUI.close();
       alive = false;
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);
@@ -3375,13 +3418,13 @@ export function mount(view, ctx) {
   screen = build(view, ctx);
   const restore = !ctx.id && !ctx.query?.size && lastChat !== null;
   if (restore) history.replaceState(history.state, '', `#/chat/${encodeURIComponent(lastChat)}`);
-  screen.open(restore ? lastChat : ctx.id, restore, ctx.query?.get('p'));
+  screen.open(restore ? lastChat : ctx.id, restore, ctx.query);
   screen.query(ctx.query);
 }
 
 export function update(ctx) {
   if (!screen) return;
-  screen.open(ctx.id, false, ctx.query?.get('p'));
+  screen.open(ctx.id, false, ctx.query);
   screen.query(ctx.query);
 }
 

@@ -1,8 +1,8 @@
 /* Список диалогов «Чата» (спека 2026-11-25-studio-skills-status-local-models, п. 23).
  *
- * chatList(list, { row, group, failed, loaded }) → { search, reload(), items(), seen(chat | null), unmount() }:
- * - reload() — GET /api/chats; сначала группа «Закреплённые» (`pinned`, порядок сервера — по `updated`), затем дни
- *   group(updated). Строку строит row(item) (chat.js, listItem); модуль дописывает звезду button.chat-pin[aria-pressed]
+ * chatList(list, { row, failed, loaded }) → { search, reload(), seen(chat | null), unmount() }:
+ * - reload() — GET /api/chats; сначала группа «Закреплённые» (`pinned`), затем остальные по `updated`.
+ *   Строку строит row(item) (chat.js, listItem); модуль дописывает звезду button.chat-pin[aria-pressed]
  *   («Закрепить» / «Открепить» → PATCH {pinned}) и метки span.chat-mark[data-mark=busy|unread|draft] без текста —
  *   слова в aria-label и title; «идёт ответ» важнее «не прочитано».
  *   Перерисовка — только когда ответ сервера изменился. Опрос — раз в
@@ -26,9 +26,9 @@ export const LIST_POLL_MS = 5000;
 const SEEN_REPEAT_MS = 60000;     // как chat_pending.REMIND_TICK_SEC: проход напоминаний — раз в минуту
 const MARKS = { busy: tr("идёт ответ"), unread: tr("не прочитано"), draft: tr("есть черновик") };
 
-export function chatList(list, { row, group, pinItem, project = () => null, failed = () => {}, loaded = () => {} }) {
+export function chatList(list, { row, pinItem, project = () => null, failed = () => {}, loaded = () => {} }) {
   const drafts = draftStore(CHAT_DRAFTS);
-  const search = el('input', { type: 'search', id: 'chat-search', class: 'input chat-search', autocomplete: 'off',
+  const search = el('input', { type: 'search', id: 'chat-search', class: 'input code-chat-search', autocomplete: 'off',
     placeholder: tr("Поиск по названиям"), 'aria-label': tr("Поиск по названиям") });
   let items = [];
   let answer = null;          // JSON последнего ответа сервера: тот же — без перерисовки
@@ -76,7 +76,8 @@ export function chatList(list, { row, group, pinItem, project = () => null, fail
         pin.disabled = false;
       }
     });
-    li.append(box, pin);
+    li.firstElementChild.append(box);
+    li.append(pin);
     rows.set(item.id, { item, box });
     paintMarks(item.id);
     return li;
@@ -85,28 +86,20 @@ export function chatList(list, { row, group, pinItem, project = () => null, fail
   function paint() {
     rows.clear();
     const pid = project();
-    const scoped = pid ? items.filter((item) => item.project_id === pid || !item.project_id) : items;
+    const scoped = pid ? items.filter((item) => item.project_id === pid) : [];
     if (!scoped.length) {
-      list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Диалогов пока нет")));
+      list.replaceChildren(el('li', { class: 'muted chat-list-note' }, tr("Диалогов пока нет")));
       return;
     }
     const query = search.value.trim().toLocaleLowerCase();
     const found = query ? scoped.filter((item) => (item.title || tr("Новый диалог")).toLocaleLowerCase().includes(query)) : scoped;
     if (!found.length) {
-      list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Ничего не найдено")));
+      list.replaceChildren(el('li', { class: 'muted chat-list-note' }, tr("Ничего не найдено")));
       return;
     }
-    const nodes = [];
-    let name = null;
-    for (const item of [...found.filter((i) => i.pinned), ...found.filter((i) => !i.pinned)]) {
-      const next = item.pinned ? tr("Закреплённые") : group(item.updated);
-      if (next !== name) {
-        name = next;
-        nodes.push(el('p', { class: 'chat-group' }, name));
-      }
-      nodes.push(decorate(item));
-    }
-    list.replaceChildren(...nodes);
+    const pinned = found.filter((i) => i.pinned);
+    list.replaceChildren(...(pinned.length ? [el('li', { class: 'chat-group' }, tr("Закреплённые"))] : []),
+      ...pinned.map(decorate), ...found.filter((i) => !i.pinned).map(decorate));
   }
 
   function schedule(retry = false) {
@@ -130,7 +123,7 @@ export function chatList(list, { row, group, pinItem, project = () => null, fail
         return null;
       }
       rows.clear();
-      list.replaceChildren(el('p', { class: 'error small chat-list-note' }, words(err)));
+      list.replaceChildren(el('li', { class: 'error small chat-list-note' }, words(err)));
       schedule();
       return null;
     }
@@ -161,7 +154,6 @@ export function chatList(list, { row, group, pinItem, project = () => null, fail
     search,
     reload,
     paint,
-    items: () => items,
     seen(chat, waiting = false) {
       watch(chat && waiting ? chat.id : null);
       if (!chat || document.visibilityState !== 'visible' || looked.get(chat.id) === chat.updated) return;

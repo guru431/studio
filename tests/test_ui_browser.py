@@ -1195,10 +1195,10 @@ SAVED = f"""(async () => {{ const m = {API};
 
 
 def open_new_chat(mobile=False):
-    """Раздел чата и «Новый чат»; на телефоне кнопка — в выдвижной панели."""
-    return [*go("chat"), ("wait", "document.querySelector('#chat-input') && document.querySelector('#model-chip')"),
-            *([("click", "#chats-toggle")] if mobile else []),
-            ("click", "#chat-new"), ("wait", "location.hash === '#/chat' && !document.querySelector('#messages .msg')")]
+    """Плюс после вкладок открывает новый диалог и на телефоне, и на компьютере."""
+    return [*go("chat"), ("wait", "document.querySelector('#chat-tab-add')"),
+            ("click", "#chat-tab-add"), ("wait", "location.hash.includes('new=1')"
+             " && !document.querySelector('.project-conversation').hidden && !document.querySelector('#messages .msg')")]
 
 
 def add_cloud(cloud, name="Облако"):
@@ -1310,7 +1310,7 @@ def test_chat_refuses_unfit_files_at_once_and_drops_the_empty_chat(browser, live
         ("click", "#composer .att-remove"), ("wait", "!document.querySelector('#composer .att-chip')"),
         ("eval", "attached2", attach(broken)[2]),
         ("click", "#send"),
-        ("wait", "document.querySelector('#composer .att-chip.bad') && location.hash === '#/chat'"),
+        ("wait", "document.querySelector('#composer .att-chip.bad') && location.hash === '#/chat?new=1'"),
         ("idle",),
         ("eval", "after", "[document.querySelector('#composer .att-chip .att-state').textContent,"
                           " document.querySelector('#chat-input').value, document.querySelectorAll('#messages .msg').length]")])
@@ -1340,7 +1340,8 @@ def test_chat_shows_turns_made_on_another_device(browser, live):
             ("eval", "focus", "window.dispatchEvent(new Event('focus'))"),
             ("wait", f"{count} === 4"),
             ("eval", "phone2", phone % "'Ещё с телефона'"),
-            ("click", ".chat-item [aria-current=page]"),
+            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("click", ".project-history .chat-item a"),
             ("wait", f"{count} === 6"),
             ("type", "#chat-input", "А теперь?"),
             # «телефон» начал долгий ответ — вкладка о нём не знает и отправляет своё
@@ -2108,7 +2109,7 @@ def test_chat_toolbar_renames_and_deletes(browser, live):
         ("click", "#chat-title-actions"), ("click", "#chat-title-delete"),
         ("wait", is_open("#chat-delete-dialog")),
         ("click", "#chat-delete-confirm"),
-        ("wait", f"!{is_open('#chat-delete-dialog')} && !{item} && location.hash === '#/chat'"),
+        ("wait", f"!{is_open('#chat-delete-dialog')} && !{item} && location.hash === '#/chat?history=1'"),
         ("eval", "gone", f"""(async () => {{ const m = {API};
           return !(await m.api('GET', '/api/chats')).items.some(c => c.id === window.made); }})()""")])
     assert not r.get("failed"), r
@@ -2176,8 +2177,9 @@ def test_chat_layout_fits_390(browser, live):
                                   " <= document.querySelector('#rail').getBoundingClientRect().top"),
             ("click", "#chats-toggle"),
             ("wait", f"{panel}.left === 0 && {panel}.right <= innerWidth"),
-            ("click", ".chat-item a"),
+            ("click", "#chats .project-link"),
             ("wait", f"{panel}.right <= 0"),
+            ("click", ".project-history .chat-item a"),
             ("eval", "overflow2", f"!({NO_OVERFLOW})")], width=390, mobile=True)
     finally:
         live.gw.chat_reply = saved
@@ -5156,7 +5158,7 @@ def test_transcript_to_chat_with_the_local_model_and_back(browser, live, width):
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["hash"] == "#/chat" and "Звонок.txt" in v["chip"] and "зн." in v["chip"]
+    assert v["hash"] == "#/chat?new=1" and "Звонок.txt" in v["chip"] and "зн." in v["chip"]
     assert v["question"] == "Составь краткие итоги этой записи: о чём говорили и к чему пришли."
     assert v["ready"] is True and v["fits"] is True and v["before"] == 0
     assert v["shown"].startswith("Расшифровка «Звонок.wav»") and "Собеседник 1 · 00:00\nЗдравствуйте." in v["shown"]
@@ -5451,7 +5453,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
-    assert v["chat"] == ["#/chat", "Переведи этот документ на русский"]
+    assert v["chat"] == ["#/chat?new=1", "Переведи этот документ на русский"]
     assert not problems(r), problems(r)
 
 

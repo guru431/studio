@@ -1,6 +1,7 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
   "Проекты": "Projects",
+  "По числу диалогов": "By number of conversations",
   "Без проекта": "No project",
   "Настройки проекта": "Project settings",
   "Инструкции для диалогов": "Conversation instructions",

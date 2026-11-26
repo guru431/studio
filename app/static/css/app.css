@@ -1001,33 +1001,15 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 /* ---- чат ---------------------------------------------------------------------- */
 
 .chat { flex: 1; min-height: 0; display: flex; }
-.chats { width: 248px; flex: none; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-6); overflow-y: auto;
-  background: var(--surface-side); border-right: 1px solid var(--line); }
-.chat-new { justify-content: flex-start; margin-bottom: var(--space-4); }
-.project-panel, .project-detail, .project-chats { display: grid; gap: var(--space-3); min-width: 0; }
-.project-detail { padding: 0 0 var(--space-3) var(--space-3); border-bottom: 1px solid var(--line); }
-.project-chats .chat-new { margin-bottom: 0; }
-.project-link, .project-create { justify-content: flex-start; }
-.project-link[data-inbox] { position: sticky; top: 0; z-index: 1; background: var(--surface-1); }
-.project-link span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.project-actions { flex-wrap: wrap; }
-.project-description { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .project-memory-list { margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; }
 .project-memory-list li { gap: var(--space-3); justify-content: space-between; overflow-wrap: anywhere; }
 .project-file-picker { display: grid; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
 .project-file-picker .btn { justify-content: flex-start; overflow-wrap: anywhere; }
-.chat-list { display: flex; flex-direction: column; gap: var(--space-1); }
 .chat-list-note { margin: var(--space-4) var(--space-3); }
-.chat-group { margin: var(--space-5) var(--space-4) var(--space-1); color: var(--text-2); font-size:var(--fs-xs); }
-.chat-item { position: relative; display: flex; align-items: center; border-radius: var(--r-control); }
-@media (hover: hover) { .chat-item:hover { background: var(--surface-2); } }
-.chat-link { flex: 1; min-width: 0; padding: 7px var(--space-2) 7px 9px; color: var(--text-1); text-decoration: none; font-size:var(--fs-md);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-link-title, .chat-updated { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-updated { color: var(--text-2); font-size: var(--fs-xs); font-weight: normal; }
-.chat-item:has(.chat-link[aria-current="page"]) { background: var(--surface-1); }
+.chat-group { margin: 0 var(--space-3); color: var(--text-2); font-size: var(--fs-xs); }
+.chat-link { text-decoration: none; }
+.chat-updated { color: var(--text-2); font-size: var(--fs-xs); font-weight: normal; white-space: nowrap; }
 /* список (chat-list.js): поиск по названиям, метки без текста (слова — aria-label), звезда «Закрепить» */
-.chat-search { flex: none; padding: 7px var(--space-4); }
 .chat-marks { flex: none; display: flex; align-items: center; gap: var(--space-2); padding-right: var(--space-1); }
 .chat-marks:empty { display: none; }
 .chat-mark { flex: none; width: 7px; height: 7px; border-radius: 50%; }
@@ -1039,22 +1021,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 :is(.chat-pin, .chat-title-pin)[aria-pressed="true"] svg { fill: currentColor; }
 /* вкладки диалогов (chat-tabs.js) над лентой: вид — ряд «Агентов», листается внутри себя */
 .chat-tabs { flex: none; min-width: 0; }
-.chat-tab-menu { width: min(360px, calc(100 * var(--vw) - 24px)); }
-.chat-tab-menu:popover-open { display: grid; gap: var(--space-3); }
-.chat-tab-menu .input { width: 100%; }
-.chat-tab-choices { display: grid; gap: var(--space-2); }
-.chat-tab-choices .code-chat-link { display: grid; gap: var(--space-1); }
-.chats-backdrop, .icon-btn.chats-toggle { display: none; }
 
 .icon-btn { position: relative; display: inline-grid; place-items: center; width: var(--h-icon); height: var(--h-icon); flex: none; padding: 0;
   border: 0; border-radius: var(--r-control); background: none; color: var(--text-2); cursor: pointer; }
 @media (hover: hover) { .icon-btn:hover { background: var(--surface-2); color: var(--text-1); } }
 .icon-btn svg.ico { width: 18px; height: 18px; }
 
-.chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.chat-head { gap: var(--space-4); }
-.chat-heading { flex: 1; min-width: 0; }
-.chat-head h1 { flex: 0 1 auto; min-width: 0; }
 .chat-title-actions[hidden], .chat-title-note[hidden] { display: none; }
 .chat-title-note { flex: none; white-space: nowrap; }
 /* чип модели — первым в ряду под полем; размеры — .ctl-chip («Агенты»), сжимается до многоточия */
@@ -1292,18 +1264,11 @@ video.msg-file-media { max-height: 320px; }
 .think.busy .think-text.open { max-height: none; }
 
 @media (max-width: 760px) {
-  .chats { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, calc(85 * var(--vw)));
-    padding-top: calc(12px + env(safe-area-inset-top, 0px)); transform: translateX(-100%); visibility: hidden;
-    transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
-  .chat.panel-open .chats { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
-  .chats-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
-  .icon-btn.chats-toggle { display: inline-grid; margin-left: -6px; }
   .feed { padding: var(--space-7); }
   .msg.user { max-width: 92%; }
   .msg.assistant { gap: var(--space-5); }
   .chat-error { margin: 0 var(--space-6) var(--space-4); }
 }
-@media (prefers-reduced-motion: reduce) { .chats { transition: none !important; } }
 
 /* ---- текст модели (renderMarkdown) -------------------------------------------- */
 
@@ -1922,14 +1887,14 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 @media (pointer: coarse) { .code-project-sort-menu :is(.code-project-search, .code-project-sort-option) { font-size:max(16px, var(--fs-sm)); } }
 .code-panel-footer .btn { padding: 0; font-size: var(--fs-2xl); line-height: 1; }
 .code-panel-footer .btn > span { display: inline-block; }
-.code-panel-footer #code-project-create { grid-column: 1 / -1; padding: var(--space-3); font-size: var(--fs-sm); line-height: 1.3; }
-#code-project-create > .ico { display: none; }
+.code-panel-footer .code-project-create-button { grid-column: 1 / -1; padding: var(--space-3); font-size: var(--fs-sm); line-height: 1.3; }
+.code-project-create-button > .ico { display: none; }
 .code-panel-footer .code-project-sort { grid-column: 1 / -1; }
 @media (max-width: 760px) {
-  .code-panel-footer:has(#code-project-create:not([hidden])) .code-project-sort { grid-column: 1; grid-row: 1; }
-  .code-panel-footer #code-project-create { grid-column: 2; grid-row: 1; padding: 0; }
-  #code-project-create > .ico { display: block; }
-  #code-project-create > .code-project-create-label { display: none; }
+  .code-panel-footer:has(.code-project-create-button:not([hidden])) .code-project-sort { grid-column: 1; grid-row: 1; }
+  .code-panel-footer .code-project-create-button { grid-column: 2; grid-row: 1; padding: 0; }
+  .code-project-create-button > .ico { display: block; }
+  .code-project-create-button > .code-project-create-label { display: none; }
 }
 .code-project-create .field { display: grid; gap: var(--space-3); margin-block: var(--space-5); min-width: 0; }
 .code-project-create .input { width: 100%; min-width: 0; }
@@ -2131,7 +2096,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-repo-sync { flex: none; white-space: nowrap; }
 .code-repo-status.unavailable { font-family: inherit; }
 .code-views .chip { background: color-mix(in srgb, var(--accent) 18%, var(--surface-1)); border-color: var(--accent); }
-.code-views .chip[aria-selected="true"] { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+.code-views .chip:is([aria-selected="true"], [aria-current="page"]) { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 .code-panel-toggle, .code-backdrop { display: none; }
 .code-status-box:empty { display: none; }
 #code-status { margin: var(--space-6) var(--space-7) 0; overflow-wrap: anywhere; }
@@ -2244,6 +2209,30 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 }
 @media (max-width: 360px) { .code-location { padding-right: calc(var(--fixed-icons-w) - 8px); } }
 @media (prefers-reduced-motion: reduce) { .code-panel { transition: none !important; } }
+
+/* «Проекты» используют панель, шапку, вкладки и карточки истории «Агентов». */
+.project-workspace { flex: 1; }
+.project-workspace .code-main { min-height: 0; }
+.project-workspace .icon-btn.code-panel-toggle { display: none; }
+.project-workspace .code-place { gap: var(--space-2); }
+.project-workspace .chat-heading { min-width: 0; }
+.project-workspace .chat-heading h1 { font: inherit; font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.project-workspace .chat-heading time { display: none; }
+.project-actions .chip { text-decoration: none; }
+.project-list .code-project-heading { min-height: var(--h-sm); }
+.project-list [data-inbox] { position: sticky; top: 0; z-index: 1; background: var(--surface-side); }
+.project-inbox-pin { display: grid; place-items: center; color: var(--accent); }
+.project-inbox-pin .ico { width: 16px; height: 16px; fill: currentColor; }
+.project-history { max-width: none; gap: 0; min-height: 0; overflow-y: auto; }
+.project-description { margin: 0 0 var(--space-6); white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-conversation { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+@media (width > 760px) {
+  .project-workspace > .code-panel { height: auto; align-self: stretch; }
+}
+@media (max-width: 760px) {
+  .project-workspace .icon-btn.code-panel-toggle { display: inline-grid; }
+  .project-actions.code-views { max-width: 100%; }
+}
 
 /* чат (code-chat.js): лента, шаги, карточки, поле */
 .code-chat { flex: 1; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; min-height: 0; contain: inline-size; }
@@ -2726,7 +2715,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   body.shell { display: block; height: auto; overflow: visible; }
   #view, .chat, .chat-main, .messages, .split, .split-main, .tl-source-text, .tl-output, .tl-pairs-wrap {
     height: auto; max-height: none; overflow: visible; }
-  :is(#rail, #menu, .head, .chats, .composer, .hint-bar, .split-aside, .msg-actions, .copy, .preview-open, .chat-error, .tl-past) {
+  :is(#rail, #menu, .head, .project-workspace > .code-panel, .project-workspace .code-top, .composer, .hint-bar, .split-aside, .msg-actions, .copy, .preview-open, .chat-error, .tl-past) {
     display: none; }
 }
 

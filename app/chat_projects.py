@@ -38,7 +38,7 @@ def scope(uid: int, chat_id: str) -> str | None:
 
 
 def _out(uid: int, row) -> dict:
-    return {key: row[key] for key in ("id", "name", "description", "context")} | {
+    return {key: row[key] for key in ("id", "name", "description", "context", "created")} | {
         "inbox": bool(row["inbox"]), "memory_on": memory.enabled(uid, None if row["inbox"] else row["id"])}
 
 

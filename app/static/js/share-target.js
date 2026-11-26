@@ -88,7 +88,7 @@ function fieldOf(section, selector) {
     const check = () => {
       if (sectionOf() !== section) return done(null);
       const field = !view.inert && view.querySelector(selector);
-      if (field) done(field);
+      if (field && !field.closest('.project-conversation[hidden]')) done(field);
     };
     const observer = new MutationObserver(check);
     function done(value) {
@@ -96,7 +96,7 @@ function fieldOf(section, selector) {
       window.removeEventListener('hashchange', check);
       resolve(value);
     }
-    observer.observe(view, { childList: true, subtree: true, attributes: true, attributeFilter: ['inert'] });
+    observer.observe(view, { childList: true, subtree: true, attributes: true, attributeFilter: ['inert', 'hidden'] });
     window.addEventListener('hashchange', check);
     check();
   });
@@ -138,9 +138,10 @@ document.addEventListener('studio-signed-out', () => forgetReceived(true));
 
 /** В поле раздела: файлы — как выбор файла (change), текст — как набор (input), к уже набранному. */
 async function deliver(section, { files, text }) {
-  if (sectionOf() !== section || location.hash.includes('/', 2)) {
+  const draft = section === 'chat' ? new URLSearchParams(location.hash.split('?')[1]).has('new') : true;
+  if (sectionOf() !== section || location.hash.includes('/', 2) || !draft) {
     const moved = new Promise((resolve) => window.addEventListener('hashchange', resolve, { once: true }));
-    location.hash = `#/${section}`;
+    location.hash = section === 'chat' ? '#/chat?new=1' : `#/${section}`;
     await moved;
   }
   if (files.length) {

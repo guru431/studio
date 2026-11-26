@@ -1,6 +1,8 @@
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { tr } from './i18n.js';
+import { popupPanel } from './menu.js';
+import { dialogDateTime } from './time.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 export const PROJECTS_API = '/api/chat-projects';
@@ -139,33 +141,78 @@ export function projectFilePicker(host, item, pick) {
   load();
 }
 
-export function projectsPanel({ select, create, edit, memory, chats }) {
-  const rows = el('div', { class: 'code-projects project-list', role: 'group', 'aria-label': tr("Проекты") });
-  const tools = el('div', { class: 'row project-actions' });
-  const description = el('p', { class: 'muted small project-description', hidden: true });
-  const detail = el('div', { class: 'project-detail' }, description, tools, chats);
-  const node = el('div', { class: 'project-panel' },
-    button(tr("Новый проект"), { class: 'btn project-create' }, create), rows, detail);
-  return { node, paint(items, current) {
-    if (!current) node.append(detail);
-    rows.replaceChildren(...items.flatMap((item) => {
-      const active = item.id === current?.id;
+export function projectsPanel({ user, select, create }) {
+  const rows = el('ul', { class: 'code-projects project-list' });
+  const orderKey = `studio-chat-project-sort:${user}`;
+  const options = new Map([
+    ['modified', tr("По дате изменения")], ['name', tr("По имени")], ['count', tr("По числу диалогов")],
+  ]);
+  let order = 'modified';
+  try {
+    const saved = localStorage.getItem(orderKey);
+    if (options.has(saved)) order = saved;
+  } catch { /* Сортировка доступна и без хранилища. */ }
+
+  const sortText = el('span', { class: 'code-project-sort-text' }, options.get(order));
+  const sort = button('', { id: 'chat-project-sort', class: 'input code-project-sort', 'aria-label': tr("Сортировка проектов") });
+  sort.append(sortText);
+  const sortOptions = el('fieldset', { class: 'code-project-sort-options' }, el('legend', {}, tr("Сортировка")));
+  const sortMenu = el('div', { class: 'code-project-sort-menu' }, sortOptions);
+  const popup = popupPanel(sort, sortMenu, { label: tr("Сортировка проектов"), side: 'above', followViewport: true });
+  for (const [value, text] of options) {
+    const radio = el('input', { type: 'radio', name: 'chat-project-order', value, checked: order === value });
+    radio.addEventListener('change', () => {
+      order = value;
+      try { localStorage.setItem(orderKey, value); } catch { /* Хранилище закрыто. */ }
+      sortText.textContent = text;
+      render();
+      popup.close(true);
+    });
+    sortOptions.append(el('label', { class: 'code-project-sort-option' }, radio, el('span', {}, text)));
+  }
+  const add = button('', { class: 'btn project-create code-project-create-button', 'aria-label': tr("Новый проект"),
+    title: tr("Новый проект"), 'aria-haspopup': 'dialog' }, create);
+  add.append(icon('plus'), el('span', { class: 'code-project-create-label' }, tr("Новый проект")));
+  const node = el('aside', { id: 'chats', class: 'code-panel', 'aria-label': tr("Проекты") },
+    el('div', { class: 'code-panel-body' }, rows), el('div', { class: 'code-panel-footer' }, add, sort, sortMenu));
+  let projects = [], current = null, activity = new Map(), drawn = null;
+
+  function render() {
+    const stats = (item) => activity.get(item.id) || { count: 0, updated: item.created || 0 };
+    const byName = (a, b) => projectName(a).localeCompare(projectName(b), undefined, { numeric: true });
+    const sorted = [...projects].sort((a, b) => Number(b.inbox) - Number(a.inbox)
+      || (order === 'count' ? stats(b).count - stats(a).count : 0)
+      || (order === 'modified' ? stats(b).updated - stats(a).updated : 0) || byName(a, b));
+    const signature = JSON.stringify(sorted.map((item) => [item.id, item.name, item.id === current?.id, stats(item)]));
+    if (signature === drawn) return;
+    drawn = signature;
+    rows.replaceChildren(...sorted.map((item) => {
+      const name = projectName(item);
+      const { count, updated } = stats(item);
       const link = el('a', { href: `#/chat?p=${item.id}`, class: 'code-project project-link',
-        'data-inbox': item.inbox ? 'true' : null,
-        'aria-current': active ? 'page' : null }, icon(item.inbox ? 'star' : 'folder'), el('span', {}, projectName(item)));
+        'aria-current': item.id === current?.id ? 'page' : null, title: name },
+      el('span', { class: 'code-project-heading' },
+        el('span', { class: 'code-project-title' }, el('span', { class: 'code-project-name' }, name)),
+        count ? el('span', { class: 'code-project-count' }, String(count)) : null,
+        item.inbox ? el('span', { class: 'code-project-pin project-inbox-pin', 'aria-hidden': 'true' }, icon('star')) : null),
+      updated ? el('span', { class: 'code-project-summary code-project-modified' }, dialogDateTime(updated)) : null);
       link.addEventListener('click', (event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
         select(item.id);
       });
-      return active ? [link, detail] : [link];
+      return el('li', { 'data-pid': item.id, 'data-inbox': item.inbox ? 'true' : null }, link);
     }));
-    description.hidden = !current?.description;
-    description.textContent = current?.description || '';
-    tools.replaceChildren(...(current ? [
-      el('a', { class: 'btn btn-sm', href: `#/myfiles?p=${current.id}` }, tr("Файлы проекта")),
-      button(tr("Память"), { class: 'btn btn-sm' }, () => memory(current)),
-      button(tr("Настройки"), { class: 'btn btn-sm' }, () => edit(current)),
-    ] : []));
-  } };
+  }
+
+  return { node, paint(items, selected, chats) {
+    projects = items;
+    current = selected;
+    activity = new Map();
+    for (const chat of chats) {
+      const old = activity.get(chat.project_id);
+      activity.set(chat.project_id, { count: (old?.count || 0) + 1, updated: Math.max(old?.updated || 0, chat.updated) });
+    }
+    render();
+  }, close: () => popup.close() };
 }

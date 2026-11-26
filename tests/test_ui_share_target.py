@@ -106,7 +106,7 @@ def test_shared_photo_and_text_land_in_the_chosen_section(chromium, live, mobile
         page.click("#submit")
         pw.expect(page.locator("#received")).to_be_visible()
         pw.expect(page.locator("#received .received-what")).to_have_text("документ.png")
-        assert choices(page) == [["ocr", "Сканы"], ["photo", "Фото"], ["chat", "Чат"]]
+        assert choices(page) == [["ocr", "Сканы"], ["photo", "Фото"], ["chat", "Проекты"]]
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.locator('#received [data-section="photo"]').click()
         page.wait_for_url("**/#/photo")
@@ -131,14 +131,16 @@ def test_shared_photo_and_text_land_in_the_chosen_section(chromium, live, mobile
             else:
                 assert page.evaluate("window.ocrPosts") == 0
 
-        # текст и ссылка — «Чат» или «Перевод»; ссылка, уже вписанная в текст, не повторяется
+        # Текст и ссылка — в новый диалог или в «Перевод»; ссылка из текста не повторяется.
         page.goto(live.url + "/robots.txt")
         page.evaluate(SHARE, {"png": "", "title": "Статья", "text": "Прочти https://example.com/a",
                               "url": "https://example.com/a"})
         pw.expect(page.locator("#received")).to_be_visible()
-        assert choices(page) == [["chat", "Чат"], ["translate", "Перевод"]]
+        assert choices(page) == [["chat", "Проекты"], ["translate", "Перевод"]]
         page.locator('#received [data-section="chat"]').click()
-        pw.expect(page.locator("#chat-input")).to_have_value("Статья\nПрочти https://example.com/a")
+        composer = page.locator("#chat-input")
+        pw.expect(composer).to_be_visible()
+        pw.expect(composer).to_have_value("Статья\nПрочти https://example.com/a")
 
         # «Не отправлять» — принятое забыто, при следующем запуске окна нет
         page.goto(live.url + "/robots.txt")
