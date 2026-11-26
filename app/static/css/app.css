@@ -2794,6 +2794,7 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
   border: 0; border-radius: var(--r-control); background: none; color: var(--text-1); text-align: left; text-decoration: none;
   font-size: var(--fs-sm); line-height: 1.3; cursor: pointer; }
 .owui-chat[aria-current="page"] { background: var(--surface-1); font-weight: 600; }
+.owui-chat-row { display: flex; align-items: center; min-width: 0; }
 .owui-chat-row > .owui-chat { flex: 1; width: auto; }
 .owui-chat-name { flex: 1; min-width: 0; }
 .owui-folder-name { flex: 1; }

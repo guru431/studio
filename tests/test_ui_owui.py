@@ -509,6 +509,12 @@ def test_owui_dialog_toolbar_pin_and_draft(owui_browser, live, fake, width):
         pin = page.locator("#owui-chat-list .chat-pin")
         pw.expect(page.locator("#owui-chat-list .owui-chat-row button")).to_have_count(1)
         pw.expect(pin).to_have_css("opacity", "1")
+        link, star = pin.evaluate("""button => [
+          button.previousElementSibling.getBoundingClientRect().toJSON(),
+          button.getBoundingClientRect().toJSON()
+        ]""")
+        assert link["x"] + link["width"] <= star["x"]
+        assert link["y"] <= star["y"] + star["height"] / 2 <= link["y"] + link["height"]
         pin.click()
         pw.expect(page.locator("#owui-pinned .chat-pin")).to_have_attribute("aria-pressed", "true")
         hide_panel(page)
