@@ -61,6 +61,15 @@ def settings(environ):
         replacements.append(("STUDIO_ALTERNATE_ORIGIN=", f"STUDIO_ALTERNATE_ORIGIN=https://{secondary.hostname}{port}"))
         replacements.append(("# Preserve Host when a second origin is configured.",
                              "ServerAlias " + secondary.hostname + "\n    ProxyPreserveHost On"))
+    spark_chat = environ.get("STUDIO_SPARK_CHAT_URL", "").removesuffix("/")
+    if spark_chat:
+        url_match = re.fullmatch(r"https?://([0-9.]+|\[[0-9a-fA-F:]+\])(?::([0-9]{1,5}))?/v1", spark_chat)
+        if url_match is None:
+            raise ValueError("Invalid STUDIO_SPARK_CHAT_URL: use an internal IP and the /v1 path")
+        ip, port = url_match.groups()
+        if ipaddress.ip_address(ip.strip("[]")).is_global or (port is not None and not 1 <= int(port) <= 65535):
+            raise ValueError("Invalid STUDIO_SPARK_CHAT_URL: use an internal IP and a valid port")
+        replacements.append(("STUDIO_SPARK_CHAT_URL=", "STUDIO_SPARK_CHAT_URL=" + spark_chat))
     apache_port = environ.get("STUDIO_APACHE_PORT", "8443")
     if not apache_port.isascii() or not apache_port.isdecimal() or not 1 <= int(apache_port) <= 65535:
         raise ValueError("Invalid STUDIO_APACHE_PORT")
@@ -93,7 +102,7 @@ def settings(environ):
                         or ".." in PurePosixPath(proxy_vhost).parts
                         or len(PurePosixPath(proxy_vhost).parts) < 4):
         raise ValueError("Invalid STUDIO_PROXY_VHOST")
-    return replacements, hairpin
+    return replacements, {"STUDIO_HAIRPIN_IP": hairpin, "STUDIO_SPARK_CHAT_URL": spark_chat}
 
 
 def substitute(text, replacements):
@@ -109,7 +118,8 @@ def substitute(text, replacements):
 
 
 def render(source, destination, environ):
-    replacements, hairpin = settings(environ)
+    replacements, service_env = settings(environ)
+    environment = "".join(f"\nEnvironment={name}={value}" for name, value in service_env.items() if value)
     with tarfile.open(fileobj=source, mode="r|") as incoming:
         with tarfile.open(fileobj=destination, mode="w|") as outgoing:
             for member in incoming:
@@ -118,10 +128,9 @@ def render(source, destination, environ):
                         body = contents.read()
                     if member.name in TEMPLATES:
                         text = substitute(body.decode("utf-8"), replacements)
-                        if hairpin and member.name.endswith(".service"):
+                        if environment and member.name.endswith(".service"):
                             text = re.sub(r"(?m)^(Environment=STUDIO_ORIGIN=.*)$",
-                                          lambda m: m[0] + "\nEnvironment=STUDIO_HAIRPIN_IP=" + hairpin,
-                                          text)
+                                          lambda m: m[0] + environment, text)
                         body = text.encode("utf-8")
                     member.size = len(body)
                     outgoing.addfile(member, io.BytesIO(body))

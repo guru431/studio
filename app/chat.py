@@ -22,9 +22,9 @@
    ждёт его, как ответ сервера.
 4. Вложение, которое так и не отправили, удаляется крестиком (`DELETE /api/attachments/{id}`) или
    уборкой (`sweep_attachments`) через ORPHAN_SEC.
-5. Вложение из расшифровки (`source_transcript_id`) в истории диалога — ход и повтор к нелокальной
-   модели (sections.is_local) только с `external_ok`, иначе 409 `external`; подтверждённым считается
-   диалог, где после последнего такого вложения уже есть ответ этой модели тем же путём (`_needs_consent`).
+5. Вложение из расшифровки (`source_transcript_id`) в истории диалога — ход и повтор только с `external_ok`,
+   если получателю ещё не дали согласие после последнего такого вложения (`_transcript_consent`), иначе 409 `external`.
+   Внутренние API моделей и пути через Cleaner освобождены от подтверждения (`_consent_free`).
    Ход, которому «Интернет» даёт Exa, с такой расшифровкой новее `chats.web_consent` — только с `web_ok`,
    иначе 409 `external_web` (после `external`); `web_ok` ставит `web_consent` (`_needs_web_consent`).
 6. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
@@ -327,7 +327,7 @@ class TurnIn(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=ATTACH_MAX)  # больше — ATTACHMENTS (main)
     regenerate: bool = False
     edit: EditTurnIn | None = None
-    external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
+    external_ok: bool = False        # человек подтвердил передачу расшифровки модели
     web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
     cleaner_ticket: str | None = Field(None, max_length=64)
     cleaner_rules: list[CleanerRule] = Field(default_factory=list, max_length=100)
@@ -398,26 +398,26 @@ def _chat_out(row) -> dict:
             "pinned": bool(row["pinned"])}
 
 
-def _needs_consent(chat_id: str, model: str, via: str) -> bool:
-    """В истории диалога (её ход уносит модели целиком) есть вложение из расшифровки, а после
-    последнего такого сообщения нет ответа ассистента этой модели тем же путём (`via`). Такой ответ и
-    есть след подтверждения: ход с расшифровкой к нелокальной модели без `external_ok` не проходит.
-    Подключение сообщение не хранит (схема прежняя) — пара сводится к модели и пути: та же модель
-    другого подключения того же пути считается подтверждённой."""
+def _transcript_consent(chat_id: str, conn: Connection, model: str, *, confirmed: bool = False) -> tuple[bool, str | None]:
+    """Нужно ли согласие и чей отпечаток сохранить, если отправка последней расшифровки подтверждена."""
     last = state.DB.execute(
         "SELECT m.created, m.rowid FROM messages m JOIN attachments a ON a.message_id = m.id"
         " WHERE m.chat_id = ? AND a.source_transcript_id IS NOT NULL ORDER BY m.created DESC, m.rowid DESC LIMIT 1",
         (chat_id,)).fetchone()
-    return last is not None and state.DB.execute(
-        "SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND model = ? AND via = ?"
-        " AND (created, rowid) > (?, ?) LIMIT 1", (chat_id, model, via, last[0], last[1])).fetchone() is None
+    if last is None:
+        return False, None
+    recipient = hashlib.sha256(json.dumps(connections.model_endpoint(conn)).encode()).hexdigest()
+    approved = confirmed or state.DB.execute(
+        "SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND model = ? AND transcript_consent = ?"
+        " AND (created, rowid) > (?, ?) LIMIT 1",
+        (chat_id, model, recipient, last[0], last[1])).fetchone() is not None
+    return not approved, recipient if approved else None
 
 
 def _needs_web_consent(chat_id: str, consent: "float | None") -> bool:
     """В истории диалога есть вложение из расшифровки новее подтверждения «расшифровка и Exa»
-    (`chats.web_consent`; NULL — не было): запросы модели к Exa составлены из всей истории. Прежний след
-    (`_needs_consent`: ответ той же модели) не годится — Exa не модель; расшифровка, вложенная позже
-    подтверждения, спрашивает снова."""
+    (`chats.web_consent`; NULL — не было): запросы модели к Exa составлены из всей истории. Согласие модели
+    хранится отдельно (`_transcript_consent`). Новая расшифровка требует нового подтверждения для Exa."""
     return state.DB.execute(
         "SELECT 1 FROM messages m JOIN attachments a ON a.message_id = m.id WHERE m.chat_id = ?"
         " AND a.source_transcript_id IS NOT NULL AND (? IS NULL OR m.created > ?) LIMIT 1",
@@ -437,8 +437,8 @@ def _chat_connection(user_id: int, conn_id: "int | None") -> "Connection | None"
 
 def _chat_view(user_id: int, row) -> dict:
     """Диалог для страницы (GET, POST, PATCH одного): ещё `local` — модель диалога локальная
-    (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
-    подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`); `web` — кнопка
+    (sections.is_local), `transcript_consent_free` — получатель с освобождением от подтверждения для нового
+    вложения, `external` — в истории есть расшифровка и нужно согласие для следующего хода; `web` — кнопка
     «Интернет» и `web_tools` — виды инструментов, которые она даст на этом подключении (web.tools_for; пусто
     у прямого подключения — там `web` хранится, но не действует, — и без ключа Exa); `proxied` — подключение
     диалога через сервер (страница: нет — кнопки нет, есть без ключа — кнопка выключена с подсказкой);
@@ -457,8 +457,9 @@ def _chat_view(user_id: int, row) -> dict:
     out["dropped"] = conn is not None and connections.dropped(conn)
     out["cleaner"] = conn is not None and conn.cleaner
     out["routed"] = conn is not None and conn.routed          # ход идёт через шлюз Cleaner (cleaner_route)
-    out["external"] = conn is not None and not conn.cleaner and not conn.routed and not out["local"] and _needs_consent(
-        row["id"], model, "server" if conn.proxied else "browser")
+    out["transcript_consent_free"] = conn is not None and _consent_free(conn, model)
+    out["external"] = (conn is not None and not out["transcript_consent_free"]
+                       and _transcript_consent(row["id"], conn, model)[0])
     out["web"] = bool(row["web"])
     out["proxied"] = conn is not None and conn.proxied
     out["web_tools"] = [] if out["cleaner"] else web.tools_for(conn, web.has_exa_key(user_id))
@@ -516,10 +517,9 @@ def _admit(user_id: int, conn: Connection, model: str, mcp_ids: "str | None" = N
         _chat_pair(user_id, conn.id, model)
 
 
-def _consent_free(conn: Connection, model: str, external_ok: bool = False) -> bool:
-    """Расшифровку в истории можно отдать модели без подтверждения: подтверждено телом хода, модель локальная, или
-    путь через Cleaner (предпросмотр или шлюз `cleaner_route`)."""
-    return external_ok or sections.is_local(conn, model) or conn.cleaner or conn.routed
+def _consent_free(conn: Connection, model: str) -> bool:
+    """Расшифровку можно передать внутреннему API модели или через Cleaner без отдельного подтверждения."""
+    return conn.cleaner or conn.routed or bool(sections.transcript_local_models(conn, (model,)))
 
 
 def _mark_routed(conn: Connection, chat_id: str) -> None:
@@ -531,7 +531,7 @@ def _mark_routed(conn: Connection, chat_id: str) -> None:
 
 
 def _external(conn: Connection) -> HTTPException:
-    """409 `external`: история с расшифровкой уйдёт внешней модели без подтверждения (`_needs_consent`)."""
+    """409 `external`: история с расшифровкой уйдёт внешней модели без подтверждения."""
     return HTTPException(409, {"code": "external", "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
 
 
@@ -3405,9 +3405,8 @@ async def summarize_dialog(uid: int, row, upto: str, *, keep_skill: bool = False
         raise HTTPException(409, NO_COMPACT)
     model = row["model"] or manage.DEFAULT_MODEL
     _admit(uid, conn, model)                         # история уходит модели — допуски хода (create_turn)
-    # расшифровка в истории: без подтверждения ходом этой модели — отказ, как у хода без `external_ok`
-    # (подтверждают отправкой хода; след подтверждения — её ответ, `_needs_consent`)
-    if not _consent_free(conn, model) and _needs_consent(chat_id, model, "server"):
+    # Для пересказа действует согласие, данное при отправке хода этому получателю.
+    if not _consent_free(conn, model) and _transcript_consent(chat_id, conn, model)[0]:
         raise _external(conn)
     limit = await model_window(conn, model)
     if limit is None:
@@ -3422,7 +3421,7 @@ async def summarize_dialog(uid: int, row, upto: str, *, keep_skill: bool = False
         raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
     conn = current
     _admit(uid, conn, model)                         # снятие модели или принудительный режим — тем временем
-    if not _consent_free(conn, model) and _needs_consent(chat_id, model, "server"):
+    if not _consent_free(conn, model) and _transcript_consent(chat_id, conn, model)[0]:
         raise _external(conn)
     ids = []
     composed = compose(chat_id, upto, model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)), ids=ids)
@@ -3699,7 +3698,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     scans = _pending_scans(uid, chat_id, atts, edit)
     if scans and via == "browser":
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
-    free = _consent_free(conn, model, body.external_ok)
+    free = _consent_free(conn, model)
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -3730,13 +3729,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         # живой ответ сюда не доходит: его ждёт _busy
         state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
                          " AND status = 'streaming'", (chat_id,))
-        # расшифровка в истории (и в этом ходе) к нелокальной модели — только с подтверждением; у повтора
-        # след подтверждения ищется до удаления прежнего ответа: он мог быть им. Повтор оставляет прежние ответы
-        # невыбранными вариантами; новый ход фиксирует выбранный — невыбранные удаляются (правка — с хвостом)
-        if body.regenerate:
-            ask = not free and _needs_consent(chat_id, model, via)
-            user_mid = _new_variant(chat_id)
-        else:
+        # Новый ход оставляет выбранный вариант. Правка удаляет хвост и переиспользует сообщение.
+        if not body.regenerate:
             if edit is None:
                 state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND unchosen = 1", (chat_id,))
                 user_mid = uuid.uuid4().hex
@@ -3754,9 +3748,12 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 if state.DB.execute("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL",
                                     (user_mid, a["id"])).rowcount != 1:
                     raise _gone("вложения нет или оно уже отправлено")
-            ask = not free and _needs_consent(chat_id, model, via)
+        # При повторе прежний ответ ещё на месте. Новый наследует согласие для того же получателя.
+        ask, consent = ((False, None) if free else _transcript_consent(chat_id, conn, model, confirmed=body.external_ok))
         if ask:
             raise _external(conn)
+        if body.regenerate:
+            user_mid = _new_variant(chat_id)
         # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —
         # только с `web_ok`; подтверждение — `now`, им покрыта и расшифровка этого хода (created = now)
         if "search" in kinds or mcp_ids:
@@ -3796,9 +3793,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             raise HTTPException(429, {"code": "streams", "message": (
                 f"Сразу идёт не больше {USER_STREAMS} ответов в разных диалогах — дождитесь одного из них"
                 " или остановите")})
-        state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
-                         " VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?, ?)",
-                         (answer_id, chat_id, via, model, now, now))
+        state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at,"
+                         " transcript_consent) VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?, ?, ?)",
+                         (answer_id, chat_id, via, model, now, now, consent))
         title = row["title"] or (None if body.regenerate else _title(body.text) or chat_skills.title(mark))
         state.DB.execute("UPDATE chats SET title = ?, updated = ? WHERE id = ?", (title, now, chat_id))
         if body.request_id is not None:

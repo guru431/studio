@@ -50,8 +50,8 @@ import { mcpStateWords } from './mcp-sections.js';
  * адрес — сразу #/chat без записи в историю.
  * Модель — локальная (`local_models` ссылки раздела): умолчание, иначе первая отмеченная, иначе не
  * выбрана, и «Отправить» закрыто до явного выбора. Ход и «Ответить заново», что унесут расшифровку
- * (вложением хода или из истории диалога — признак `external` сервера) нелокальной модели (у открытого
- * диалога — признак `local` сервера), — после окна «уйдёт во внешний сервис» (ход с `external_ok`;
+ * (вложением хода или из истории диалога — признак `external` сервера) внешнему получателю —
+ * после окна «уйдёт во внешний сервис» (ход с `external_ok`;
  * 409 `external` сервера — то же окно). Ничего не отправляется само. У отправленного вложения из
  * расшифровки — ссылка «к записи».
  *
@@ -1570,9 +1570,7 @@ function build(view, ctx) {
     paintWeb();
   }
 
-  /* правило локальной модели для расшифровки: пара нового диалога — из отмеченных (`local_models`
-   * ссылки), у открытого диалога — признак сервера `local` (sections.is_local и для модели, которую
-   * уже сняли с отметки, и для диалога без модели) */
+  /* У локальной модели включается кнопка «Рассуждение». */
   function isLocal({ connection_id: connId, model }) {
     const link = links.find((l) => l.connection.id === connId);
     return !!link && (link.local_models || []).includes(model);
@@ -1582,8 +1580,11 @@ function build(view, ctx) {
    * истории открытого диалога (`external` сервера — после смены модели, и для «Ответить заново») */
   function needsConsent(regenerate) {
     const fresh = !regenerate && atts.some((a) => a.transcript);
-    if (chat) return !!chat.chat.external || (fresh && !chat.chat.local);
-    return fresh && !isLocal(chosen());
+    if (chat) return !!chat.chat.external || (fresh && !chat.chat.transcript_consent_free);
+    if (!fresh) return false;
+    const { connection_id: id, model } = chosen();
+    const link = links.find((l) => l.connection.id === id);
+    return !(link?.connection.cleaner || link?.connection.routed || link?.transcript_local_models?.includes(model));
   }
 
   /* ход даст модели Exa, а запросы она составит из расшифровки без подтверждения: в истории (`external_web`
@@ -1594,10 +1595,11 @@ function build(view, ctx) {
     return fresh || (!!chat && !!chat.chat.external_web);
   }
 
-  function localPair() {
-    if (chatDefault && isLocal(chatDefault)) return { ...chatDefault };
+  function transcriptPair() {
+    const preferred = links.find((link) => link.connection.id === chatDefault?.connection_id);
+    if (preferred?.transcript_local_models?.includes(chatDefault.model)) return { ...chatDefault };
     for (const link of links) {
-      const model = link.models.find((m) => (link.local_models || []).includes(m));
+      const model = link.transcript_local_models?.[0];
       if (model) return { connection_id: link.connection.id, model };
     }
     return null;
@@ -1720,7 +1722,7 @@ function build(view, ctx) {
     putAsk(ASKS[ask] || '');
     autosize();
     await sectionsReady;
-    draft = localPair();
+    draft = transcriptPair();
     needModel = !draft;
     draft ||= { connection_id: null, model: '' };
     paintChip();
@@ -3011,7 +3013,7 @@ function build(view, ctx) {
       if (chatId === id) { chat.messages = before; needsReload = true; await reload(); }
       return;
     }
-    if (chatId === id && externalOk) chat.chat.external = false;   // ответ этой модели — след подтверждения
+    if (chatId === id && externalOk) chat.chat.external = false;   // сервер сохранил согласие для получателя
     if (chatId === id && webOk) chat.chat.external_web = false;    // сервер записал время подтверждения
     loadList();
     if (voiceWait && !regenerate && voiceWait.text === text) {   // ход «Разговора»: текст ответа — в озвучку

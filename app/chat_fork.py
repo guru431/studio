@@ -27,7 +27,7 @@ CLEANER = "диалог через Cleaner не ветвится: замены C
 #: столбцы сообщения, которые ветка переносит; запрос и ответ Cleaner (`cleaner_raw`, `cleaner_request`) и живость
 #: хода (`alive_at`) принадлежат исходному диалогу
 MESSAGE_COLUMNS = ("role", "content", "status", "via", "model", "created", "tools", "reasoning", "reasoning_sec",
-                   "error", "todo", "skill", "usage", "gen_ms", "total_ms")
+                   "error", "todo", "skill", "usage", "gen_ms", "total_ms", "transcript_consent")
 #: столбцы вложения, которые ветка переносит (тот же файл `media_id`)
 ATTACHMENT_COLUMNS = ("kind", "name", "media_id", "text", "chars", "created", "source_transcript_id", "cleaner_used")
 

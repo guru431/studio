@@ -17,6 +17,7 @@
 """
 import json
 import logging
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -136,6 +137,13 @@ def is_local(conn: "connections.Connection", model: str) -> bool:
     (весь) или роль шлюза srvllm `local-*` (соглашение llm_routers). Остальные роли srvllm облачные, а адрес
     локальности не доказывает."""
     return conn.proxied and (conn.s06 or (conn.kind == "srvllm" and model.startswith(LOCAL_PREFIX)))
+
+
+def transcript_local_models(conn: "connections.Connection", models: Iterable[str]) -> list[str]:
+    """Модели для передачи расшифровки по внутренним IP шлюзов s06, srvllm и настроенного API Spark."""
+    spark = conn.kind == "openai" and conn.base_url == state.CFG.spark_chat_url
+    local = [model for model in models if spark or is_local(conn, model)]
+    return local if local and not cleaner_route.is_external(conn) else []
 
 
 def capabilities(user_id: int) -> dict[str, bool]:
@@ -447,6 +455,8 @@ def _link_out(user_id: int | None, section: str, link: Link, passport: bool) -> 
     result = {"connection": item, "models": list(link.models),
               "catalog": None if inherited else catalog(conn, section),
               "local_models": [m for m in link.models if is_local(conn, m)]}
+    if section == "chat":
+        result["transcript_local_models"] = transcript_local_models(conn, link.models)
     if section == "chat" and passport:
         # Unverified models remain absent. Never expose the passport's routes, probes or ungranted model IDs.
         checked = connections.passport_of(conn) if inherited else item.get("passport")

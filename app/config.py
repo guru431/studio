@@ -17,6 +17,7 @@ class Config:
     hairpin_ip: str = "10.77.1.1"
     cleaner_ca: Path | None = None
     alternate_origin: str = ""
+    spark_chat_url: str = ""
 
     @property
     def tmp_dir(self) -> Path:
@@ -36,4 +37,5 @@ def load() -> Config:
                   media_dir=Path(os.environ["STUDIO_MEDIA_DIR"]), origin=os.environ["STUDIO_ORIGIN"],
                   hairpin_ip=os.environ.get("STUDIO_HAIRPIN_IP", Config.hairpin_ip),
                   cleaner_ca=Path(os.environ["STUDIO_CLEANER_CA"]) if os.environ.get("STUDIO_CLEANER_CA") else None,
-                  alternate_origin=os.environ.get("STUDIO_ALTERNATE_ORIGIN", "").rstrip("/"))
+                  alternate_origin=os.environ.get("STUDIO_ALTERNATE_ORIGIN", "").rstrip("/"),
+                  spark_chat_url=os.environ.get("STUDIO_SPARK_CHAT_URL", "").strip().rstrip("/"))

@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import logging
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ import chat
 import documents
 import profiles
 import state
+import upstream
 from conftest import T0, add_connection, add_gateway, erase_history, make_user, signin
 from fakes import TOKEN
 from test_documents import pdf
@@ -1306,6 +1308,78 @@ def test_transcript_goes_to_a_cloud_model_only_when_confirmed(studio, fake_audio
     sse(turn(studio, cid, "ещё", attachment_ids=[doc["id"]]))
     for secret in ("Здравствуйте", "Добрый день", "Звонок", "Итоги?"):
         assert secret not in caplog.text, secret
+
+
+@pytest.mark.parametrize("kind,s06,model", [("srvllm", False, "local-gemma-abl"), ("openai", True, "qwen-27b")])
+@pytest.mark.parametrize("url,entry", [("https://gateway.example.test", "gateway.example.test:443"),
+                                       ("http://8.8.8.8:4000", "8.8.8.8:4000")])
+def test_transcript_external_gateway_requires_consent(studio, fake_audio, monkeypatch, kind, s06, model, url, entry):
+    cid = add_gateway(studio)
+    a = from_transcript(studio, done_transcript(studio)).json()
+    body = {"kind": kind, "s06": s06, "sections": ["chat"], "base_url": url, "token": TOKEN}
+
+    async def resolve(host, port):
+        return ["8.8.8.8"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    allowlist = [*upstream.allowlist(), entry]
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (json.dumps(allowlist),))
+    assert studio.c.patch(f"/api/connections/{cid}", json=body).status_code == 200
+    studio.c.put(f"/api/sections/chat/links/{cid}", json={"models": [model]}).raise_for_status()
+    dialog = new_chat(studio, connection_id=cid, model=model)
+    r = turn(studio, dialog, attachment_ids=[a["id"]])
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "external"
+    assert not studio.gw.chat_requests
+    view = studio.c.get(f"/api/chats/{dialog}").json()["chat"]
+    assert view["local"] and not view["transcript_consent_free"]
+
+
+def test_transcript_consent_belongs_to_the_recipient(studio, fake_audio):
+    cid = add_gateway(studio)
+    model = "local-gemma-abl"
+    dialog = new_chat(studio, connection_id=cid, model=model)
+    a = from_transcript(studio, done_transcript(studio)).json()
+    sse(turn(studio, dialog, attachment_ids=[a["id"]]))
+    sse(turn(studio, dialog))
+
+    allowlist = [*upstream.allowlist(), "8.8.8.8:4000", "1.1.1.1:4000"]
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (json.dumps(allowlist),))
+    for address in ("http://8.8.8.8:4000", "http://1.1.1.1:4000"):
+        studio.c.patch(f"/api/connections/{cid}", json={"base_url": address, "token": TOKEN}).raise_for_status()
+        before = len(studio.gw.chat_requests)
+        view = studio.c.get(f"/api/chats/{dialog}").json()["chat"]
+        assert view["external"]
+        for url, body in (("turns", {"text": "ещё"}), ("turns", {"regenerate": True}), ("compact", {})):
+            r = studio.c.post(f"/api/chats/{dialog}/{url}", json=body)
+            assert r.status_code == 409 and r.json()["detail"]["code"] == "external", (url, r.text)
+        assert len(studio.gw.chat_requests) == before
+        sse(turn(studio, dialog, external_ok=True))
+        sse(studio.c.post(f"/api/chats/{dialog}/turns", json={"regenerate": True}))
+        sse(turn(studio, dialog))
+        assert len(studio.gw.chat_requests) == before + 3
+
+
+def test_transcript_trusts_only_the_configured_spark_api(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    spark = "http://10.77.1.30:8000/v1"
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, spark_chat_url=spark))
+    allowlist = [*upstream.allowlist(), "10.77.1.30:8000", "10.77.1.30:9000"]
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (json.dumps(allowlist),))
+    tid, model = done_transcript(studio), "local-gemma-abl"
+    for address, trusted in ((spark, True), (spark.replace(":8000", ":9000"), False)):
+        cid = add_connection(studio, base_url=address, token=TOKEN, name="Spark")
+        dialog = new_chat(studio, connection_id=cid, model=model)
+        a = from_transcript(studio, tid).json()
+        r = turn(studio, dialog, attachment_ids=[a["id"]])
+        if trusted:
+            assert sse(r)[-1] == ("done", {"status": "done"})
+        else:
+            assert r.status_code == 409 and r.json()["detail"]["code"] == "external"
+        view = studio.c.get(f"/api/chats/{dialog}").json()["chat"]
+        assert not view["local"] and view["transcript_consent_free"] is trusted
+        link = next(link for link in studio.c.get("/api/sections").json()["sections"][0]["links"]
+                    if link["connection"]["id"] == cid)
+        assert link["transcript_local_models"] == ([model] if trusted else [])
+    assert len(studio.gw.chat_requests) == 1
 
 
 def test_transcript_in_the_history_asks_again_after_the_model_changes(studio, fake_audio):

@@ -15,7 +15,7 @@ import upstream
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 82
+SCHEMA_VERSION = 83
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -108,7 +108,8 @@ def test_step_82_adds_skills_answer_stats_summary_and_previous_writer_works(env)
 
         def count(table):
             return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION == 82
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
+        assert conn.execute("SELECT transcript_consent FROM messages WHERE id = 'm1'").fetchone()[0] is None
         assert columns("skill_defaults") == {"id", "builtin", "lang", "name", "description", "text", "scope", "quick",
                                              "parts", "position"}
         assert columns("skills") == {"id", "user_id", "origin", "name", "description", "text", "scope", "quick",

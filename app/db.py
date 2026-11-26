@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 82
+VERSION = 83
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1155,6 +1155,9 @@ CREATE TRIGGER chat_shares_owui_gone AFTER DELETE ON owui_accounts BEGIN
 """
 SCHEMA += SKILLS_82
 
+TRANSCRIPT_CONSENT_83 = "ALTER TABLE messages ADD COLUMN transcript_consent TEXT;"
+SCHEMA += TRANSCRIPT_CONSENT_83
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1316,6 +1319,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     81: LDAP_81,
     # навыки, токены и время ответа, пересказ, закрепление, параметры на модель, ссылки озвучки чата и Open WebUI
     82: SKILLS_82,
+    83: TRANSCRIPT_CONSENT_83,
 }
 
 

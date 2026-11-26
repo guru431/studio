@@ -38,6 +38,7 @@ def test_profile_renders_only_deployment_templates():
         "STUDIO_REMOTE_ROOT": "/srv/studio", "STUDIO_MEDIA_DIR": "/mnt/media/studio",
         "STUDIO_URL": "https://studio.example.net", "STUDIO_HAIRPIN_IP": "198.51.100.1",
         "STUDIO_CERT_DIR": "/etc/certs/studio", "STUDIO_APACHE_PORT": "9443",
+        "STUDIO_SPARK_CHAT_URL": "http://10.77.1.30:8000/v1/",
     })
     destination.seek(0)
     with tarfile.open(fileobj=destination) as archive:
@@ -45,6 +46,7 @@ def test_profile_renders_only_deployment_templates():
         assert b"WorkingDirectory=/srv/studio" in unit
         assert b"STUDIO_ORIGIN=https://studio.example.net" in unit
         assert b"STUDIO_HAIRPIN_IP=198.51.100.1" in unit
+        assert b"STUDIO_SPARK_CHAT_URL=http://10.77.1.30:8000/v1\n" in unit
         assert archive.extractfile("app/example.py").read() == files["app/example.py"]
         assert archive.getmember("deploy/install.sh").mode == 0o755
         apache = archive.extractfile("deploy/apache-vhost.conf").read()
@@ -70,6 +72,9 @@ def test_profile_renders_only_deployment_templates():
     ("STUDIO_APACHE_PORT", "9443\nunsafe"),
     ("STUDIO_MEDIA_FSTYPE", "tmpfs"), ("STUDIO_MEDIA_FSTYPE", "ext4"),
     ("STUDIO_BUILD_NETWORK", "custom"),
+    ("STUDIO_SPARK_CHAT_URL", "https://spark.example.net/v1"),
+    ("STUDIO_SPARK_CHAT_URL", "http://8.8.8.8:8000/v1"),
+    ("STUDIO_SPARK_CHAT_URL", "http://10.77.1.30:8000/v1\nunsafe"),
 ])
 def test_profile_rejects_values_unsafe_for_commands_or_configuration(name, value):
     with pytest.raises(ValueError):
@@ -87,10 +92,12 @@ def test_docker_profile_renders_the_alternate_https_origin():
     PROFILE.render(source, destination, {
         "STUDIO_RUNTIME": "docker", "STUDIO_URL": "https://192.0.2.14:8443",
         "STUDIO_ALTERNATE_ORIGIN": "https://192.0.2.101:8443/",
+        "STUDIO_SPARK_CHAT_URL": "http://10.77.1.30:8000/v1",
     })
     destination.seek(0)
     with tarfile.open(fileobj=destination) as archive:
         host = archive.extractfile(names[0]).read().decode()
+        assert "STUDIO_SPARK_CHAT_URL=http://10.77.1.30:8000/v1\n" in host
         apache = archive.extractfile(names[1]).read().decode()
     assert "STUDIO_URL=https://192.0.2.14:8443\n" in host
     assert "STUDIO_ALTERNATE_ORIGIN=https://192.0.2.101:8443\n" in host

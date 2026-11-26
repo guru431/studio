@@ -139,7 +139,7 @@ def test_s06_models_are_local_everywhere(studio, s06):
     assert sections.is_local(s06, "qwen-27b") and not hasattr(card, "_local")
     cid = studio.c.post("/api/chats", json={"connection_id": s06.id, "model": "qwen-27b"}).json()["id"]
     view = studio.c.get(f"/api/chats/{cid}").json()["chat"]
-    assert view["local"] and view["thinking_ok"]
+    assert view["local"] and view["thinking_ok"] and view["transcript_consent_free"]
     assert studio.c.patch(f"/api/chats/{cid}", json={"thinking": True}).status_code == 200   # было 409 no_thinking
     busy = [1]
 
@@ -155,7 +155,8 @@ def test_s06_models_are_local_everywhere(studio, s06):
     body = translate_text._body(s06, "qwen-27b", "system", "text", 0.2, 100)
     assert (body["temperature"], body["max_tokens"], body["chat_template_kwargs"]) == (0.2, 100, {"enable_thinking": False})
     links = next(s for s in studio.c.get("/api/sections").json()["sections"] if s["id"] == "chat")["links"]
-    assert next(l for l in links if l["connection"]["id"] == s06.id)["local_models"] == sections.S06_CATALOG["chat"]
+    link = next(l for l in links if l["connection"]["id"] == s06.id)
+    assert link["local_models"] == link["transcript_local_models"] == sections.S06_CATALOG["chat"]
 
 
 def test_step_32_preserves_connections_and_defaults(env):
