@@ -6,6 +6,7 @@ import { tr } from './i18n.js';
  * «Ссылка на сутки» — POST .../links: адрес `/f#<token>` показывается один раз (в базе — только хеш); «Мои ссылки» —
  * действующие ссылки с «Отозвать». Каждый видит только свою папку, администратор — тоже свою. */
 import { api } from './api.js';
+import { icon } from './icons.js';
 import { sectionName } from './sections-meta.js';
 import { sizeText } from './settings.js';
 import { dateTime } from './time.js';
@@ -55,11 +56,24 @@ export function mount(view, ctx) {
   const linksBox = el('section', { hidden: trash },
     el('h2', {}, tr("Мои ссылки")),
     el('p', { class: 'muted small' }, tr("Ссылка открывает один файл без входа в Студию и действует сутки.")), links);
-  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, tabs, crumbs, toolbar, fresh, studioTrash, list, more, linksBox);
+  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, crumbs, toolbar, fresh, studioTrash, list, more, linksBox);
   const trashLink = el('a', { class: 'btn btn-sm', id: trash ? 'myfiles-back' : 'myfiles-trash',
-    href: trash ? '#/myfiles' : '#/myfiles?trash=1' }, trash ? tr("Вернуться к файлам") : tr("Корзина"));
+    href: trash ? '#/myfiles' : '#/myfiles?trash=1' }, icon(trash ? 'prev' : 'trash'),
+  trash ? tr("Вернуться к файлам") : tr("Корзина"));
   view.append(el('header', { class: 'head' }, el('h1', {}, sectionName(trash ? 'trash' : 'myfiles'))),
-    el('div', { class: 'page myfiles-page' }, el('div', { class: 'row' }, trashLink), note, browser));
+    el('div', { class: 'page myfiles-page' }, el('div', { class: 'myfiles-switches' }, tabs, trashLink), note, browser));
+
+  const thumbs = new WeakMap();
+  const visible = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (!isIntersecting) continue;
+      visible.unobserve(target);
+      const show = thumbs.get(target);
+      thumbs.delete(target);
+      show?.();
+    }
+  });
+  signal.addEventListener('abort', () => visible.disconnect(), { once: true });
 
   const say = (text, kind) => {
     note.textContent = text;
@@ -91,7 +105,7 @@ export function mount(view, ctx) {
       });
       return tab;
     }));
-    tabs.hidden = !trash && state.servers.length < 2;
+    tabs.hidden = !state.servers.length;
   }
 
   function paintCrumbs() {
@@ -125,16 +139,55 @@ export function mount(view, ctx) {
     const body = el('div', { class: 'mcp-result myfiles-preview' }, content);
     if (type === 'pdf') body.prepend(el('p', { class: 'muted small' }, tr("Первая страница PDF")));
     content.addEventListener('error', () => body.replaceChildren(el('p', { class: 'error' }, tr("Не удалось открыть файл"))));
-    openDialog(host, { id: 'myfiles-preview', title: name, body, cancelText: tr("Закрыть") });
+    openDialog(host, { id: 'myfiles-preview', title: name, body: [body], cancelText: tr("Закрыть") });
+  }
+
+  async function paintThumbnail(tile, kind, getPreview, local) {
+    if (signal.aborted || !tile.isConnected) return;
+    try {
+      const ticket = await getPreview(false);
+      if (signal.aborted || !tile.isConnected) return;
+      const video = kind === 'video';
+      const visual = video
+        ? el('video', { preload: 'metadata', playsinline: true, muted: true, 'aria-hidden': 'true' })
+        : el('img', { alt: '', decoding: 'async' });
+      visual.addEventListener('error', () => visual.remove(), { once: true });
+      visual.addEventListener(video ? 'loadeddata' : 'load', () => tile.classList.add('has-preview'), { once: true });
+      if (video) {
+        visual.muted = true;
+        visual.addEventListener('loadedmetadata', () => {
+          if (Number.isFinite(visual.duration)) visual.currentTime = Math.min(0.1, visual.duration / 2);
+        }, { once: true });
+      }
+      tile.append(visual);
+      visual.src = local && kind === 'image' ? `${ticket.url}?thumb=1` : ticket.url;
+    } catch {
+      // Превью в списке необязательно. Значок остаётся, полное открытие покажет причину отказа.
+    }
+  }
+
+  function fileInfo(entry, facts, getPreview, openFolder = null) {
+    const kind = (entry.preview?.kind || entry.preview_kind || '').split('/')[0];
+    const glyph = entry.dir ? 'folder' : { image: 'photo', video: 'video', audio: 'speech', pdf: 'doc' }[kind] || 'file';
+    const tile = el('span', { class: 'myfiles-thumb', 'aria-hidden': 'true' }, icon(glyph));
+    if (getPreview && ['image', 'video', 'pdf'].includes(kind)) {
+      thumbs.set(tile, () => paintThumbnail(tile, kind, getPreview, !!entry.preview));
+      visible.observe(tile);
+    }
+    const openFile = getPreview ? () => act(async () => preview(await getPreview(), entry.name)) : null;
+    const info = openFolder || openFile
+      ? button('', { class: `myfiles-file-info btn-link${openFolder ? ' myfiles-folder' : ''}`,
+        title: openFile ? tr("Предпросмотр") : null }, openFolder || openFile)
+      : el('div', { class: 'myfiles-file-info' });
+    info.append(tile, el('span', {}, el('span', { class: 'myfiles-name' }, entry.name),
+      el('span', { class: 'muted small myfiles-meta' }, facts.filter(Boolean).join(' · '))));
+    return el('div', { class: 'session-info' }, info);
   }
 
   function studioRow(entry) {
-    const title = entry.preview
-      ? button(entry.name, { class: 'btn-link', title: tr("Предпросмотр") }, () => act(() => preview(entry.preview, entry.name)))
-      : el('b', {}, entry.name);
     const facts = [sectionName(entry.section), sizeText(entry.size), moment(entry.mtime)];
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': 'false' },
-      el('div', { class: 'session-info' }, title, el('p', { class: 'muted small' }, facts.filter(Boolean).join(' · '))),
+      fileInfo(entry, facts, entry.preview ? () => entry.preview : null),
       el('div', { class: 'session-actions' },
         button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", entry.name) },
           () => fetchFile(entry.download, entry.name))));
@@ -142,6 +195,7 @@ export function mount(view, ctx) {
 
   function entryRow(entry) {
     const path = join(state.path, entry.name);
+    const endpoint = `${base()}/ticket`;
     const actions = el('div', { class: 'session-actions' });
     const facts = [entry.dir ? tr("папка") : null, sizeText(entry.size), entry.mtime ? moment(entry.mtime) : null];
     if (entry.dir) {
@@ -160,14 +214,10 @@ export function mount(view, ctx) {
         await api('POST', `${base()}/delete`, { path }, { signal });
         await load();
       }, tr("В корзине сервера: {0}", entry.name))));
-    const title = entry.dir
-      ? button(entry.name, { class: 'btn-link myfiles-folder' }, () => open(path))
-      : button(entry.name, { class: 'btn-link', title: tr("Предпросмотр") }, () => act(async () => {
-        const ticket = await api('POST', `${base()}/ticket`, { path, preview: true }, { signal });
-        await preview(ticket, entry.name);
-      }));
+    const getPreview = entry.preview_kind ? (unlock = true) =>
+      api('POST', endpoint, { path, preview: true }, { signal, unlock }) : null;
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': String(entry.dir) },
-      el('div', { class: 'session-info' }, title, el('p', { class: 'muted small' }, facts.filter(Boolean).join(' · '))),
+      fileInfo(entry, facts, getPreview, entry.dir ? () => open(path) : null),
       actions);
   }
 
@@ -190,6 +240,7 @@ export function mount(view, ctx) {
     const version = ++loadVersion;
     const local = Boolean(server()?.local);
     if (!after) {
+      visible.disconnect();
       list.replaceChildren();
       more.hidden = true;
     }

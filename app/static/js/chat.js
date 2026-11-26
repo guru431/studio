@@ -125,7 +125,7 @@ import { chatList } from './chat-list.js';
 import { chatTabs } from './chat-tabs.js';
 import { findView } from './code-find.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
-import { shareDialog, shareMenu } from './chat-share.js';
+import { shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
 import { startConversation } from './chat-voice.js';
@@ -792,7 +792,7 @@ function build(view, ctx) {
   // диалог через шлюз Cleaner (`routed`, cleaner_route.routes): признак рядом с выбором модели
   const routedTag = el('span', { class: 'tag server chat-routed', id: 'chat-routed', hidden: true, title: tr("Диалог идёт через Cleaner") },
     el('span', { 'aria-hidden': 'true' }, 'Cleaner'), el('span', { class: 'sr' }, tr("Диалог идёт через Cleaner")));
-  // название диалога и «Действия с диалогом» (chat-title.js): те же окна, что в меню строки списка
+  // название в шапке, действия с открытым диалогом над полем ввода (chat-title.js)
   const title = chatTitle({ rename: renameDialog, remove: deleteDialog, pinItem,
     said: (text) => { notice.textContent = text; } });
   const head = el('header', { class: 'head chat-head' }, toggle, title.label, title.note);
@@ -1005,28 +1005,12 @@ function build(view, ctx) {
   function listItem(item) {
     const link = el('a', { href: `#/chat/${item.id}`, class: 'chat-link', 'aria-current': item.id === chatId ? 'page' : null },
       el('span', { class: 'chat-link-title' }, item.title || tr("Новый диалог")), chatTime(item.updated));
-    const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
-    const li = el('div', { class: 'chat-item', 'data-id': item.id }, link, more);
     link.addEventListener('click', () => {
       panel(false);
       // уже открытый диалог адрес не меняет — нажатие перечитывает его (ход могли сделать с другого устройства)
       if (item.id === chatId && !sending && !jobs.has(chatId)) reload();
     });
-    // меню строки — общий компонент menu.js; пункты собираются при открытии (название могло смениться)
-    const menu = el('div', { class: 'chat-menu', role: 'menu', 'aria-label': tr("Действия с диалогом") });
-    li.append(menu);
-    popupMenu(more, menu, { align: 'end', fill: (close) => {
-      const items = [
-        // сработал защищённый источник — поделиться нельзя (409 `protected`): пункт выключен, причина — в подсказке
-        menuItem(tr("Поделиться чатом"), { attrs: { class: 'chat-share', disabled: item.protected || null,
-          title: item.protected ? PROTECTED_SHARE : null }, onSelect: () => {
-          close(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`);
-        } }),
-        menuItem(tr("Переименовать"), { attrs: { class: 'chat-rename' }, onSelect: () => { close(); renameDialog(item); } }),
-        menuItem(tr("Удалить"), { attrs: { class: 'chat-delete danger' }, onSelect: () => { close(); deleteDialog(item); } })];
-      return [items, items];
-    } });
-    return li;
+    return el('div', { class: 'chat-item', 'data-id': item.id }, link);
   }
 
   function renameDialog(item) {

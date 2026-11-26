@@ -1,11 +1,10 @@
 """Общий компонент меню (menu.js), реестр разделов на рельсе и переходы оболочки в Chromium и WebKit:
 роли и клавиатура меню, Escape закрывает только верхнее меню, заголовок вкладки и фокус после смены раздела."""
-import re
-
 import pytest
 
 from test_ui_browser import live
 from test_ui_design_tokens import cookie, engine, shell
+from test_ui_owui import toolbar_button
 from test_ui_webkit import pw
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -26,45 +25,36 @@ def test_chat_menu_keys_and_escape_closes_only_the_top_menu(engine, live, cookie
         chat = page.evaluate(NEW_CHAT)
         item = page.locator(f'.chat-item[data-id="{chat}"]')
         item.locator('[aria-current=page]').wait_for(state='attached')
-        if width < 760:
-            page.locator('#chats-toggle').click()
-            pw.expect(page.locator('.chat')).to_have_class(re.compile('panel-open'))
-        more = item.locator('.chat-more')
+        pw.expect(item.locator('button')).to_have_count(1)
+        more = toolbar_button(page, '#chat-title-actions', 'chat')
+        overflowed = more.evaluate("button => !!button.closest('#chat-status-menu')")
         assert more.get_attribute('aria-haspopup') == 'menu' and more.get_attribute('aria-expanded') == 'false'
         more.focus()
         page.keyboard.press('Enter')
-        menu = item.locator('.chat-menu')
+        menu = page.locator('#chat-title-menu')
         pw.expect(menu).to_be_visible()
         assert menu.get_attribute('role') == 'menu' and more.get_attribute('aria-expanded') == 'true'
-        assert page.evaluate(FOCUS) == ['menuitem', 'Поделиться чатом']
+        assert page.evaluate(FOCUS) == ['menuitem', 'Переименовать']
         page.keyboard.press('ArrowDown')
-        assert page.evaluate(FOCUS)[1] == 'Переименовать'
-        page.keyboard.press('End')
         assert page.evaluate(FOCUS)[1] == 'Удалить'
+        page.keyboard.press('End')
+        assert page.evaluate(FOCUS)[1] == 'Скопировать адрес'
         page.keyboard.press('ArrowDown')                       # по кругу
-        assert page.evaluate(FOCUS)[1] == 'Поделиться чатом'
+        assert page.evaluate(FOCUS)[1] == 'Переименовать'
         page.keyboard.press('ArrowUp')
         page.keyboard.press('Home')
-        assert page.evaluate(FOCUS)[1] == 'Поделиться чатом'
+        assert page.evaluate(FOCUS)[1] == 'Переименовать'
         inside = menu.evaluate("m => { const b = m.getBoundingClientRect();"
                                " return b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight; }")
         heights = menu.evaluate("m => [...m.children].map(c => c.getBoundingClientRect().height)")
         page.keyboard.press('Escape')
         pw.expect(menu).to_be_hidden()
-        assert page.evaluate("document.activeElement.classList.contains('chat-more')")
+        pw.expect(more).to_be_focused()
         assert more.get_attribute('aria-expanded') == 'false'
-        if width < 760:
-            # выдвижная панель осталась: Escape закрыл только меню, второй — панель
-            pw.expect(page.locator('.chat')).to_have_class(re.compile('panel-open'))
-            # фокус ни на чём (Safari нажатием фокус не переводит): Escape — по-прежнему только меню
-            more.click()
-            pw.expect(menu).to_be_visible()
-            page.evaluate("() => document.activeElement?.blur()")
+        if overflowed:
+            pw.expect(page.locator('#chat-status-menu')).to_be_visible()
             page.keyboard.press('Escape')
-            pw.expect(menu).to_be_hidden()
-            pw.expect(page.locator('.chat')).to_have_class(re.compile('panel-open'))
-            page.keyboard.press('Escape')
-            pw.expect(page.locator('.chat')).not_to_have_class(re.compile('panel-open'))
+            pw.expect(page.locator('#chat-status-menu')).to_be_hidden()
     assert inside, width
     assert all(h >= (44 if width < 760 else 36) for h in heights), heights
 

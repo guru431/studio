@@ -58,6 +58,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("eval", "text", f"{b}.querySelector('.chat-link-title').textContent"),
             ("eval", "visible_pin", f"getComputedStyle({b}.querySelector('.chat-pin')).opacity"),
             ("eval", "updated", f"{b}.querySelector('time').dateTime"),
+            ("eval", "row_buttons", f"{b}.querySelectorAll('button').length"),
             ("eval", "openB", "location.hash = '#/chat/' + window.B"),
             ("wait", f"{b}?.querySelector('[aria-current=page]') && !{b}.querySelector('.chat-mark')"),
             ("eval", "opened", MARKS.format(b)),
@@ -82,9 +83,10 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("wait", f"{a}?.querySelector('.chat-mark[data-mark=draft]')"),
             ("eval", "draft", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({a}.querySelector('.chat-mark[data-mark=draft]'))"),
             ("eval", "fits", f"""(() => {{ const side = document.querySelector('#chats').getBoundingClientRect();
-              return {NO_OVERFLOW} && [...document.querySelectorAll('.chat-list .chat-item')].every((row) =>
-                ['.chat-pin', '.chat-more'].every((s) => {{ const r = row.querySelector(s).getBoundingClientRect();
-                  return r.width > 0 && r.left >= side.left && r.right <= side.right; }})); }})()""")],
+              return {NO_OVERFLOW} && [...document.querySelectorAll('.chat-list .chat-pin')].every((pin) => {{
+                const r = pin.getBoundingClientRect();
+                return r.width > 0 && r.left >= side.left && r.right <= side.right;
+              }}); }})()""")],
             width=width, mobile=mobile)
     finally:
         live.gw.chat_hold = False
@@ -96,6 +98,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
     assert v["unread"] == ["unread", "не прочитано"]       # шлюз отпущен, Б не открывали
     assert v["text"] == "План отпуска"
     assert v["visible_pin"] == "1" and v["updated"].endswith("Z")
+    assert v["row_buttons"] == 1
     assert [v["opened"], f"POST /api/chats/{chat_b}/seen" in r["sent"]] == [[], True]
     assert f"POST /api/chats/{chat_a}/seen" in r["sent"]
     assert v["found"] == ["План отпуска"] and v["none"] == "Ничего не найдено" and v["asked"] == 0
@@ -179,18 +182,32 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
             ("wait", f"{READY} && {ACTIVE}?.dataset.chat === location.hash.split('/')[2] && document.querySelector('.chat-item')"),
             ("eval", "reload", f"{TABS}.length"),
             *drawer,
-            ("eval", "mark", "document.querySelector('.chat-item[data-id=\"' + JSON.parse(localStorage.getItem('studio-chat-tabs')).ids[2] + '\"]').classList.add('under-test')"),
-            ("click", ".under-test .chat-more"), ("click", ".under-test .chat-delete"),
+            ("eval", "mark", """(() => {
+              window.toDelete = JSON.parse(localStorage.getItem('studio-chat-tabs')).ids[2];
+              window.toReturn = location.hash.split('/')[2];
+              document.querySelector('.chat-item[data-id="' + window.toDelete + '"]').classList.add('under-test');
+              return true;
+            })()"""),
+            ("click", ".under-test .chat-link"),
+            ("wait", f"{ACTIVE}?.dataset.chat === window.toDelete"),
+            ("eval", "reveal_actions", """(() => {
+              if (document.querySelector('#chat-title-actions').closest('#chat-status-menu:not(:popover-open)')) {
+                document.querySelector('#chat-status-more').click();
+              }
+              return true;
+            })()"""),
+            ("click", "#chat-title-actions"), ("click", "#chat-title-delete"),
             ("wait", "document.querySelector('#chat-delete-dialog')?.open"),
             ("click", "#chat-delete-confirm"),
             ("wait", f"!document.querySelector('#chat-delete-dialog') && {TABS}.length === 10"),
             ("eval", "gone", f"{TABS}.length"),
+            ("eval", "open", "location.hash = '#/chat/' + window.toReturn"),
+            ("wait", f"{ACTIVE}?.dataset.chat === window.toReturn"),
             ("eval", "fits", f"""(() => {{ const bar = document.querySelector('#chat-tabbar'); const box = bar.getBoundingClientRect();
               const tab = {ACTIVE}.getBoundingClientRect();
               return {{ page: {NO_OVERFLOW}, bar: box.left >= 0 && box.right <= innerWidth,
                 scrolls: bar.scrollWidth > bar.clientWidth && getComputedStyle(bar).overflowX === 'auto',
                 active: tab.left >= box.left - 0.5 && tab.right <= box.right + 0.5 }}; }})()"""),
-            ("eval", "escape", "document.querySelector('.chat.panel-open') && document.querySelector('#chats-backdrop, .chats-backdrop').click()"),
             ("wait", "document.querySelector('#ctx-meter:not([hidden])')"),
             ("click", "#avatar"), ("click", "#menu-logout"),
             ("wait", "location.pathname === '/login' && document.querySelector('#login')"),

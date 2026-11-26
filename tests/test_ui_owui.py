@@ -507,6 +507,7 @@ def test_owui_dialog_toolbar_pin_and_draft(owui_browser, live, fake, width):
         pw.expect(page).to_have_url(re.compile(f"/#/owui/{aid}/{chat}$"))
         show_panel(page)
         pin = page.locator("#owui-chat-list .chat-pin")
+        pw.expect(page.locator("#owui-chat-list .owui-chat-row button")).to_have_count(1)
         pw.expect(pin).to_have_css("opacity", "1")
         pin.click()
         pw.expect(page.locator("#owui-pinned .chat-pin")).to_have_attribute("aria-pressed", "true")

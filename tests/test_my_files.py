@@ -188,7 +188,8 @@ def test_list_download_range_upload_chunks_delete_restore_zip_proxy_with_studio_
 
     listed = studio.c.post(f"/api/my-files/{sid}/list", json={"path": "docs"})
     assert listed.status_code == 200, listed.text
-    assert listed.json()["entries"] == [{"name": "отчёт.txt", "dir": False, "size": len(data), "mtime": 1_700_000_000.5}]
+    assert listed.json()["entries"] == [{"name": "отчёт.txt", "dir": False, "size": len(data),
+                                        "mtime": 1_700_000_000.5, "preview_kind": "text"}]
     assert listed.json()["total_bytes"] == len(data)
 
     url = studio.c.post(f"/api/my-files/{sid}/ticket", json={"path": "docs/отчёт.txt"}).json()["url"]

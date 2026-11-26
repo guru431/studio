@@ -5,7 +5,7 @@
  *   group(updated). Строку строит row(item) (chat.js, listItem); модуль дописывает звезду button.chat-pin[aria-pressed]
  *   («Закрепить» / «Открепить» → PATCH {pinned}) и метки span.chat-mark[data-mark=busy|unread|draft] без текста —
  *   слова в aria-label и title; «идёт ответ» важнее «не прочитано».
- *   Перерисовка — только когда ответ сервера изменился: опрос не сбивает фокус и открытое меню строки. Опрос — раз в
+ *   Перерисовка — только когда ответ сервера изменился. Опрос — раз в
  *   LIST_POLL_MS, пока у диалога идёт ответ и страница видна. Удачный ответ — loaded(items); итог — items или null (отказ).
  *   Отказ при нарисованном списке (нет связи, выкладка) список не стирает — повтор через LIST_POLL_MS; без списка —
  *   слова отказа на его месте.
@@ -76,9 +76,7 @@ export function chatList(list, { row, group, pinItem, failed = () => {}, loaded 
         pin.disabled = false;
       }
     });
-    const more = li.querySelector('.chat-more');
-    li.insertBefore(box, more);
-    li.insertBefore(pin, more);
+    li.append(box, pin);
     rows.set(item.id, { item, box });
     paintMarks(item.id);
     return li;

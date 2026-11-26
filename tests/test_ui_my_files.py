@@ -1,13 +1,17 @@
 """«Мои файлы» в настоящем браузере (my-files.js, my_files.py): кнопка рельса и сервер с `studio/files`,
 загрузка кусками, папка, «Ссылка на сутки»; ссылка `/f#<token>` открывается в чистом контексте браузера без входа."""
+import base64
+
 import pytest
+import media
 
 from conftest import browser, cdp_process  # noqa: F401 — фикстуры браузера
+from fakes import PNG_REAL
 from live_app import start_live_app
 from test_mcp import TOKEN as MCP_KEY
 from test_mcp_dialog import HOST
 from test_my_files import FileServer
-from test_ui_browser import MENU_OPEN, READY, problems, signin
+from test_ui_browser import MENU_OPEN, READY, live_sql, problems, signin
 from test_ui_chat_mcp import admin_client
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -110,6 +114,44 @@ def test_my_files_trash_switches_between_studio_records_and_server_files(browser
         ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent.includes('Возвращено')"),
         ("click", "#myfiles-back"), ("wait", ITEM.format("отчёт.txt"))], width=320, mobile=True)
     assert not r.get("failed"), r
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_storage_tabs_align_with_trash_and_show_studio_and_mcp_thumbnails(browser, live, width):
+    login = f"files-preview-{width}"
+    uid = live.add_user(login)
+    mid = media.save(uid, PNG_REAL, "image/png", "studio.png", thumb=True)
+    live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, media_id, state, detail, created)"
+             " VALUES (?, ?, 'generation', 'flux', 'Образец', '64x48', 1, ?, 'done', '', 1)", (mid, uid, mid))
+    encoded = base64.b64encode(PNG_REAL).decode()
+    upload = f"""(() => {{
+      const picker = document.querySelector('#myfiles-picker');
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(atob({encoded!r}), c => c.charCodeAt(0))], 'server.png',
+        {{ type: 'image/png' }}));
+      picker.files = data.files;
+      picker.dispatchEvent(new Event('change'));
+      return true;
+    }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
+        ("wait", "document.querySelector('#myfiles-tabs [data-sid=\"0\"]')"),
+        ("eval", "row", """(() => {
+          const tab = document.querySelector('#myfiles-tabs button').getBoundingClientRect();
+          const trash = document.querySelector('#myfiles-trash').getBoundingClientRect();
+          return tab.right <= trash.left && Math.abs(tab.top - trash.top) < 2;
+        })()"""),
+        ("eval", "upload", upload),
+        ("wait", f"{ITEM.format('server.png')}?.querySelector('.myfiles-thumb.has-preview img')?.naturalWidth > 0"),
+        ("click", "#myfiles-tabs [data-sid='0']"),
+        ("wait", f"{ITEM.format('studio.png')}?.querySelector('.myfiles-thumb.has-preview img')?.naturalWidth > 0"),
+        ("eval", "thumb", f"{ITEM.format('studio.png')}.querySelector('.myfiles-thumb img').src"),
+        ("click", "#myfiles-list .myfiles-item[data-name='studio.png'] button.myfiles-file-info"),
+        ("wait", "document.querySelector('#myfiles-preview[open] img')?.naturalWidth > 0"),
+        ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth")], width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    assert r["values"]["row"] and r["values"]["fits"]
+    assert r["values"]["thumb"].endswith(f"/api/media/{mid}?thumb=1")
     assert not problems(r), problems(r)
 
 

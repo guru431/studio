@@ -2094,21 +2094,18 @@ def test_direct_answer_that_was_not_saved_says_so(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_chat_list_renames_and_deletes(browser, live):
+def test_chat_toolbar_renames_and_deletes(browser, live):
     item = "document.querySelector('.chat-item[data-id=\"' + window.made + '\"]')"
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
         ("eval", "made", f"""(async () => {{ const m = {API};
           const c = await m.api('POST', '/api/chats', {{}});
           window.made = c.id; location.hash = '#/chat/' + c.id; return true; }})()"""),
-        ("wait", f"{item}?.querySelector('[aria-current=page]')"),
-        ("eval", "mark", "document.querySelector('.chat-item [aria-current=page]').closest('.chat-item')"
-                         ".classList.add('under-test')"),
-        ("click", ".under-test .chat-more"), ("click", ".under-test .chat-rename"),
+        ("wait", f"{item}?.querySelector('[aria-current=page]') && document.querySelector('#chat-title-actions:not([hidden])')"),
+        ("click", "#chat-title-actions"), ("click", "#chat-title-rename"),
         ("wait", is_open("#rename-dialog")),
         set_value("#rename-dialog [name=title]", "Мой план"), ("click", "#rename-save"),
-        ("wait", f"!{is_open('#rename-dialog')} && {item}?.textContent === 'Мой план'"),
-        ("eval", "mark2", f"{item}.classList.add('under-test')"),
-        ("click", ".under-test .chat-more"), ("click", ".under-test .chat-delete"),
+        ("wait", f"!{is_open('#rename-dialog')} && {item}?.querySelector('.chat-link-title').textContent === 'Мой план'"),
+        ("click", "#chat-title-actions"), ("click", "#chat-title-delete"),
         ("wait", is_open("#chat-delete-dialog")),
         ("click", "#chat-delete-confirm"),
         ("wait", f"!{is_open('#chat-delete-dialog')} && !{item} && location.hash === '#/chat'"),

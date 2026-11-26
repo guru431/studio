@@ -2,7 +2,7 @@ import { tr } from './i18n.js';
 /* Панель раздела «Open WebUI» (спека 2026-11-22-studio-open-webui-design, «Страница»): учётки строками сверху, под ними —
  * дерево чатов показанной учётки. Образец — code-panel.js «Агентов».
  *
- * panelView(host, { selected, chose, opened }) → { ready, shown, accounts, select, here, title, connect, event, unmount }:
+ * panelView(host, { selected, chose, opened, pinChat }) → { ready, shown, accounts, select, here, title, connect, event, unmount }:
  * - учётки — GET /api/owui/accounts: точка состояния (на связи / нет связи / войдите заново; слова — для чтения с
  *   экрана), подпись, хост сервера; «⋯» — переименовать, переподключить, удалить (с подтверждением); «+ Подключить» —
  *   окно (подпись, адрес, email, пароль); 409 `certificate` — шаг сертификата: отпечаток SHA-256, владелец, срок и
@@ -64,7 +64,7 @@ function hostOf(url) {
   }
 }
 
-export function panelView(host, { selected: first = null, chose, opened, manage }) {
+export function panelView(host, { selected: first = null, chose, opened, pinChat }) {
   const controller = new AbortController();
   const { signal } = controller;
   let items = [];                  // учётки
@@ -426,11 +426,10 @@ export function panelView(host, { selected: first = null, chose, opened, manage 
     link.addEventListener('click', () => chose(aid, chat.id));
     const pin = iconButton('star', tr("Закрепить"), { class: 'icon-btn chat-pin' });
     paintPin(pin, pinnedIds.has(chat.id));
-    const item = () => ({ ...chat, ...known.get(chat.id), pinned: pinnedIds.has(chat.id) });
     pin.addEventListener('click', async () => {
       pin.disabled = true;
       try {
-        await manage.pin(aid, item());
+        await pinChat(aid, { id: chat.id, pinned: pinnedIds.has(chat.id) });
       } catch (err) {
         if (!signal.aborted && shown === aid) {
           status.classList.add('error');
@@ -440,16 +439,7 @@ export function panelView(host, { selected: first = null, chose, opened, manage 
         pin.disabled = false;
       }
     });
-    const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
-    const menu = el('div', { class: 'chat-menu', 'aria-label': tr("Действия с диалогом") });
-    popupMenu(more, menu, { align: 'end', fill: (close) => {
-      const items = [
-        menuItem(tr("Переименовать"), { onSelect: () => { close(); manage.rename(aid, item()); } }),
-        menuItem(tr("Удалить"), { attrs: { class: 'danger' }, onSelect: () => { close(); manage.remove(aid, item()); } }),
-      ];
-      return [items, items];
-    } });
-    return el('li', { class: 'chat-item owui-chat-row' }, link, pin, more, menu);
+    return el('li', { class: 'chat-item owui-chat-row' }, link, pin);
   }
 
   function remember(rows) {

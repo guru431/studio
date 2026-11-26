@@ -375,7 +375,11 @@ async def list_files(sid: int, body: PathIn, request: Request, after: str = ""):
         return studio_file_entries(request.state.user.id, after)
     path = _path(body.path, root=True)
     async with _server(request, sid) as (session, _):
-        return _listing(await _post(session, "list", {"path": path}, LIST_MAX), path)
+        listed = _listing(await _post(session, "list", {"path": path}, LIST_MAX), path)
+        for entry in listed["entries"]:
+            if not entry["dir"]:
+                entry["preview_kind"] = preview_kind(entry["name"])
+        return listed
 
 
 @router.post("/{sid}/ticket")

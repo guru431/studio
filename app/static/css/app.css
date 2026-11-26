@@ -351,6 +351,22 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
 .mcp-history summary { cursor: pointer; }
 .mcp-history-entry { padding: var(--space-2) 0; }
 .mcp-history-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.myfiles-switches { display: flex; align-items: flex-start; gap: var(--space-5); }
+.myfiles-tabs { flex: 1; min-width: 0; }
+.myfiles-switches > a { flex: none; margin-left: auto; white-space: nowrap; }
+.myfiles-switches > a .ico { width: 16px; height: 16px; }
+.myfiles-file-info { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center;
+  gap: var(--space-5); width: 100%; min-width: 0; text-align: left; }
+.myfiles-file-info.btn-link { padding: 0; text-decoration: none; }
+.myfiles-file-info.btn-link .myfiles-name { text-decoration: underline; }
+.myfiles-name, .myfiles-meta { display: block; overflow-wrap: anywhere; }
+.myfiles-name { color: var(--text-1); font-size: var(--fs-sm); }
+.myfiles-meta { margin-top: var(--space-2); }
+.myfiles-thumb { position: relative; display: grid; place-items: center; width: 64px; height: 52px;
+  overflow: hidden; border-radius: var(--r-control); background: var(--surface-2); color: var(--text-2); }
+.myfiles-thumb :is(img, video) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  pointer-events: none; opacity: 0; }
+.myfiles-thumb.has-preview :is(img, video) { opacity: 1; }
 .myfiles-preview :is(img, video) { max-height: 62dvh; }
 .mcp-result { display: grid; gap: var(--space-4); }
 .mcp-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
@@ -992,17 +1008,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .chat-list-note { margin: var(--space-4) var(--space-3); }
 .chat-group { margin: var(--space-5) var(--space-4) var(--space-1); color: var(--text-2); font-size:var(--fs-xs); }
 .chat-item { position: relative; display: flex; align-items: center; border-radius: var(--r-control); }
-.chat-item:has(.chat-menu:popover-open) { background: var(--surface-2); }
 @media (hover: hover) { .chat-item:hover { background: var(--surface-2); } }
 .chat-link { flex: 1; min-width: 0; padding: 7px var(--space-2) 7px 9px; color: var(--text-1); text-decoration: none; font-size:var(--fs-md);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-link-title, .chat-updated { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-updated { color: var(--text-2); font-size: var(--fs-xs); font-weight: normal; }
 .chat-item:has(.chat-link[aria-current="page"]) { background: var(--surface-1); }
-.chat-more { opacity: 0; }
-.chat-item:focus-within .chat-more, .chat-item:has(.chat-menu:popover-open) .chat-more,
-.chat-item:has([aria-current="page"]) .chat-more { opacity: 1; }
-@media (hover: hover) { .chat-item:hover .chat-more { opacity: 1; } }
 /* список (chat-list.js): поиск по названиям, метки без текста (слова — aria-label), звезда «Закрепить» */
 .chat-search { flex: none; padding: 7px var(--space-4); }
 .chat-marks { flex: none; display: flex; align-items: center; gap: var(--space-2); padding-right: var(--space-1); }
@@ -1275,7 +1286,6 @@ video.msg-file-media { max-height: 320px; }
   .chat.panel-open .chats { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
   .chats-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .icon-btn.chats-toggle { display: inline-grid; margin-left: -6px; }
-  .chat-more { opacity: 1; }
   .feed { padding: var(--space-7); }
   .msg.user { max-width: 92%; }
   .msg.assistant { gap: var(--space-5); }

@@ -314,7 +314,7 @@ export function mount(host, ctx) {
     },
   });
   const place = route.aid === null ? readPlace() : null;
-  panel = panelView(side, { selected: route.aid ?? place?.aid ?? null, opened, manage: ui.manage,
+  panel = panelView(side, { selected: route.aid ?? place?.aid ?? null, opened, pinChat: ui.manage.pin,
     chose: () => panelOpen(false) });
   apply(route);
 }

@@ -229,11 +229,6 @@ def test_protected_chat_share_and_export_are_disabled_with_the_reason(focus_brow
             pw.expect(trigger).to_be_visible()
             pw.expect(trigger).to_be_disabled()
             pw.expect(trigger).to_have_attribute('title', reason)
-            if not mobile:
-                page.locator(f'.chat-item[data-id="{cid}"] .chat-more').click()
-                item = page.locator(f'.chat-item[data-id="{cid}"] .chat-share')
-                pw.expect(item).to_be_disabled()
-                pw.expect(item).to_have_attribute('title', reason)
     finally:
         client.delete('/api/chats/' + cid)
         client.close()
