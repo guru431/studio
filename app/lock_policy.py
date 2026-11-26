@@ -83,7 +83,7 @@ def hidden_scans(uid: int, closed) -> tuple[str, tuple]:
 #: раздел → таблицы и столбцы файлов его истории; сканы и снимки «Поделиться» — отдельными запросами
 #: `media_sections`. Вместе — все ссылки `media.REFERENCES` (сверяет tests/test_lock_policy.py).
 MEDIA_SOURCES = {
-    "chat": (("attachments", ("media_id",)), ("chat_media", ("media_id",))),
+    "chat": (("attachments", ("media_id",)), ("chat_media", ("media_id",)), ("chat_project_files", ("media_id",))),
     "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
     "video": (("videos", ("media_id", "source_media_id")),),
     "transcribe": (("transcripts", ("source_media_id", "result_media_id", "listen_media_id")),),
@@ -99,6 +99,9 @@ def media_sections(uid: int, media_id: str) -> set[str]:
     found = {row[0] for row in state.DB.execute(
         "SELECT j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id"
         " WHERE f.user_id = ? AND f.media_id = ?", (uid, media_id))}
+    found.update(row[0] for row in state.DB.execute(
+        "SELECT source_section FROM chat_project_files WHERE user_id = ? AND media_id = ? AND source_section IS NOT NULL",
+        (uid, media_id)))
     for section, tables in MEDIA_SOURCES.items():
         for table, columns in tables:
             where = " OR ".join(f"{column} = ?" for column in columns)
@@ -134,7 +137,7 @@ def blocks(request, uid: int, digest: str) -> bool:
     path = request.url.path.rstrip("/")
     pieces = path.split("/")
     head = pieces[2] if len(pieces) > 2 else ""
-    section = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat",
+    section = {"chats": "chat", "chat-projects": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat",
                "images": "photo", "presets": "photo", "videos": "video", "transcripts": "transcribe", "transcribe": "transcribe",
                "voices": "speech", "speeches": "speech", "speech": "speech", "ocr": "ocr",
                "translate": "translate", "code": "code", "agents": "code", "owui": "owui"}.get(head)

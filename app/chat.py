@@ -61,6 +61,7 @@ import chat_info
 import chat_list
 import chat_parts
 import chat_pending
+import chat_projects
 import chat_skills
 import chat_system
 import chat_tools
@@ -282,12 +283,14 @@ router = APIRouter(prefix="/api")
 
 
 class ChatIn(BaseModel):
+    project_id: str | None = Field(None, max_length=64)
     connection_id: int | None = None
     mcp_model_sid: int | None = Field(None, gt=0)
     model: str | None = Field(None, max_length=MODEL_MAX)
 
 
 class ChatPatch(BaseModel):
+    project_id: str | None = Field(None, max_length=64)
     mcp_ids: list[int] | None = Field(default=None, max_length=16)
     # полной заменой: выключенные общие MCP диалога; выключенные и явно включённые инструменты {sid: [имена]}
     mcp_off: list[int] | None = Field(default=None, max_length=16)
@@ -395,7 +398,7 @@ def _chat_out(row) -> dict:
     # protected — сработал защищённый источник MCP: «Интернет» не включить, «Поделиться» и экспорт — 409
     return {"id": row["id"], "title": row["title"], "connection_id": row["connection_id"], "model": row["model"],
             "updated": row["updated"], "protected": bool(row["protected_used"]), "mcp_model_sid": row["mcp_model_sid"],
-            "pinned": bool(row["pinned"])}
+            "pinned": bool(row["pinned"]), "project_id": row["project_id"] or chat_projects.inbox(row["user_id"])}
 
 
 def _transcript_consent(chat_id: str, conn: Connection, model: str, *, confirmed: bool = False) -> tuple[bool, str | None]:
@@ -2523,10 +2526,11 @@ async def create_chat(body: ChatIn, request: Request):
     else:
         conn, model = _chat_pair(user.id, body.connection_id, body.model)
         cid = conn.id
+    pid = chat_projects.require(user.id, body.project_id)["id"] if body.project_id else chat_projects.inbox(user.id)
     chat_id, now = uuid.uuid4().hex, clock.NOW()
-    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid, seen)"
-                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)",
-                     (chat_id, user.id, cid, model, now, now, body.mcp_model_sid, now))
+    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid, seen, project_id)"
+                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                     (chat_id, user.id, cid, model, now, now, body.mcp_model_sid, now, pid))
     log.info("чат %s: создан", chat_id[:8])
     return _chat_view(user.id, _chat_row(user.id, chat_id))
 
@@ -2746,6 +2750,14 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         conn = _chat_connection(uid, cid)
         if ids and not changes.get("mcp_model_sid", row["mcp_model_sid"]) and (conn is None or not conn.proxied or conn.cleaner):
             raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
+    if "project_id" in body.model_fields_set:
+        operations.check(uid)
+        pid = chat_projects.require(uid, body.project_id or chat_projects.inbox(uid))["id"]
+        if pid != _chat_row(uid, chat_id)["project_id"]:
+            _busy(chat_id)
+            if chat_pending.open_views(chat_id):
+                raise HTTPException(409, {"code": "busy", "message": "сначала ответьте на вопрос или снимите паузу диалога"})
+            changes["project_id"] = pid
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))
@@ -3243,8 +3255,8 @@ def _cleaner_messages(uid, chat_id, body, atts, model, conn):
             messages.append({"role": "user", "content": content})
         _cap_images(messages, limit)                 # фото этого хода — в тот же предел запроса
     # Cleaner — дата и роль диалога, профиля у него нет
-    role = _role(uid, state.DB.execute("SELECT role_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0])
-    return chat_system.wrap(chat_system.base(uid, None, role), messages)
+    row = _chat_row(uid, chat_id)
+    return chat_system.wrap(chat_system.base(uid, None, _role(uid, row["role_id"]), row["project_id"]), messages)
 
 
 @router.post("/chats/{chat_id}/cleaner-preview")
@@ -3353,7 +3365,7 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
     spec = spec_tokens(specs, rate)
     cap = _max_images(conn, model) if conn is not None else profiles.DEFAULT_MAX_IMAGES
     profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
-    system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
+    system = chat_system.base(uid, profiled, _role(uid, row["role_id"]), row["project_id"])
     excerpts_enabled = conn is None or not conn.cleaner
     block = EXCERPT_GUESS if excerpts_enabled and knowledge.chat_kbs(uid, chat_id) else ""
     text = chat_skills.preview(uid, body.text, body.skill_id)
@@ -3616,7 +3628,7 @@ def create_mcp_turn(uid, row, body, request):
             state.DB.execute("INSERT INTO messages(id, chat_id, role, content, skill, status, via, model, created)"
                              " VALUES (?, ?, 'user', ?, ?, 'done', 'server', ?, ?)",
                              (user_mid, chat_id, content, mark, model, now))
-        system = chat_system.base(uid, None, _role(uid, row["role_id"]))
+        system = chat_system.base(uid, None, _role(uid, row["role_id"]), row["project_id"])
         messages = chat_system.wrap(system, compose(chat_id, user_mid, model, 0))
         if len(messages) > 100 or any(len(msg["content"]) > TEXT_MAX for msg in messages):
             raise mcp_client.refused("Контекст превышает предел модели MCP. Продолжите в новом диалоге", "too_large", 413)
@@ -3714,7 +3726,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         # куски 1–3 системного сообщения и параметры профиля — снимок на начало хода; профиль общего подключения
         # браузеру не уходит (его текст и параметры учётке не видны)
         profiled = conn if conn.proxied or not conn.shared else None
-        system = chat_system.base(uid, profiled, _role(uid, fresh["role_id"]))
+        system = chat_system.base(uid, profiled, _role(uid, fresh["role_id"]), fresh["project_id"])
         params = profiles.request_params(profiled, model) if profiled is not None else {}
         params |= profiles.effort_params(conn, fresh["effort"])   # уровень — настройка диалога, не профиля
         kinds = (web.tools_for(conn, web.has_exa_key(uid))

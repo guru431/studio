@@ -22,7 +22,7 @@ export function paintPin(button, pinned) {
   button.title = label;
 }
 
-export function chatTitle({ rename, remove, pinItem, said, prefix = 'chat', heading = 'h1',
+export function chatTitle({ rename, remove, move, pinItem, said, prefix = 'chat', heading = 'h1',
   fallback = NAMES.chat, name = 'chat-title', href = (item) => `#/chat/${item.id}` }) {
   const id = `${prefix}-title`;
   const node = el(heading, { id, class: name }, fallback);
@@ -52,6 +52,8 @@ export function chatTitle({ rename, remove, pinItem, said, prefix = 'chat', head
     const item = current;
     const items = [
       menuItem(tr("Переименовать"), { attrs: { id: `${id}-rename` }, onSelect: () => { close(); rename(item); } }),
+      ...(move ? [menuItem(tr("Переместить в проект"), { attrs: { id: `${id}-move-project` },
+        onSelect: () => { close(); move(item); } })] : []),
       menuItem(tr("Удалить"), { attrs: { id: `${id}-delete`, class: 'danger' }, onSelect: () => { close(); remove(item); } }),
       menuItem(tr("Скопировать адрес"), { attrs: { id: `${id}-copy` }, onSelect: async () => {
         close();
@@ -71,7 +73,7 @@ export function chatTitle({ rename, remove, pinItem, said, prefix = 'chat', head
   return {
     node, label, actions, pin, menu, note,
     /** Строка открытого диалога (`chat.chat`) или null — новый диалог. */
-    set(chat) {
+    set(chat, emptyTitle = fallback) {
       if (current?.id !== chat?.id) {
         popup.close();
         clearTimeout(noteTimer);
@@ -84,7 +86,7 @@ export function chatTitle({ rename, remove, pinItem, said, prefix = 'chat', head
         time = next;
       }
       current = chat;
-      const text = chat ? chat.title || tr("Новый диалог") : fallback;
+      const text = chat ? chat.title || tr("Новый диалог") : emptyTitle;
       if (node.textContent !== text) node.textContent = text;
       if (chat) node.title = text;
       else node.removeAttribute('title');

@@ -14,7 +14,7 @@ def test_help_lists_studio_guide_and_user_resources_only(studio):
     assert listed.status_code == 200, listed.text
     body = listed.json()
     titles = [s["title"] for s in body["studio"]["sections"]]
-    assert titles[0] == "Учётки и вход" and "Чат" in titles and "MCP в чате и разделах" in titles
+    assert titles[0] == "Учётки и вход" and "Проекты и диалоги" in titles and "MCP в чате и разделах" in titles
     assert len({s["id"] for s in body["studio"]["sections"]}) == len(titles)
     assert body["servers"] == [{"sid": sid, "name": "Shared tools",
                                 "resources": [{"uri": "studio-guide://aitools", "name": "Руководство aitools"}]}]

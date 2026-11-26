@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 83
+VERSION = 84
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1158,6 +1158,43 @@ SCHEMA += SKILLS_82
 TRANSCRIPT_CONSENT_83 = "ALTER TABLE messages ADD COLUMN transcript_consent TEXT;"
 SCHEMA += TRANSCRIPT_CONSENT_83
 
+CHAT_PROJECTS_84 = """
+CREATE TABLE chat_projects(
+    id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', context TEXT NOT NULL DEFAULT '',
+    memory_on INTEGER NOT NULL DEFAULT 1, inbox INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL
+);
+CREATE UNIQUE INDEX chat_projects_inbox ON chat_projects(user_id) WHERE inbox = 1;
+INSERT INTO chat_projects(id, user_id, name, inbox, created)
+    SELECT 'inbox-' || id, id, 'Без проекта', 1, 0 FROM users;
+CREATE TRIGGER chat_projects_new_user AFTER INSERT ON users BEGIN
+    INSERT INTO chat_projects(id, user_id, name, inbox, created)
+        VALUES ('inbox-' || new.id, new.id, 'Без проекта', 1, 0);
+END;
+ALTER TABLE chats ADD COLUMN project_id TEXT REFERENCES chat_projects ON DELETE SET NULL;
+UPDATE chats SET project_id = 'inbox-' || user_id;
+CREATE INDEX chats_project ON chats(user_id, project_id, updated);
+CREATE TRIGGER chats_project_default AFTER INSERT ON chats WHEN new.project_id IS NULL BEGIN
+    UPDATE chats SET project_id = 'inbox-' || new.user_id WHERE id = new.id;
+END;
+CREATE TABLE chat_project_memory(
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES chat_projects ON DELETE CASCADE,
+    text_enc BLOB NOT NULL, created REAL NOT NULL
+);
+CREATE INDEX chat_project_memory_project ON chat_project_memory(project_id, created);
+CREATE TABLE chat_project_files(
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES chat_projects ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    parent_id TEXT REFERENCES chat_project_files ON DELETE CASCADE,
+    name TEXT NOT NULL, name_key TEXT NOT NULL, created REAL NOT NULL,
+    media_id TEXT REFERENCES media ON DELETE CASCADE, source_section TEXT
+);
+CREATE UNIQUE INDEX chat_project_files_name ON chat_project_files(project_id, coalesce(parent_id, ''), name_key);
+CREATE INDEX chat_project_files_parent ON chat_project_files(project_id, parent_id);
+CREATE INDEX chat_project_files_media ON chat_project_files(user_id, media_id);
+"""
+SCHEMA += CHAT_PROJECTS_84
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1320,6 +1357,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # навыки, токены и время ответа, пересказ, закрепление, параметры на модель, ссылки озвучки чата и Open WebUI
     82: SKILLS_82,
     83: TRANSCRIPT_CONSENT_83,
+    84: CHAT_PROJECTS_84,
 }
 
 

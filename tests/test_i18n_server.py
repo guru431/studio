@@ -43,6 +43,7 @@ EXEMPT_CONSTANTS = {
     'checks.PROBE_TEXT': 'проба модели',
     'web.NOTHING': 'результат инструмента для модели',
     'db.YO': 'SQL',
+    'db.CHAT_PROJECTS_84': 'SQL миграции с именем системного проекта',
     'videos.MCP_VIDEOS': 'SQL ищет фрагмент сводки Spark для старых роликов',
     'manage.USAGE': 'командная строка администратора',
     'takeout.README': 'файл внутри выгрузки',

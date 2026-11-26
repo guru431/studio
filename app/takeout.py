@@ -75,7 +75,8 @@ REFS = {
     "translate": ("translations", ("source_media_id",), LIVE),
 }
 #: вторые таблицы раздела с файлами — так же, со своим user_id (медиа диалога, фото страниц распознавания, образцы)
-MORE_REFS = {"chat": (("chat_media", ("media_id",), f"{LIVE} AND chat_id IN ({_LIVE_CHATS})"),),
+MORE_REFS = {"chat": (("chat_media", ("media_id",), f"{LIVE} AND chat_id IN ({_LIVE_CHATS})"),
+                      ("chat_project_files", ("media_id",), "")),
              "ocr": (("scan_pages", ("media_id",), " AND scan_id IN (SELECT id FROM scans WHERE deleted IS NULL)"),),
              "voices": (("voice_samples", ("media_id",),
                          " AND voice_id IN (SELECT id FROM voices WHERE deleted IS NULL)"
@@ -190,11 +191,11 @@ def _settings(user_id: int) -> dict | None:
 
 
 def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
-    chat = state.DB.execute("SELECT id, title, model, created, updated, protected_used FROM chats"
+    chat = state.DB.execute("SELECT id, title, model, created, updated, protected_used, project_id FROM chats"
                             " WHERE id = ? AND user_id = ?" + LIVE, (chat_id, user_id)).fetchone()
     if chat is None:
         return None                                        # удалён (или в корзину) во время выгрузки
-    meta = {key: chat[key] for key in ("id", "title", "model", "created", "updated")}
+    meta = {key: chat[key] for key in ("id", "title", "model", "created", "updated", "project_id")}
     if chat["protected_used"]:                             # сработал защищённый источник — только сведения диалога
         return {**meta, "protected": True, "messages": [], "media": []}
     attachments: dict[str, list] = {}
@@ -220,6 +221,20 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                                             " ORDER BY created, rowid",
                                             (chat_id, user_id))]
     return {**meta, "messages": messages, "media": chat_media}
+
+
+def _chat_projects(user_id: int, files: dict):
+    projects = state.DB.execute("SELECT id, name, description, context, memory_on, inbox FROM chat_projects WHERE user_id = ?"
+                                " ORDER BY inbox DESC, created, id", (user_id,)).fetchall()
+    for project in projects:
+        pid = project["id"]
+        entries = state.DB.execute("SELECT id, parent_id, name, media_id, source_section FROM chat_project_files"
+                                   " WHERE project_id = ? AND user_id = ? ORDER BY created, id", (pid, user_id))
+        scope = None if project["inbox"] else pid
+        yield dict(project) | {"memory_on": memory.enabled(user_id, scope),
+                              "memory": [] if scope is None else memory.list_for(user_id, scope),
+                              "files": [_pick(row, "id", "parent_id", "name", "source_section")
+                                        | {"file": files.get(row["media_id"])} for row in entries]}
 
 
 def _pages(table: str, user_id: int):
@@ -397,6 +412,9 @@ async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: obj
             yield piece
         del settings
         if "chat" in sections:
+            for project in _chat_projects(user_id, files):
+                async for piece in record(f"projects/{project['id']}.json", project):
+                    yield piece
             ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? AND deleted IS NULL"
                                                      " ORDER BY created, id", (user_id,))]
             counts["chats"] = 0

@@ -285,8 +285,8 @@ async def _declared(uid):
 
 
 # Files already referenced by the active section histories, including retained MCP results.
-STUDIO_FILES = """
-WITH files(id, section) AS (
+STUDIO_FILE_SOURCES = """
+WITH section_files(id, section) AS (
     SELECT f.media_id, j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id
       WHERE f.user_id = :uid AND f.media_id IS NOT json_extract(j.result, '$.video.source_media_id')
     UNION ALL SELECT media_id, 'photo' FROM images WHERE user_id = :uid AND deleted IS NULL
@@ -295,51 +295,69 @@ WITH files(id, section) AS (
     UNION ALL SELECT result_media_id, 'transcribe' FROM transcripts WHERE user_id = :uid AND deleted IS NULL
     UNION ALL SELECT source_media_id, 'ocr' FROM scans WHERE user_id = :uid AND deleted IS NULL AND origin = 'section'
     UNION ALL SELECT source_media_id, 'translate' FROM translations WHERE user_id = :uid AND deleted IS NULL
-    UNION ALL SELECT a.media_id, 'chat' FROM attachments a JOIN messages m ON m.id = a.message_id
-      JOIN chats c ON c.id = m.chat_id WHERE a.user_id = :uid AND c.deleted IS NULL
-    UNION ALL SELECT f.media_id, 'chat' FROM chat_media f JOIN chats c ON c.id = f.chat_id
-      WHERE f.user_id = :uid AND c.deleted IS NULL
+), chat_files(id, project_id, protected) AS (
+    SELECT a.media_id, c.project_id, c.protected_used FROM attachments a JOIN messages m ON m.id = a.message_id
+      JOIN chats c ON c.id = m.chat_id WHERE a.user_id = :uid AND c.user_id = :uid AND c.deleted IS NULL
+    UNION ALL SELECT f.media_id, c.project_id, c.protected_used FROM chat_media f JOIN chats c ON c.id = f.chat_id
+      WHERE f.user_id = :uid AND c.user_id = :uid AND c.deleted IS NULL
+), files(id, section, project_id, protected) AS (
+    SELECT id, section, NULL, 0 FROM section_files
+    UNION ALL SELECT id, 'chat', project_id, protected FROM chat_files
 )
-SELECT m.id, m.download_name, m.mime, m.size, m.created, MIN(f.section) AS section FROM files f
+"""
+STUDIO_FILES = STUDIO_FILE_SOURCES + """
+SELECT m.id, m.download_name, m.mime, m.size, m.created, m.rel_path, MIN(f.section) AS section,
+       MAX(f.protected) AS protected FROM files f
 JOIN media m ON m.id = f.id AND m.user_id = :uid
 {where}
 GROUP BY m.id ORDER BY m.created DESC, m.id DESC LIMIT :limit
 """
 STUDIO_PAGE = 100
+STUDIO_SECTIONS = ("photo", "video", "speech", "transcribe", "ocr", "translate")
 
 
-def studio_files(uid, *, after="", mid="", limit=STUDIO_PAGE):
-    where = ""
+def studio_files(uid, *, after="", mid="", section="", project_id=None, limit=STUDIO_PAGE):
+    filters = []
     args = {"uid": uid, "limit": limit}
     if mid:
-        where = "WHERE m.id = :mid"
+        filters.append("m.id = :mid")
         args["mid"] = mid
     elif after:
         cursor = state.DB.execute("SELECT created FROM media WHERE user_id = ? AND id = ?", (uid, after)).fetchone()
         if cursor is None:
             raise _not_found()
-        where = "WHERE (m.created, m.id) < (:created, :after)"
+        filters.append("(m.created, m.id) < (:created, :after)")
         args.update(created=cursor[0], after=after)
+    if section:
+        filters.append("f.section = :section")
+        args["section"] = section
+    if project_id:
+        filters.append("f.project_id = :project")
+        args["project"] = project_id
+    where = "WHERE " + " AND ".join(filters) if filters else ""
     return state.DB.execute(STUDIO_FILES.format(where=where), args).fetchall()
 
 
-def studio_file_entries(uid, after):
-    rows = studio_files(uid, after=after, limit=STUDIO_PAGE + 1)
+def studio_file_entries(uid, after, section=""):
+    rows = studio_files(uid, after=after, section=section, limit=STUDIO_PAGE + 1)
     entries = []
     for row in rows[:STUDIO_PAGE]:
         source = f"/api/media/{row['id']}"
         name = row["download_name"]
-        kind = row["mime"] if row["mime"] in PREVIEW_MEDIA.values() else preview_kind(name)
-        if kind not in ("pdf", "text") and row["mime"] != kind:
-            kind = ""
+        kind = local_kind(name, row["mime"])
         url = f"/api/my-files/0/preview/{row['id']}" if kind in ("pdf", "text") else source
-        entries.append({"name": name, "dir": False, "size": row["size"], "mtime": row["created"], "section": row["section"],
+        entries.append({"id": row["id"], "name": name, "dir": False, "size": row["size"], "mtime": row["created"], "section": row["section"],
                         "download": source + "?download=1", "preview": {"url": url, "kind": kind} if kind else None})
     return {"path": "", "entries": entries, "next": rows[STUDIO_PAGE - 1]["id"] if len(rows) > STUDIO_PAGE else None}
 
 
+def local_kind(name: str, mime: str) -> str:
+    kind = mime if mime in PREVIEW_MEDIA.values() else preview_kind(name)
+    return kind if kind in ("pdf", "text") or kind == mime else ""
+
+
 @router.get("/servers")
-async def servers(request: Request):
+async def servers(request: Request, sections: bool = False):
     """[{sid, name, max_upload, chunk, protected}] серверов учётки с «Моими файлами»; кусок — не больше CHUNK;
     `protected` — защищённый источник: ссылки на файл нет (`create_link` — 409 `protected`)."""
     uid = request.state.user.id
@@ -347,7 +365,13 @@ async def servers(request: Request):
               "chunk": min(files["chunk"], CHUNK), "protected": bool(item["protected"])}
              for item, files in await _declared(uid)]
     if studio_files(uid, limit=1):
-        items.append({"sid": 0, "name": "Студия", "local": True})
+        studio = {"sid": 0, "name": "Студия", "local": True}
+        if sections:
+            found = {row[0] for row in state.DB.execute(STUDIO_FILE_SOURCES +
+                     " SELECT DISTINCT f.section FROM section_files f JOIN media m ON m.id = f.id WHERE m.user_id = :uid",
+                     {"uid": uid})}
+            studio["sections"] = [s for s in STUDIO_SECTIONS if s in found]
+        items.append(studio)
     return items
 
 
@@ -368,11 +392,11 @@ async def storage(uid) -> list:
 
 
 @router.post("/{sid}/list")
-async def list_files(sid: int, body: PathIn, request: Request, after: str = ""):
+async def list_files(sid: int, body: PathIn, request: Request, after: str = "", section: str = ""):
     if sid == 0:
         if body.path or (after and not ID_RE.fullmatch(after)):
             raise _not_found()
-        return studio_file_entries(request.state.user.id, after)
+        return studio_file_entries(request.state.user.id, after, section)
     path = _path(body.path, root=True)
     async with _server(request, sid) as (session, _):
         listed = _listing(await _post(session, "list", {"path": path}, LIST_MAX), path)
@@ -441,7 +465,10 @@ async def studio_preview(mid: str, request: Request):
     rows = studio_files(uid, mid=mid, limit=1) if ID_RE.fullmatch(mid) else []
     if not rows:
         raise _not_found()
-    name = rows[0]["download_name"]
+    return await local_preview(uid, mid, rows[0]["download_name"])
+
+
+async def local_preview(uid: int, mid: str, name: str):
     kind = preview_kind(name)
     if kind not in ("pdf", "text"):
         raise _not_found()
@@ -456,6 +483,8 @@ async def studio_preview(mid: str, request: Request):
         content = await asyncio.to_thread(read)
     except FileNotFoundError:
         raise _not_found() from None
+    except OSError:
+        raise mcp.refused("хранилище недоступно", "storage", 503) from None
     if len(content) > PREVIEW_MAX:
         raise mcp.refused("Файл слишком велик для предпросмотра", "too_large", 413)
     return await render_document_preview(kind, name, content)

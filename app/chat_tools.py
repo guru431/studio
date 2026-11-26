@@ -16,6 +16,7 @@ import json
 from fastapi import HTTPException
 
 import chat_pending
+import chat_projects
 import knowledge
 import memory
 import state
@@ -137,7 +138,8 @@ def specs(task) -> list[dict]:
     """Встроенные инструменты хода `task` (`chat.StreamTask`): вопрос и план — всегда, память — только при
     `users.memory_on`, поиск по знаниям — когда есть базы или большие вложения (`knowledge.offered`), `run_part` —
     последним, пока последний навык диалога «по частям» (`parts_offered`)."""
-    return ([ASK_USER, TODO_WRITE] + ([MEMORY_SAVE, MEMORY_FORGET] if memory.enabled(task.user_id) else [])
+    scope = chat_projects.scope(task.user_id, task.chat_id)
+    return ([ASK_USER, TODO_WRITE] + ([MEMORY_SAVE, MEMORY_FORGET] if memory.enabled(task.user_id, scope) else [])
             + ([_knowledge_spec(task)] if knowledge.offered(task.user_id, task.chat_id) else [])
             + ([RUN_PART] if parts_offered(task.chat_id) else []))
 
@@ -205,7 +207,8 @@ async def _memory(task, call) -> dict:
     MEMORY_PROTECTED. Шаг текста записи не хранит (память — шифром),
     `memory_forget` принимает номер из блока — первые знаки id своей записи."""
     action = "save" if call.name == "memory_save" else "forget"
-    if not memory.enabled(task.user_id):
+    scope = chat_projects.scope(task.user_id, task.chat_id)
+    if not memory.enabled(task.user_id, scope):
         return {"kind": "memory", "action": action, "error": MEMORY_OFF}
     args = _args(call.arguments) or {}
     if action == "save":
@@ -218,14 +221,14 @@ async def _memory(task, call) -> dict:
             await chat_pending.pause(task, "confirm", call, {"memory_text": text.strip()})
             return {}
         try:
-            memory.save(task.user_id, text)
+            memory.save(task.user_id, text, scope)
         except HTTPException as exc:
             return {"kind": "memory", "action": action, "error": exc.detail["message"]}
         return {"kind": "memory", "action": action, "text": MEMORY_SAVED}
     handle = args.get("id")
-    found = [item["id"] for item in memory.list_for(task.user_id)
+    found = [item["id"] for item in memory.list_for(task.user_id, scope)
              if isinstance(handle, str) and len(handle.strip()) >= 6 and item["id"].startswith(handle.strip().lower())]
-    if len(found) != 1 or not memory.forget(task.user_id, found[0]):
+    if len(found) != 1 or not memory.forget(task.user_id, found[0], scope):
         return {"kind": "memory", "action": action, "error": MEMORY_GONE}
     return {"kind": "memory", "action": action, "text": MEMORY_FORGOTTEN}
 

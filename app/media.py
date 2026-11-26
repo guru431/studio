@@ -458,6 +458,7 @@ REFERENCES = {
     "videos": ("media_id", "source_media_id"),
     "attachments": ("media_id",),
     "chat_media": ("media_id",),                # звук и видео диалога для MCP
+    "chat_project_files": ("media_id",),
     "transcripts": ("source_media_id", "result_media_id", "listen_media_id"),
     "voices": ("media_id",),
     "voice_samples": ("media_id",),
@@ -738,8 +739,9 @@ def _zip_entry(name: bytes, flags: int, dos: tuple[int, int], crc: int, size: in
                         len(name), len(local_extra)) + name + local_extra
     data = (struct.pack("<QQ", size, size) if big else b"") + (struct.pack("<Q", offset) if far else b"")
     extra = struct.pack("<HH", 1, len(data)) + data if data else b""
+    attributes = (0o40755 << 16 | 0x10) if name.endswith(b"/") else 0o100644 << 16
     central = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 3 << 8 | need, need, flags, 0, *dos, crc, field, field,
-                          len(name), len(extra), 0, 0, 0, 0o100644 << 16,
+                          len(name), len(extra), 0, 0, 0, attributes,
                           0xFFFFFFFF if far else offset) + name + extra
     return local, central
 
@@ -779,12 +781,15 @@ class ZipWriter:
         return table + _zip_end(len(self.central), self.offset, len(table))
 
 
-def _zip(entries: list[tuple[str, Path, float]], zone: ZoneInfo):
+def _zip(entries: list[tuple[str, Path | None, float]], zone: ZoneInfo):
     """ZIP_STORED на лету; Starlette крутит обычный генератор в пуле потоков. Файла уже нет —
     пропускается; шара оборвала чтение — исключение без пути: ответ рвётся, браузер покажет сбой."""
     out = ZipWriter(zone)
     try:
         for name, file, created in entries:
+            if file is None:
+                yield out.entry(name, created, 0, 0)
+                continue
             try:
                 f, crc, size, _ = open_summed(file)
             except FileNotFoundError:

@@ -36,11 +36,12 @@ class MemoryIn(BaseModel):
 INVALID = {"code": "invalid", "message": f"запись памяти — от 1 до {ITEM_MAX} знаков"}
 
 
-def list_for(uid: int) -> list[dict]:
+def list_for(uid: int, project_id: str | None = None) -> list[dict]:
     """Записи учётки, новые первыми: `{id, text, created}`; не расшифровавшаяся (сменили ключ) — UNREADABLE."""
     out = []
-    for row in state.DB.execute("SELECT id, text_enc, created FROM user_memory WHERE user_id = ?"
-                                " ORDER BY created DESC, rowid DESC", (uid,)):
+    table, column, scope = _scope(uid, project_id)
+    for row in state.DB.execute(f"SELECT id, text_enc, created FROM {table} WHERE {column} = ?"
+                                " ORDER BY created DESC, rowid DESC", (scope,)):
         try:
             text = security.decrypt(row["text_enc"])
         except (InvalidToken, TypeError, ValueError):
@@ -49,25 +50,33 @@ def list_for(uid: int) -> list[dict]:
     return out
 
 
-def save(uid: int, text: str) -> str:
+def _scope(uid: int, project_id: str | None) -> tuple:
+    if project_id is None:
+        return "user_memory", "user_id", uid
+    return "chat_project_memory", "project_id", project_id
+
+
+def save(uid: int, text: str, project_id: str | None = None) -> str:
     """Новая запись шифром; итог — её id. Пустая или длиннее ITEM_MAX — 422 `invalid`, уже MAX_ITEMS — 409
     `memory_full`. Проверка числа и вставка — без await между ними."""
     text = " ".join(text.split())                    # одной строкой: блок системного сообщения — строки записей
     if not 1 <= len(text) <= ITEM_MAX:
         raise HTTPException(422, INVALID)
-    if state.DB.execute("SELECT COUNT(*) FROM user_memory WHERE user_id = ?", (uid,)).fetchone()[0] >= MAX_ITEMS:
+    table, column, scope = _scope(uid, project_id)
+    if state.DB.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} = ?", (scope,)).fetchone()[0] >= MAX_ITEMS:
         raise HTTPException(409, {"code": "memory_full",
                                   "message": f"в памяти уже {MAX_ITEMS} записей — удалите ненужные"})
     item_id = uuid.uuid4().hex
-    state.DB.execute("INSERT INTO user_memory(id, user_id, text_enc, created) VALUES (?, ?, ?, ?)",
-                     (item_id, uid, security.encrypt(text), clock.NOW()))
+    state.DB.execute(f"INSERT INTO {table}(id, {column}, text_enc, created) VALUES (?, ?, ?, ?)",
+                     (item_id, scope, security.encrypt(text), clock.NOW()))
     log.info("пользователь %d: память — запись добавлена", uid)
     return item_id
 
 
-def forget(uid: int, item_id: str) -> bool:
+def forget(uid: int, item_id: str, project_id: str | None = None) -> bool:
     """Удалить свою запись; чужой или нет — False."""
-    gone = state.DB.execute("DELETE FROM user_memory WHERE id = ? AND user_id = ?", (item_id, uid)).rowcount == 1
+    table, column, scope = _scope(uid, project_id)
+    gone = state.DB.execute(f"DELETE FROM {table} WHERE id = ? AND {column} = ?", (item_id, scope)).rowcount == 1
     if gone:
         log.info("пользователь %d: память — запись удалена", uid)
     return gone
@@ -80,8 +89,10 @@ def clear(uid: int) -> int:
     return count
 
 
-def enabled(uid: int) -> bool:
-    row = state.DB.execute("SELECT memory_on FROM users WHERE id = ?", (uid,)).fetchone()
+def enabled(uid: int, project_id: str | None = None) -> bool:
+    row = (state.DB.execute("SELECT memory_on FROM users WHERE id = ?", (uid,)).fetchone() if project_id is None else
+           state.DB.execute("SELECT memory_on FROM chat_projects WHERE user_id = ? AND id = ?",
+                            (uid, project_id)).fetchone())
     return row is not None and bool(row[0])
 
 

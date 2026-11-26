@@ -7,9 +7,8 @@
 import { CHAT_DRAFTS, draftStore, draftsLocked } from './dialog-drafts.js';
 
 const store = draftStore(CHAT_DRAFTS);
-const keyOf = (id) => id ?? 'new';
-
-export function chatDrafts(input, { autosize, skills }) {
+export function chatDrafts(input, { autosize, skills, project = () => null }) {
+  const keyOf = (id) => id ?? (project() ? `new-${project()}` : 'new');
   const save = (id) => {
     if (draftsLocked) return;
     const text = input.value.trim() ? input.value : '';

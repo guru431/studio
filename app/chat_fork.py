@@ -49,11 +49,11 @@ def new_dialog(uid: int, row, *, title: "str | None" = None) -> str:
     web = 0 if row["protected_used"] else row["web"]
     state.DB.execute(
         "INSERT INTO chats(id, user_id, title, connection_id, model, mcp_model_sid, role_id, thinking, effort, mcp_ids,"
-        " mcp_off, mcp_tools_off, protected_used, web, created, updated, seen)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " mcp_off, mcp_tools_off, protected_used, web, created, updated, seen, project_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (chat_id, uid, row["title"] if title is None else title, row["connection_id"], row["model"],
          row["mcp_model_sid"], row["role_id"], row["thinking"], row["effort"], row["mcp_ids"], row["mcp_off"],
-         row["mcp_tools_off"], row["protected_used"], web, now, now, now))
+         row["mcp_tools_off"], row["protected_used"], web, now, now, now, row["project_id"]))
     state.DB.execute("INSERT INTO chat_kbs(chat_id, kb_id) SELECT ?, kb_id FROM chat_kbs WHERE chat_id = ?"
                      " ORDER BY rowid", (chat_id, row["id"]))
     return chat_id

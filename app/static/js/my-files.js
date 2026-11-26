@@ -6,6 +6,7 @@ import { tr } from './i18n.js';
  * «Ссылка на сутки» — POST .../links: адрес `/f#<token>` показывается один раз (в базе — только хеш); «Мои ссылки» —
  * действующие ссылки с «Отозвать». Каждый видит только свою папку, администратор — тоже свою. */
 import { api } from './api.js';
+import { chooseProject, projectName, PROJECTS_API } from './chat-projects.js';
 import { icon } from './icons.js';
 import { sectionName } from './sections-meta.js';
 import { sizeText } from './settings.js';
@@ -35,7 +36,7 @@ export function mount(view, ctx) {
   const host = view;
   const trash = ctx.query.has('trash');
   const studio = { sid: 0, name: tr("Записи Studio"), local: true };
-  const state = { servers: trash ? [studio] : [], sid: trash ? 0 : null, path: '' };
+  const state = { servers: trash ? [studio] : [], sid: trash ? 0 : null, path: '', folders: [], projects: [] };
   const note = el('p', { id: 'myfiles-status', class: 'status', role: 'status', 'aria-live': 'polite' });
   const tabs = el('div', { class: 'row myfiles-tabs', id: 'myfiles-tabs', role: 'tablist', 'aria-label': tr("Хранилища") });
   const crumbs = el('nav', { class: 'row myfiles-path', id: 'myfiles-path', 'aria-label': tr("Путь") });
@@ -44,6 +45,14 @@ export function mount(view, ctx) {
     button(tr("Загрузить"), { class: 'btn btn-accent', id: 'myfiles-upload' }, () => picker.click()),
     button(tr("Новая папка"), { class: 'btn', id: 'myfiles-mkdir' }, () => mkdirDialog()),
     button(tr("ZIP папки"), { class: 'btn', id: 'myfiles-zip' }, () => zip(state.path)), picker);
+  const projectPicker = el('input', { type: 'file', multiple: true, hidden: true, id: 'project-files-picker' });
+  const projectUpload = button(tr("Загрузить"), { class: 'btn btn-accent' }, () => projectPicker.click());
+  const projectMkdir = button(tr("Новая папка"), { class: 'btn' }, () => projectFolderDialog());
+  const projectToolbar = el('div', { class: 'row myfiles-actions', hidden: true }, projectUpload, projectMkdir,
+    button(tr("Скачать ZIP"), { class: 'btn' }, () => {
+      const parent = folder();
+      fetchFile(`${projectBase()}/zip${parent ? `?parent=${parent}` : ''}`, '');
+    }), projectPicker);
   const list = el('ul', { class: 'agents myfiles-list', id: 'myfiles-list' });
   const more = button(tr("Ещё"), { class: 'btn btn-sm', hidden: true });
   let loadVersion = 0;
@@ -56,7 +65,7 @@ export function mount(view, ctx) {
   const linksBox = el('section', { hidden: trash },
     el('h2', {}, tr("Мои ссылки")),
     el('p', { class: 'muted small' }, tr("Ссылка открывает один файл без входа в Студию и действует сутки.")), links);
-  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, crumbs, toolbar, fresh, studioTrash, list, more, linksBox);
+  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, crumbs, toolbar, projectToolbar, fresh, studioTrash, list, more, linksBox);
   const trashLink = el('a', { class: 'btn btn-sm', id: trash ? 'myfiles-back' : 'myfiles-trash',
     href: trash ? '#/myfiles' : '#/myfiles?trash=1' }, icon(trash ? 'prev' : 'trash'),
   trash ? tr("Вернуться к файлам") : tr("Корзина"));
@@ -80,8 +89,11 @@ export function mount(view, ctx) {
     note.classList.toggle('error', kind === 'error');
     note.classList.toggle('ok', kind === 'ok');
   };
-  const base = () => `/api/my-files/${state.sid}`;
-  const server = () => state.servers.find((s) => s.sid === state.sid);
+  const keyOf = (s) => s.key ?? s.sid;
+  const server = () => state.servers.find((s) => keyOf(s) === state.sid);
+  const base = () => `/api/my-files/${server()?.sid}`;
+  const projectBase = () => `${PROJECTS_API}/${server().project.id}/files`;
+  const folder = () => state.folders.at(-1)?.id || null;
 
   async function act(work, done) {
     say('');
@@ -95,13 +107,15 @@ export function mount(view, ctx) {
 
   function paintTabs() {
     tabs.replaceChildren(...state.servers.map((s) => {
-      const tab = button(s.name, { class: `btn btn-sm${s.sid === state.sid ? ' btn-accent' : ''}`, role: 'tab',
-        'aria-selected': String(s.sid === state.sid), 'data-sid': String(s.sid) }, () => {
-        state.sid = s.sid;
+      const key = keyOf(s);
+      const tab = button(s.name, { class: `btn btn-sm${key === state.sid ? ' btn-accent' : ''}`, role: 'tab',
+        'aria-selected': String(key === state.sid), 'data-sid': String(key) }, () => {
+        state.sid = key;
         state.path = '';
+        state.folders = [];
         say('');
         load();
-        tabs.querySelector(`[data-sid="${s.sid}"]`)?.focus();
+        tabs.querySelector(`[data-sid="${key}"]`)?.focus();
       });
       return tab;
     }));
@@ -109,6 +123,15 @@ export function mount(view, ctx) {
   }
 
   function paintCrumbs() {
+    if (server()?.project) {
+      const names = [server().name, ...state.folders.map((entry) => entry.name)];
+      crumbs.replaceChildren(...names.map((name, index) => button(name, { class: 'btn btn-sm',
+        'aria-current': index === names.length - 1 ? 'location' : null }, () => {
+        state.folders = state.folders.slice(0, index);
+        load();
+      })));
+      return;
+    }
     const parts = state.path ? state.path.split('/') : [];
     const items = [button(server()?.name || tr("Мои файлы"), { class: 'btn-link', 'data-path': '' }, () => open(''))];
     parts.forEach((part, i) => {
@@ -189,9 +212,90 @@ export function mount(view, ctx) {
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': 'false' },
       fileInfo(entry, facts, entry.preview ? () => entry.preview : null),
       el('div', { class: 'session-actions' },
+        state.projects.length && entry.section !== 'chat' ? button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () =>
+          chooseProject(host, tr("Добавить в проект"), state.projects, async (pid) => {
+            await api('POST', `${PROJECTS_API}/${pid}/files/from-section`, { media_id: entry.id, section: entry.section }, { signal });
+            say(tr("Файл добавлен в проект"), 'ok');
+          })) : null,
         button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", entry.name) },
           () => fetchFile(entry.download, entry.name))));
   }
+
+  function projectRow(entry) {
+    const name = entry.dir && entry.from_chat ? tr("Файлы диалогов") : entry.name;
+    const actions = el('div', { class: 'session-actions' });
+    if (!entry.dir) actions.append(button(tr("Скачать"), { class: 'btn btn-sm' }, () => fetchFile(entry.download, name)));
+    if (!entry.from_chat) actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger' }, () => {
+      const remove = button(tr("Удалить"), { class: 'btn btn-danger' });
+      const dialog = openDialog(host, { id: 'project-file-delete', title: tr("Удалить из проекта?"),
+        body: [el('p', {}, name)], actions: [remove] });
+      const url = `${projectBase()}/${entry.id}`;
+      remove.addEventListener('click', () => {
+        dialog.close();
+        act(async () => {
+          await api('DELETE', url, undefined, { signal });
+          await load();
+        });
+      });
+    }));
+    return el('li', { class: 'agent session myfiles-item', 'data-name': name, 'data-dir': String(entry.dir) },
+      fileInfo({ ...entry, name }, [entry.dir ? tr("папка") : sizeText(entry.size)], entry.preview ? () => entry.preview : null,
+        entry.dir ? () => {
+          state.folders.push({ id: entry.id, name });
+          say('');
+          load();
+        } : null), actions);
+  }
+
+  function projectFolderDialog() {
+    const input = el('input', { class: 'input', maxlength: '180', required: true });
+    const error = el('p', { class: 'error' });
+    const save = button(tr("Создать"), { class: 'btn btn-accent' });
+    const dialog = openDialog(host, { id: 'project-file-folder', title: tr("Новая папка"),
+      body: [field(tr("Название"), input), error], actions: [save] });
+    const url = `${projectBase()}/folders`;
+    const parent = folder();
+    save.addEventListener('click', async () => {
+      if (!input.reportValidity()) return;
+      save.disabled = true;
+      try {
+        await api('POST', url, { name: input.value, parent }, { signal });
+        dialog.close();
+        await load();
+      } catch (err) {
+        error.textContent = words(err);
+        save.disabled = false;
+      }
+    });
+  }
+
+  projectPicker.addEventListener('change', async () => {
+    const files = [...projectPicker.files];
+    projectPicker.value = '';
+    if (!files.length) return;
+    const url = `${projectBase()}/upload`;
+    const sid = state.sid;
+    const parent = folder();
+    const failed = [];
+    projectUpload.disabled = true;
+    try {
+      for (const file of files) {
+        if (signal.aborted) break;
+        try {
+          await api('POST', url, file, { signal, headers: { 'x-studio-name': encodeURIComponent(file.name),
+            ...(parent ? { 'x-studio-folder': parent } : {}) } });
+        } catch (err) {
+          failed.push(`${file.name} — ${words(err)}`);
+        }
+      }
+      if (!signal.aborted && state.sid === sid) {
+        await load();
+        say(failed.length ? failed.join('\n') : tr("Загружено файлов: {0}", files.length), failed.length ? 'error' : 'ok');
+      }
+    } finally {
+      projectUpload.disabled = false;
+    }
+  });
 
   function entryRow(entry) {
     const path = join(state.path, entry.name);
@@ -239,6 +343,7 @@ export function mount(view, ctx) {
   async function load(after = null) {
     const version = ++loadVersion;
     const local = Boolean(server()?.local);
+    const project = server()?.project;
     if (!after) {
       visible.disconnect();
       list.replaceChildren();
@@ -246,7 +351,10 @@ export function mount(view, ctx) {
     }
     stopTrash?.();
     stopTrash = null;
-    toolbar.hidden = local || trash;
+    toolbar.hidden = local || trash || !!project;
+    projectToolbar.hidden = !project;
+    projectMkdir.hidden = !!project && folder() === 'chats';
+    projectUpload.hidden = projectMkdir.hidden;
     crumbs.hidden = trash;
     studioTrash.hidden = !(trash && local);
     list.hidden = trash && local;
@@ -260,13 +368,16 @@ export function mount(view, ctx) {
     try {
       result = trash
         ? { entries: await api('POST', `${base()}/trash`, {}, { signal }) }
-        : await api('POST', `${base()}/list${after ? `?after=${encodeURIComponent(after)}` : ''}`, { path: state.path }, { signal });
+        : project ? await api('GET', `${projectBase()}?${new URLSearchParams({
+          ...(folder() ? { parent: folder() } : {}), ...(after ? { after } : {}) })}`, undefined, { signal })
+        : await api('POST', `${base()}/list?${new URLSearchParams({
+          ...(after ? { after } : {}), ...(server()?.section ? { section: server().section } : {}) })}`, { path: state.path }, { signal });
     } catch (err) {
       if (!signal.aborted && version === loadVersion) say(words(err), 'error');
       return;
     }
     if (signal.aborted || version !== loadVersion) return;
-    const rows = result.entries.map(local ? studioRow : trash ? trashRow : entryRow);
+    const rows = result.entries.map(project ? projectRow : local ? studioRow : trash ? trashRow : entryRow);
     if (after) list.append(...rows);
     else list.replaceChildren(...(rows.length ? rows
       : [el('li', { class: 'muted', id: 'myfiles-none' }, trash ? tr("Корзина сервера пуста") : tr("Папка пуста"))]));
@@ -417,9 +528,23 @@ export function mount(view, ctx) {
   (async () => {
     if (trash) load();
     try {
-      const available = await api('GET', '/api/my-files/servers', undefined, { signal, unlock: !trash });
+      const available = await api('GET', '/api/my-files/servers?sections=true', undefined, { signal, unlock: !trash });
       if (signal.aborted) return;
-      state.servers = trash ? [studio, ...available.filter(server => !server.local)] : available;
+      if (trash) {
+        state.servers = [studio, ...available.filter(server => !server.local)];
+      } else {
+        const { items } = await api('GET', PROJECTS_API, undefined, { signal });
+        if (signal.aborted) return;
+        state.projects = items;
+        const projects = items.map((project) => ({ key: project.id, project, name: projectName(project) }));
+        const sections = available.flatMap((s) => s.local
+          ? (s.sections || []).map((section, index) => ({ ...s, key: index ? `0-${section}` : 0, section, name: sectionName(section) }))
+          : [s]);
+        state.servers = [...projects, ...sections];
+        const requested = projects.find((p) => p.key === ctx.query.get('p'));
+        const initial = requested || sections[0] || projects[0];
+        if (initial) state.sid = keyOf(initial);
+      }
     } catch (err) {
       if (!signal.aborted && (!trash || err.status !== 423)) say(words(err), 'error');
       return;
@@ -432,7 +557,6 @@ export function mount(view, ctx) {
       say(tr("Нет серверов MCP с «Моими файлами». Их подключают в «Настройки → Чат → MCP»."));
       return;
     }
-    state.sid = state.servers[0].sid;
     browser.hidden = false;
     await Promise.all([load(), loadLinks()]);
   })();

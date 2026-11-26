@@ -37,6 +37,8 @@ import chat
 import chat_info
 import chat_list
 import chat_pending
+import chat_project_files
+import chat_projects
 import chat_fork
 import chat_continue
 import chat_preview
@@ -224,6 +226,8 @@ app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat_info.router)          # раньше chat: /api/chats/stats — не id диалога
 app.include_router(chat.router)
+app.include_router(chat_projects.router)
+app.include_router(chat_project_files.router)
 app.include_router(chat_pending.router)
 app.include_router(chat_preview.router)         # окно HTML и SVG ответа «Чата»
 app.include_router(chat_sources.router)         # источники «Знаний» под ответом

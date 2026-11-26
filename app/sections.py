@@ -32,7 +32,7 @@ import connections
 import state
 
 SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation")   # порядок вкладок
-NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "speech": "Озвучка", "transcribe": "Расшифровка", "ocr": "Сканы",
+NAMES = {"chat": "Проекты", "photo": "Фото", "video": "Видео", "speech": "Озвучка", "transcribe": "Расшифровка", "ocr": "Сканы",
          "translate": "Перевод", "dictation": "Голосовой ввод",
          "help": "Справка", "trash": "Корзина", "myfiles": "Мои файлы", "owui": "Open WebUI"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}

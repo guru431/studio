@@ -26,7 +26,7 @@ export const LIST_POLL_MS = 5000;
 const SEEN_REPEAT_MS = 60000;     // как chat_pending.REMIND_TICK_SEC: проход напоминаний — раз в минуту
 const MARKS = { busy: tr("идёт ответ"), unread: tr("не прочитано"), draft: tr("есть черновик") };
 
-export function chatList(list, { row, group, pinItem, failed = () => {}, loaded = () => {} }) {
+export function chatList(list, { row, group, pinItem, project = () => null, failed = () => {}, loaded = () => {} }) {
   const drafts = draftStore(CHAT_DRAFTS);
   const search = el('input', { type: 'search', id: 'chat-search', class: 'input chat-search', autocomplete: 'off',
     placeholder: tr("Поиск по названиям"), 'aria-label': tr("Поиск по названиям") });
@@ -84,12 +84,14 @@ export function chatList(list, { row, group, pinItem, failed = () => {}, loaded 
 
   function paint() {
     rows.clear();
-    if (!items.length) {
+    const pid = project();
+    const scoped = pid ? items.filter((item) => item.project_id === pid || !item.project_id) : items;
+    if (!scoped.length) {
       list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Диалогов пока нет")));
       return;
     }
     const query = search.value.trim().toLocaleLowerCase();
-    const found = query ? items.filter((item) => (item.title || tr("Новый диалог")).toLocaleLowerCase().includes(query)) : items;
+    const found = query ? scoped.filter((item) => (item.title || tr("Новый диалог")).toLocaleLowerCase().includes(query)) : scoped;
     if (!found.length) {
       list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Ничего не найдено")));
       return;
@@ -158,6 +160,7 @@ export function chatList(list, { row, group, pinItem, failed = () => {}, loaded 
   return {
     search,
     reload,
+    paint,
     items: () => items,
     seen(chat, waiting = false) {
       watch(chat && waiting ? chat.id : null);

@@ -1004,6 +1004,18 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .chats { width: 248px; flex: none; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-6); overflow-y: auto;
   background: var(--surface-side); border-right: 1px solid var(--line); }
 .chat-new { justify-content: flex-start; margin-bottom: var(--space-4); }
+.project-panel, .project-detail, .project-chats { display: grid; gap: var(--space-3); min-width: 0; }
+.project-detail { padding: 0 0 var(--space-3) var(--space-3); border-bottom: 1px solid var(--line); }
+.project-chats .chat-new { margin-bottom: 0; }
+.project-link, .project-create { justify-content: flex-start; }
+.project-link[data-inbox] { position: sticky; top: 0; z-index: 1; background: var(--surface-1); }
+.project-link span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.project-actions { flex-wrap: wrap; }
+.project-description { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-memory-list { margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.project-memory-list li { gap: var(--space-3); justify-content: space-between; overflow-wrap: anywhere; }
+.project-file-picker { display: grid; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
+.project-file-picker .btn { justify-content: flex-start; overflow-wrap: anywhere; }
 .chat-list { display: flex; flex-direction: column; gap: var(--space-1); }
 .chat-list-note { margin: var(--space-4) var(--space-3); }
 .chat-group { margin: var(--space-5) var(--space-4) var(--space-1); color: var(--text-2); font-size:var(--fs-xs); }

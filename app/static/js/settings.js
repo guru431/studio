@@ -892,7 +892,7 @@ function memoryBlock(host) {
   load().catch((err) => say(note, words(err), 'error'));
   return el('section', { class: 'block', id: 'chat-memory-settings' }, el('h2', {}, tr("Память")),
     el('label', { class: 'check' }, enabled, tr("Память: модель запоминает факты о вас между диалогами")),
-    el('p', { class: 'muted small' }, tr("Включённая память — короткие записи о вас, которые модель сама добавляет и удаляет; они уходят в каждый ход чата. Записи хранятся зашифрованными и видны только вам; «Удалить всю историю» их стирает.")),
+    el('p', { class: 'muted small' }, tr("Личная память используется в диалогах «Без проекта». У каждого другого проекта свои записи и переключатель памяти.")),
     list, el('div', { class: 'row' }, clear, note));
 }
 

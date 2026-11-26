@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Your AI workspace, on your own server.</strong><br>
-  Chat, images, video, speech, documents, Open WebUI and coding agents — in one installable web app.
+  Projects, images, video, speech, documents, Open WebUI and coding agents — in one installable web app.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@ Studio brings everyday AI tools and remote development into a single account. As
 
 The server runs on infrastructure you control. Connect local models through the **srvllm gateway** or use **OpenAI-compatible services** for supported tasks. The Windows/macOS/Linux bridge connects the agents already installed on your computers, using their existing accounts and project permissions.
 
-**Nine workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Open WebUI · Agents.
+**Nine workspaces:** Projects · Images · Video · Text to speech · Transcription · Scans · Translation · Open WebUI · Agents.
 
 > The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**. Studio Agent follows the computer's system language (Russian, otherwise English). Set `STUDIO_AGENT_LANG=ru|en` to override it. Screenshots show the English interface in dark mode with fictional demo data.
 
@@ -36,9 +36,10 @@ The server runs on infrastructure you control. Connect local models through the 
 
 - Connect **MCP servers** in Settings. Choose tools per chat or run compatible tools from Images, Video, Text to speech, Transcription, Scans and Translation. Each run in those sections has its own model, status and result history. Open returned files in **My files** or from the result. Coding agents have separate project MCP settings.
 
-### Chat
+### Projects
 
-- Multiple conversations, model switching and persistent history grouped by day.
+- Project conversations with shared instructions and memory. Unassigned conversations appear under **No project** and can move between projects.
+- Project files with nested folders, multi-file upload, and ZIP export. Results from other workspaces can be added to a project from **My files**.
 - Streaming answers with Markdown, tables, syntax highlighting, copy, stop and regenerate.
 - Generate another answer from the same prompt, switch between variants and compare them side by side on wider screens. Studio can summarize older turns and continue answers that hit a length limit in server-routed chats.
 - Up to 10 attachments per message: images, PDF, DOCX, text and code files; scanned PDFs can pass through OCR before the model answers, and large documents and **knowledge bases** reach the model as excerpts found for the question.

@@ -424,8 +424,8 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
         width=width, mobile=mobile)
     assert not r2.get("failed"), r2
     v = {**r["values"], **r2["values"]}
-    assert v["new"] == ["Чат", True] and v["title"] == ["Мой план", False]
-    assert v["menu"] == ["Переименовать", "Удалить", "Скопировать адрес"]
+    assert v["new"] == ["Проекты", True] and v["title"] == ["Мой план", False]
+    assert v["menu"] == ["Переименовать", "Переместить в проект", "Удалить", "Скопировать адрес"]
     assert v["renamed"] == "Новое имя" and v["copied"].endswith(f"/#/chat/{cid}")
     assert v["copy_note"] == "Адрес скопирован"                   # видимая отметка успеха, уходит сама
     assert v["copy_fail"] == ["Не удалось скопировать адрес", True, True]   # отказ — видимой строкой #chat-error
