@@ -68,6 +68,7 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
 
   function decorate(item) {
     const li = row(item);
+    if (item.readonly) return li;
     const box = el('span', { class: 'chat-marks' });
     const pin = iconButton('star', tr("Закрепить"), { class: 'icon-btn chat-pin' });
     paintPin(pin, item.pinned);

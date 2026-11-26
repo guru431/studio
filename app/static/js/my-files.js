@@ -225,7 +225,7 @@ export function mount(view, ctx) {
     const name = entry.dir && entry.from_chat ? tr("Файлы диалогов") : entry.name;
     const actions = el('div', { class: 'session-actions' });
     if (!entry.dir) actions.append(button(tr("Скачать"), { class: 'btn btn-sm' }, () => fetchFile(entry.download, name)));
-    if (!entry.from_chat) actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger' }, () => {
+    if (!entry.from_chat && server()?.project?.role !== 'viewer') actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger' }, () => {
       const remove = button(tr("Удалить"), { class: 'btn btn-danger' });
       const dialog = openDialog(host, { id: 'project-file-delete', title: tr("Удалить из проекта?"),
         body: [el('p', {}, name)], actions: [remove] });
@@ -353,7 +353,7 @@ export function mount(view, ctx) {
     stopTrash = null;
     toolbar.hidden = local || trash || !!project;
     projectToolbar.hidden = !project;
-    projectMkdir.hidden = !!project && folder() === 'chats';
+    projectMkdir.hidden = project?.role === 'viewer' || folder() === 'chats';
     projectUpload.hidden = projectMkdir.hidden;
     crumbs.hidden = trash;
     studioTrash.hidden = !(trash && local);
@@ -535,7 +535,7 @@ export function mount(view, ctx) {
       } else {
         const { items } = await api('GET', PROJECTS_API, undefined, { signal });
         if (signal.aborted) return;
-        state.projects = items;
+        state.projects = items.filter((project) => project.role !== 'viewer');
         const projects = items.map((project) => ({ key: project.id, project, name: projectName(project) }));
         const sections = available.flatMap((s) => s.local
           ? (s.sections || []).map((section, index) => ({ ...s, key: index ? `0-${section}` : 0, section, name: sectionName(section) }))

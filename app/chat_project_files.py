@@ -94,8 +94,27 @@ def _children(pid, parent):
         " ORDER BY f.media_id IS NOT NULL, f.name_key, f.id", (pid, parent)).fetchall()
 
 
+ATTACHED_MEDIA = """
+    SELECT a.media_id, c.user_id, c.project_id, c.protected_used, c.deleted
+      FROM attachments a JOIN messages msg ON msg.id = a.message_id
+      JOIN chats c ON c.id = msg.chat_id AND a.user_id = c.user_id
+    UNION ALL
+    SELECT cm.media_id, c.user_id, c.project_id, c.protected_used, COALESCE(c.deleted, cm.deleted)
+      FROM chat_media cm JOIN chats c ON c.id = cm.chat_id AND cm.user_id = c.user_id
+"""
+
+
 def _chat_files(uid, pid, *, after="", mid="", limit=PAGE):
-    return my_files.studio_files(uid, after=after, mid=mid, project_id=pid, section="chat", limit=limit)
+    return state.DB.execute(
+        "WITH attached AS NOT MATERIALIZED (" + ATTACHED_MEDIA + "), visible AS ("
+        " SELECT media.*, MAX(a.protected_used) AS protected FROM attached a JOIN media"
+        " ON media.id = a.media_id AND media.user_id = a.user_id WHERE a.project_id = :pid AND a.deleted IS NULL"
+        " AND (a.user_id = :uid OR NOT EXISTS (SELECT 1 FROM attached hidden"
+        " WHERE hidden.media_id = a.media_id AND hidden.user_id = a.user_id AND hidden.protected_used = 1))"
+        " GROUP BY media.id) SELECT * FROM visible"
+        " WHERE (:mid = '' OR id = :mid) AND (:after = '' OR (created, id) <"
+        " (SELECT created, id FROM visible WHERE id = :after)) ORDER BY created DESC, id DESC LIMIT :limit",
+        {"uid": uid, "pid": pid, "after": after, "mid": mid, "limit": limit}).fetchall()
 
 
 def _visible(uid, mid):
@@ -103,9 +122,15 @@ def _visible(uid, mid):
     return not closed or not (lock_policy.media_sections(uid, mid) & closed)
 
 
-def _file(pid, item_id, mid, name, size, mime, *, from_chat=False):
+def _readable(uid, author, mid):
+    return _visible(author, mid) and (uid == author or not state.DB.execute(
+        "SELECT 1 FROM (" + ATTACHED_MEDIA + ") WHERE media_id = ? AND user_id = ? AND protected_used = 1 LIMIT 1",
+        (mid, author)).fetchone())
+
+
+def _file(pid, item_id, name, size, mime, *, from_chat=False):
     kind = my_files.local_kind(name, mime)
-    source = f"/api/media/{mid}"
+    source = f"/api/chat-projects/{pid}/files/content/{item_id}"
     preview = f"/api/chat-projects/{pid}/files/preview/{item_id}" if kind in ("pdf", "text") else source
     return {"id": item_id, "name": name, "dir": False, "size": size, "from_chat": from_chat,
             "download": source + "?download=1", "preview": {"url": preview, "kind": kind} if kind else None}
@@ -114,11 +139,11 @@ def _file(pid, item_id, mid, name, size, mime, *, from_chat=False):
 @router.get("")
 async def list_files(pid: str, request: Request, parent: str | None = None, after: str = ""):
     uid = request.state.user.id
-    chat_projects.require(uid, pid)
+    chat_projects.access(uid, pid)
     if parent == CHAT_FILES:
         rows = _chat_files(uid, pid, after=after, limit=PAGE + 1)
-        entries = [_file(pid, f"chat-{r['id']}", r["id"], r["download_name"], r["size"], r["mime"], from_chat=True)
-                   for r in rows[:PAGE] if _visible(uid, r["id"])]
+        entries = [_file(pid, f"chat-{r['id']}", r["download_name"], r["size"], r["mime"], from_chat=True)
+                   for r in rows[:PAGE] if _visible(r["user_id"], r["id"])]
         return {"entries": entries, "next": rows[PAGE - 1]["id"] if len(rows) > PAGE else None}
     _folder(pid, parent)
     entries = []
@@ -126,8 +151,8 @@ async def list_files(pid: str, request: Request, parent: str | None = None, afte
         mid = row["media_id"]
         if mid is None:
             entries.append({"id": row["id"], "name": row["name"], "dir": True})
-        elif _visible(uid, mid):
-            entries.append(_file(pid, row["id"], mid, row["name"], row["size"], row["mime"]))
+        elif _readable(uid, row["user_id"], mid):
+            entries.append(_file(pid, row["id"], row["name"], row["size"], row["mime"]))
     if parent is None and _chat_files(uid, pid, limit=1):
         entries.insert(0, {"id": CHAT_FILES, "dir": True, "from_chat": True})
     return {"entries": entries, "next": None}
@@ -137,7 +162,7 @@ async def list_files(pid: str, request: Request, parent: str | None = None, afte
 async def mkdir(pid: str, body: FolderIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    chat_projects.require(uid, pid)
+    chat_projects.access(uid, pid, write=True)
     _folder(pid, body.parent, mkdir=True)
     return _insert(uid, pid, body.parent, _name(body.name))
 
@@ -146,7 +171,7 @@ async def mkdir(pid: str, body: FolderIn, request: Request):
 async def upload(pid: str, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    chat_projects.require(uid, pid)
+    chat_projects.access(uid, pid, write=True)
     parent = request.headers.get("x-studio-folder") or None
     _folder(pid, parent)
     try:
@@ -161,6 +186,7 @@ async def upload(pid: str, request: Request):
     mid = await media.save_stream(uid, request.stream(), mime, name, UPLOAD_MAX)
     try:
         operations.check(uid)
+        chat_projects.access(uid, pid, write=True)
         _folder(pid, parent)
         return _insert(uid, pid, parent, name, mid)
     except BaseException:
@@ -172,7 +198,7 @@ async def upload(pid: str, request: Request):
 async def add_from_section(pid: str, body: SourceIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    chat_projects.require(uid, pid)
+    chat_projects.access(uid, pid, write=True)
     _folder(pid, body.parent)
     if body.section not in my_files.STUDIO_SECTIONS:
         raise _error(422, "invalid", "неизвестный раздел")
@@ -187,34 +213,48 @@ async def add_from_section(pid: str, body: SourceIn, request: Request):
 async def remove(pid: str, item_id: str, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    chat_projects.require(uid, pid)
+    chat_projects.access(uid, pid, write=True)
     row = _entry(pid, item_id)
     mid = row["media_id"]
-    if mid:
-        lock_policy.require_media(uid, mid)
+    if mid and not _readable(uid, row["user_id"], mid):
+        lock_policy.require_media(row["user_id"], mid)
+        raise _error(404, "gone", "файл не найден")
     if mid is None and state.DB.execute("SELECT 1 FROM chat_project_files WHERE parent_id = ? LIMIT 1",
                                         (item_id,)).fetchone():
         raise _error(409, "not_empty", "сначала удалите содержимое папки")
     state.DB.execute("DELETE FROM chat_project_files WHERE id = ?", (item_id,))
-    if mid and not media.referenced(uid, mid):
-        await media.delete_async(uid, mid)
+    if mid and not media.referenced(row["user_id"], mid):
+        await media.delete_async(row["user_id"], mid)
 
 
-@router.get("/preview/{item_id}")
-async def preview(pid: str, item_id: str, request: Request):
-    uid = request.state.user.id
-    chat_projects.require(uid, pid)
+def _asset(uid: int, pid: str, item_id: str):
+    chat_projects.access(uid, pid)
     if item_id.startswith("chat-"):
         rows = _chat_files(uid, pid, mid=item_id.removeprefix("chat-"), limit=1)
         if not rows:
             raise _error(404, "gone", "файл не найден")
-        mid, name = rows[0]["id"], rows[0]["download_name"]
+        author, mid, name = (rows[0][key] for key in ("user_id", "id", "download_name"))
     else:
         row = _entry(pid, item_id)
-        mid, name = row["media_id"], row["name"]
+        author, mid, name = (row[key] for key in ("user_id", "media_id", "name"))
     if mid is None:
-        raise _error(404, "gone", "предпросмотр недоступен")
-    return await my_files.local_preview(uid, mid, name)
+        raise _error(404, "gone", "файл не найден")
+    lock_policy.require_media(author, mid)
+    if not _readable(uid, author, mid):
+        raise _error(404, "gone", "файл не найден")
+    return author, mid, name
+
+
+@router.get("/preview/{item_id}")
+async def preview(pid: str, item_id: str, request: Request):
+    author, mid, name = _asset(request.state.user.id, pid, item_id)
+    return await my_files.local_preview(author, mid, name)
+
+
+@router.get("/content/{item_id}")
+async def content(pid: str, item_id: str, request: Request):
+    author, mid, name = _asset(request.state.user.id, pid, item_id)
+    return await media.serve(author, mid, request, filename=name, cache="no-store")
 
 
 def _archive_entries(uid, pid, parent):
@@ -230,8 +270,9 @@ def _archive_entries(uid, pid, parent):
                     entries.append((name + "/", None, row["created"]))
                     stack.append((row["id"], name + "/"))
                 else:
-                    lock_policy.require_media(uid, row["media_id"])
-                    entries.append((name, state.CFG.media_dir / row["rel_path"], row["created"]))
+                    lock_policy.require_media(row["user_id"], row["media_id"])
+                    if _readable(uid, row["user_id"], row["media_id"]):
+                        entries.append((name, state.CFG.media_dir / row["rel_path"], row["created"]))
     if parent is None or parent == CHAT_FILES:
         rows = _chat_files(uid, pid, limit=-1)
         if any(row["protected"] for row in rows):
@@ -243,7 +284,7 @@ def _archive_entries(uid, pid, parent):
         prefix = label + "/" if parent is None else ""
         safe = [{"download_name": _source_name(row["download_name"])} for row in rows]
         for name, row in zip(media._entry_names(safe), rows):
-            lock_policy.require_media(uid, row["id"])
+            lock_policy.require_media(row["user_id"], row["id"])
             entries.append((prefix + name, state.CFG.media_dir / row["rel_path"], row["created"]))
     return entries
 
@@ -251,7 +292,7 @@ def _archive_entries(uid, pid, parent):
 @router.get("/zip")
 async def download_zip(pid: str, request: Request, parent: str | None = None):
     uid = request.state.user.id
-    project = chat_projects.require(uid, pid)
+    project = chat_projects.access(uid, pid)
     entries = _archive_entries(uid, pid, parent)
     title = _entry(pid, parent)["name"] if parent and parent != CHAT_FILES else project["name"]
     return StreamingResponse(media._zip(entries, media.user_zone(uid)), media_type="application/zip",

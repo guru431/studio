@@ -383,6 +383,8 @@ def _chat_row(user_id: int, chat_id: str):
                            (chat_id, user_id)).fetchone()
     if row is None:
         raise _gone()
+    if row["project_id"]:
+        chat_projects.access(user_id, row["project_id"], write=True)
     return row
 
 
@@ -2508,11 +2510,18 @@ async def _ended(user_message_id: str, answer_id: str, status: str):
 
 @router.get("/chats")
 async def list_chats(request: Request):
-    rows = state.DB.execute("SELECT * FROM chats WHERE user_id = ? AND deleted IS NULL"
-                            " ORDER BY updated DESC, rowid DESC",
-                            (request.state.user.id,)).fetchall()
-    marks = chat_list.marks(request.state.user.id, rows)       # метки «идёт ответ» и «не прочитано»
-    return {"items": [_chat_out(r) | marks[r["id"]] for r in rows]}
+    uid = request.state.user.id
+    rows = state.DB.execute(
+        "WITH visible AS MATERIALIZED (SELECT p.id, p.user_id, g.role" + chat_projects.PROJECTS +
+        " WHERE " + chat_projects.VISIBLE + ")"
+        " SELECT c.*, c.rowid AS sort_id, (c.user_id = :uid AND (p.user_id = :uid OR p.role = 'editor')) AS writable"
+        " FROM visible p JOIN chats c ON c.project_id = p.id WHERE c.deleted IS NULL AND (writable OR c.protected_used = 0)"
+        " UNION ALL SELECT c.*, c.rowid, 1 FROM chats c WHERE c.user_id = :uid AND c.project_id IS NULL AND c.deleted IS NULL"
+        " ORDER BY updated DESC, sort_id DESC", {"uid": uid}).fetchall()
+    marks = chat_list.marks(uid, [row for row in rows if row["writable"]])
+    return {"items": [_chat_out(row) | marks[row["id"]] if row["id"] in marks else
+                      {key: row[key] for key in ("id", "title", "updated", "project_id")} | {"readonly": True}
+                      for row in rows]}
 
 
 @router.post("/chats", status_code=201)
@@ -2526,7 +2535,7 @@ async def create_chat(body: ChatIn, request: Request):
     else:
         conn, model = _chat_pair(user.id, body.connection_id, body.model)
         cid = conn.id
-    pid = chat_projects.require(user.id, body.project_id)["id"] if body.project_id else chat_projects.inbox(user.id)
+    pid = chat_projects.access(user.id, body.project_id, write=True)["id"] if body.project_id else chat_projects.inbox(user.id)
     chat_id, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid, seen, project_id)"
                      " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
@@ -2752,7 +2761,7 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
             raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     if "project_id" in body.model_fields_set:
         operations.check(uid)
-        pid = chat_projects.require(uid, body.project_id or chat_projects.inbox(uid))["id"]
+        pid = chat_projects.access(uid, body.project_id or chat_projects.inbox(uid), write=True)["id"]
         if pid != _chat_row(uid, chat_id)["project_id"]:
             _busy(chat_id)
             if chat_pending.open_views(chat_id):

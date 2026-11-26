@@ -846,7 +846,12 @@ async def get_archive(token: str, request: Request):
 
 @router.get("/media/{media_id}")
 async def get_media(media_id: str, request: Request, thumb: str = "", download: str = ""):
-    row = _row(request.state.user.id, media_id)
+    return await serve(request.state.user.id, media_id, request, thumb=thumb, download=download)
+
+
+async def serve(uid: int, media_id: str, request: Request, *, thumb: str = "", download: str = "",
+                filename: str | None = None, cache: str = "private, max-age=86400"):
+    row = _row(uid, media_id)
     file = _file(row, thumb == "1")
     try:
         size = (await asyncio.to_thread(file.stat)).st_size
@@ -856,10 +861,10 @@ async def get_media(media_id: str, request: Request, thumb: str = "", download: 
         log.warning("media %s: хранилище недоступно", row["id"])
         raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
     mime = "image/webp" if file.name.endswith(".thumb.webp") else row["mime"]
-    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=86400",
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache,
                "X-Content-Type-Options": "nosniff"}
-    if download == "1":
-        headers["Content-Disposition"] = disposition(row["download_name"])
+    if download == "1" or filename is not None:
+        headers["Content-Disposition"] = disposition(filename or row["download_name"])
     spec = request.headers.get("range")
     span = None if spec is None else byte_range(spec, size)
     if span is None:

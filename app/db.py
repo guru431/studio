@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 84
+VERSION = 85
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1195,6 +1195,24 @@ CREATE INDEX chat_project_files_media ON chat_project_files(user_id, media_id);
 """
 SCHEMA += CHAT_PROJECTS_84
 
+CHAT_PROJECT_MEMBERS_85 = """
+CREATE TABLE chat_project_members(
+    project_id TEXT NOT NULL REFERENCES chat_projects ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+    PRIMARY KEY (project_id, user_id)
+);
+CREATE INDEX chat_project_members_user ON chat_project_members(user_id, project_id);
+CREATE INDEX chats_project_updated ON chats(project_id, updated);
+CREATE INDEX attachments_project_media ON attachments(media_id, user_id);
+CREATE INDEX chat_media_project_media ON chat_media(media_id, user_id);
+CREATE TRIGGER chat_project_member_removed AFTER DELETE ON chat_project_members BEGIN
+    UPDATE chats SET project_id = (SELECT id FROM chat_projects WHERE user_id = old.user_id AND inbox = 1)
+     WHERE user_id = old.user_id AND project_id = old.project_id;
+END;
+"""
+SCHEMA += CHAT_PROJECT_MEMBERS_85
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1358,6 +1376,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     82: SKILLS_82,
     83: TRANSCRIPT_CONSENT_83,
     84: CHAT_PROJECTS_84,
+    85: CHAT_PROJECT_MEMBERS_85,
 }
 
 

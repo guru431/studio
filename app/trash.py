@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 
 import auth
 import chat
+import chat_projects
 import clock
 import images
 import knowledge
@@ -265,6 +266,11 @@ async def restore(kind: str, item_id: str, request: Request):
     ids = _members(found, uid, item_id, found.live)
     if not ids:
         raise HTTPException(404, GONE)
+    if kind == "chats":
+        project_id = state.DB.execute("SELECT project_id FROM chats WHERE id = ? AND user_id = ?",
+                                      (item_id, uid)).fetchone()[0]
+        if project_id:
+            chat_projects.access(uid, project_id, write=True)
     if found.restoring is not None:
         found.restoring(uid, ids)
     state.DB.execute(f"UPDATE {found.table} SET deleted = NULL WHERE user_id = ?"

@@ -64,10 +64,10 @@ def base(user_id: int, conn, role_row: "dict | None", project_id: str | None = N
         pieces.append(profile)
     if role_row is not None:
         pieces.append(f"{ROLE_HEAD.format(role_row['name'])}\n{role_row['text'][:ROLE_MAX]}")
-    project = chat_projects.require(user_id, project_id) if project_id else None
+    project = chat_projects.owned(user_id, project_id) if project_id else None
     if project and project["context"]:
         pieces.append("Инструкции пользователя для проекта:\n" + clean(project["context"], 8000))
-    remembered = memory_block(user_id, project_id if project and not project["inbox"] else None)
+    remembered = memory_block(user_id, project_id if project_id and not (project and project["inbox"]) else None)
     if remembered:
         pieces.append(remembered)
     return "\n\n".join(pieces)

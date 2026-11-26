@@ -37,7 +37,7 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
           return {
             footer: Math.abs(footer.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom) < 2,
             left: !panel.querySelector('.chat-item') && !!main.querySelector('.project-history .code-chat-link'),
-            toolbar: [...tools.children].map(a => a.textContent),
+            toolbar: [...tools.children].filter(a => !a.hidden).map(a => a.textContent),
             plus: plus.parentElement.id === 'chat-tabbar' && !!main.querySelector('.project-history .code-new-chat'),
             create_label: getComputedStyle(create.querySelector('.code-project-create-label')).display !== 'none',
             create_icon: getComputedStyle(create.querySelector('.ico')).display !== 'none',
@@ -97,6 +97,39 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
     }
     assert result["values"]["sorted"] == ["Без проекта", "Зебра", "Каталог"]
     assert result["values"]["saved"] == "name"
+    assert not problems(result), problems(result)
+
+
+def test_project_owner_can_share_and_viewer_can_read_the_project(browser, cdp_process, live):
+    owner = "project-share-owner"
+    viewer = "project-share-viewer"
+    uid = live.add_user(owner)
+    live.add_user(viewer)
+    pid, cid = f"shared-{uid}", f"shared-chat-{uid}"
+    live_sql(live, "INSERT INTO chat_projects(id, user_id, name, created) VALUES (?, ?, 'Общий проект', 1)", (pid, uid))
+    live_sql(live, "INSERT INTO chats(id, user_id, title, created, updated, project_id) VALUES (?, ?, 'Общий чат', 1, 1, ?)",
+             (cid, uid, pid))
+    result = browser.drive(live.url + "/", [*signin(owner), ("wait", READY),
+        ("click", f".project-list li[data-pid='{pid}'] a"),
+        ("click", "#chat-project-access"),
+        ("wait", "document.querySelector('#chat-project-access-dialog [name=login]:not([disabled])') && "
+         "!document.querySelector('#chat-project-access-dialog form').inert"),
+        ("type", "#chat-project-access-dialog [name=login]", viewer),
+        ("click", "#chat-project-access-dialog button[type=submit]"),
+        ("wait", "document.querySelector('#chat-project-access-dialog [aria-label=\"Отозвать доступ · " + viewer + "\"]')"),
+        ("click", "#chat-project-access-dialog .dialog-close"),
+        ("wait", "document.querySelector('#chat-project-access')?.textContent === 'Доступ · 1'")], width=1280)
+    assert not result.get("failed"), (result.get("failed"), result.get("where"), result.get("log"))
+    assert not problems(result), problems(result)
+
+    with cdp_process.isolated() as other:
+        result = other.drive(live.url + "/", [*signin(viewer), ("wait", READY), ("click", "#chats-toggle"),
+            ("click", f".project-list li[data-pid='{pid}'] a"),
+            ("wait", "document.querySelector('#chat-project-access').hidden && document.querySelector('#chat-new').hidden"),
+            ("click", f".chat-item[data-chat='{cid}'] .chat-link"),
+            ("wait", "document.querySelector('#chat-project-dialog-reader[open] h2')?.textContent === 'Общий чат'")],
+            width=320, mobile=True)
+    assert not result.get("failed"), (result.get("failed"), result.get("where"), result.get("log"))
     assert not problems(result), problems(result)
 
 

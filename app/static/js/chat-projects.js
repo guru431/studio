@@ -7,6 +7,80 @@ import { button, el, field, openDialog, words } from './ui.js';
 
 export const PROJECTS_API = '/api/chat-projects';
 export const projectName = (item) => item.inbox ? tr("Без проекта") : item.name;
+const roles = [['viewer', "Наблюдатель"], ['editor', "Редактор"]];
+
+function roleSelect(role, label) {
+  const select = el('select', { class: 'input project-member-role', 'aria-label': label },
+    ...roles.map(([value, name]) => el('option', { value }, tr(name))));
+  select.value = role;
+  return select;
+}
+
+export function projectAccess(host, project, changed) {
+  const base = `${PROJECTS_API}/${project.id}/members`;
+  const login = el('input', { class: 'input', name: 'login', maxlength: '254', required: true, autocomplete: 'off',
+    autocapitalize: 'none', spellcheck: 'false' });
+  const role = roleSelect('viewer', tr("Роль участника"));
+  const add = button(tr("Дать доступ"), { class: 'btn btn-accent', type: 'submit' });
+  const form = el('form', { class: 'stack' }, field(tr("Логин или email пользователя Студии"), login),
+    el('div', { class: 'row' }, role, add));
+  const list = el('ul', { class: 'project-members-list', 'aria-label': tr("Участники проекта") });
+  const status = el('p', { class: 'muted small', role: 'status' });
+  const fail = el('p', { class: 'error', role: 'alert' });
+  const dialog = openDialog(host, { id: 'chat-project-access-dialog', title: tr("Доступ · {0}", project.name),
+    cancelText: tr("Закрыть"), body: [el('p', { class: 'muted small' }, tr("Наблюдатель читает диалоги и файлы. Редактор также ведёт свои диалоги и меняет файлы проекта.")),
+      el('p', { class: 'muted small' }, tr("Доступ распространяется на уже созданные и новые диалоги и файлы. Память, подключения и защищённые диалоги остаются личными.")),
+      form, status, fail, list] });
+
+  async function update(work = null, message = '') {
+    if (!dialog.open || form.inert) return;
+    form.inert = list.inert = true;
+    fail.textContent = '';
+    status.textContent = work ? tr("Сохраняю…") : tr("Загружаю участников…");
+    try {
+      if (work) await work();
+      if (!dialog.open) {
+        if (work) changed(null);
+        return;
+      }
+      const { items } = await api('GET', base);
+      if (work || dialog.open) changed(items.length);
+      if (!dialog.open) return;
+      list.replaceChildren(...items.map((member) => {
+        const kind = roleSelect(member.role, tr("Роль · {0}", member.login));
+        kind.addEventListener('change', () => update(async () => {
+          try {
+            await api('PATCH', `${base}/${member.id}`, { role: kind.value });
+          } catch (err) {
+            kind.value = member.role;
+            throw err;
+          }
+        }, tr("Роль изменена")));
+        const remove = button(tr("Отозвать"), { class: 'btn', 'aria-label': tr("Отозвать доступ · {0}", member.login) },
+          () => update(() => api('DELETE', `${base}/${member.id}`), tr("Доступ отозван")));
+        return el('li', {}, el('span', {}, member.login + (member.disabled ? tr(" · заблокирован") : '')), kind, remove);
+      }));
+      if (!items.length) list.append(el('li', { class: 'muted' }, tr("Доступ есть только у владельца")));
+      status.textContent = message;
+      if (work) dialog.querySelector('.dialog-close').focus({ preventScroll: true });
+    } catch (err) {
+      fail.textContent = words(err);
+      status.textContent = '';
+    } finally {
+      form.inert = list.inert = false;
+    }
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const identity = login.value.trim();
+    if (identity) update(async () => {
+      await api('POST', base, { login: identity, role: role.value });
+      login.value = '';
+    }, tr("Доступ предоставлен"));
+  });
+  update();
+}
 
 export function projectEditor(host, item, done) {
   const name = el('input', { class: 'input', value: item ? projectName(item) : '', maxlength: '120',
@@ -190,7 +264,7 @@ export function projectsPanel({ user, select, create }) {
       || (order === 'count' ? countOf(b) - countOf(a) : 0)
       || (order === 'modified' ? updatedOf(b) - updatedOf(a) : 0) || byName(a, b));
     const signature = JSON.stringify(sorted.map((item) =>
-      [item.id, item.name, item.id === current?.id, activity.get(item.id), countOf(item)]));
+      [item.id, item.name, item.role, item.member_count, item.id === current?.id, activity.get(item.id), countOf(item)]));
     if (signature === drawn) return;
     drawn = signature;
     rows.replaceChildren(...sorted.map((item) => {
@@ -209,7 +283,8 @@ export function projectsPanel({ user, select, create }) {
         el('span', { class: 'code-project-title' }, el('span', { class: 'code-project-name' }, name)),
         ...badges, count ? el('span', { class: 'code-project-count', title: tr("Открыто вкладок: {0}", count) }, String(count)) : null,
         item.inbox ? el('span', { class: 'code-project-pin project-inbox-pin', 'aria-hidden': 'true' }, icon('star')) : null),
-      updated ? el('span', { class: 'code-project-summary code-project-modified' }, dialogDateTime(updated)) : null);
+      updated ? el('span', { class: 'code-project-summary code-project-modified' }, dialogDateTime(updated)) : null,
+      item.role || item.member_count ? el('span', { class: 'code-project-shared' }, tr("Общий доступ")) : null);
       link.addEventListener('click', (event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();

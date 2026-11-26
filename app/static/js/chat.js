@@ -122,7 +122,7 @@ import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { chatList } from './chat-list.js';
-import { chooseProject, projectEditor, projectFilePicker, projectMemory, projectName, projectsPanel, PROJECTS_API } from './chat-projects.js';
+import { chooseProject, projectAccess, projectEditor, projectFilePicker, projectMemory, projectName, projectsPanel, PROJECTS_API } from './chat-projects.js';
 import { chatTabs } from './chat-tabs.js';
 import { findView } from './code-find.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
@@ -813,13 +813,24 @@ function build(view, ctx) {
   const projectLabel = el('span', { class: 'code-place-agent', hidden: true });
   const projectSep = el('span', { class: 'code-place-sep', 'aria-hidden': 'true', hidden: true }, ' / ');
   const filesLink = el('a', { class: 'chip', title: tr("Файлы проекта") }, tr("Файлы"));
+  const accessButton = button(tr("Доступ"), { id: 'chat-project-access', class: 'chip', hidden: true }, () => {
+    const project = currentProject();
+    if (!project || project.inbox || project.role) return;
+    projectAccess(root, project, (count) => {
+      if (!alive) return;
+      if (count === null) return loadProjects();
+      projects = projects.map((item) => item.id === project.id ? { ...item, member_count: count } : item);
+      paintProjects();
+    });
+  });
   const memoryButton = button(tr("Память"), { class: 'chip' }, () => projectMemory(root, currentProject()));
   const settingsButton = button(tr("Настройки"), { class: 'chip' }, () => projectEditor(root, currentProject(), (saved) => {
     if (!alive) return;
-    projects = projects.map((p) => p.id === saved.id ? saved : p);
+    projects = projects.map((p) => p.id === saved.id ? { ...p, ...saved } : p);
     paintProjects();
   }));
-  const projectTools = el('div', { class: 'code-views project-actions' }, filesLink, memoryButton, settingsButton);
+  const projectRole = el('span', { class: 'code-project-shared', hidden: true });
+  const projectTools = el('div', { class: 'code-views project-actions' }, filesLink, accessButton, memoryButton, settingsButton, projectRole);
   const head = el('header', { class: 'code-head' },
     el('div', { class: 'code-location' }, toggle,
       el('div', { class: 'code-place' }, projectLabel, projectSep, title.label)), title.note,
@@ -1029,7 +1040,7 @@ function build(view, ctx) {
     failed: (err) => { notice.textContent = words(err); },
     loaded: (items) => {
       listed = items;
-      tabs.sync(items);
+      tabs.sync(items.filter((item) => !item.readonly));
       paintSidebar();
     } });
   list.before(el('div', { class: 'code-session-search' }, listing.search));
@@ -1059,7 +1070,19 @@ function build(view, ctx) {
     if (chatId === null) tabs.show(current?.id || projectId, null, inHistory);
     paintSidebar();
     projectTools.parentElement.hidden = !current;
-    projectAttach.hidden = !current;
+    const viewing = current?.role === 'viewer';
+    projectAttach.hidden = !current || viewing;
+    newChatButton.hidden = viewing;
+    projectHistory.hidden = !inHistory && !(viewing && !chatId);
+    conversation.hidden = inHistory || (viewing && !chatId);
+    memoryButton.hidden = settingsButton.hidden = !!current?.role;
+    accessButton.hidden = !current || current.inbox || !!current.role;
+    const count = current?.member_count || 0;
+    accessButton.textContent = count ? `${tr("Доступ")} · ${count}` : tr("Доступ");
+    accessButton.setAttribute('aria-label', count ? tr("Доступ к проекту · {0} · участников: {1}", current.name, count)
+      : tr("Доступ к проекту"));
+    projectRole.hidden = !current?.role;
+    projectRole.textContent = viewing ? tr("Наблюдатель") : tr("Редактор");
     if (current) {
       filesLink.href = `#/myfiles?p=${current.id}`;
       description.textContent = current.description;
@@ -1085,7 +1108,7 @@ function build(view, ctx) {
   async function moveProject(item) {
     await loadProjects();
     if (!alive || chatId !== item.id) return;
-    chooseProject(root, tr("Переместить в проект"), projects.filter((p) => p.id !== item.project_id), async (pid) => {
+    chooseProject(root, tr("Переместить в проект"), projects.filter((p) => p.role !== 'viewer' && p.id !== item.project_id), async (pid) => {
       const out = await api('PATCH', `/api/chats/${item.id}`, { project_id: pid });
       if (alive && chat?.chat.id === out.id) {
         chat.chat = out;
@@ -1123,6 +1146,12 @@ function build(view, ctx) {
     const text = item.title || tr("Новый диалог");
     const time = chatTime(item.updated);
     time.classList.add('code-chat-time');
+    if (item.readonly) {
+      const link = button(el('span', { class: 'code-chat-title chat-link-title', title: text }, text),
+        { class: 'code-chat-link chat-link' }, () => readProjectDialog(item, text));
+      link.append(time);
+      return el('li', { class: 'chat-item', 'data-id': item.id, 'data-chat': item.id }, link);
+    }
     const link = el('a', { href: `#/chat/${item.id}`, class: 'code-chat-link chat-link',
       'aria-current': item.id === chatId ? 'page' : null },
     el('span', { class: 'code-chat-title chat-link-title', title: text }, text), time);
@@ -1132,6 +1161,20 @@ function build(view, ctx) {
       if (item.id === chatId && !sending && !jobs.has(chatId)) reload();
     });
     return el('li', { class: 'chat-item', 'data-id': item.id, 'data-chat': item.id }, link);
+  }
+
+  async function readProjectDialog(item, title) {
+    const body = el('div', { class: 'shared-project-dialog' }, tr("Загружаю диалог…"));
+    const dialog = openDialog(root, { id: 'chat-project-dialog-reader', title, cancelText: tr("Закрыть"), body: [body] });
+    try {
+      const { messages } = await api('GET', `${PROJECTS_API}/${item.project_id}/chats/${item.id}`);
+      if (!dialog.open || !alive) return;
+      body.replaceChildren(...messages.map((message) => el('article', { class: 'block' },
+        el('h3', {}, message.role === 'user' ? tr("Пользователь") : tr("Ассистент")),
+        el('div', { class: 'md' }, renderMarkdown(message.content)))));
+    } catch (err) {
+      if (dialog.open && alive) body.replaceChildren(el('p', { class: 'error', role: 'status' }, words(err)));
+    }
   }
 
   function renameDialog(item) {
@@ -1201,6 +1244,7 @@ function build(view, ctx) {
   }
 
   function newChat() {
+    if (currentProject()?.role === 'viewer') return;
     // Кнопка скрывается вместе с историей. Освободить фокус до проверки focusDesktop.
     if (document.activeElement === newChatButton) newChatButton.blur();
     panel(false);
@@ -2682,6 +2726,8 @@ function build(view, ctx) {
     if (id === chatId && (id === null ? historyView === inHistory && requested === projectId : chat)) return;
     find.reset();
     dropPreviews(root);
+    root.querySelector('#chat-project-dialog-reader[open]')?.close();
+    root.querySelector('#chat-project-access-dialog[open]')?.close();
     root.querySelector('#project-file-picker[open]')?.close();
     root.querySelector('#kb-source-dialog[open]')?.close();
     quote.clear();
