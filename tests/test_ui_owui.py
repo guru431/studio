@@ -142,6 +142,15 @@ def fits(page):
     return page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def toolbar_button(page, selector, section="owui"):
+    trigger = page.locator(selector)
+    page.wait_for_function("selector => document.querySelector(selector)?.hidden === false", arg=selector)
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    if trigger.evaluate(f"button => !!button.closest('#{section}-status-menu:not(:popover-open)')"):
+        page.locator(f"#{section}-status-more").click()
+    return trigger
+
+
 def no_password_manager(box):
     """Пароль Open WebUI — не для менеджера паролей браузера (как PIN компьютера, ui.js computerPin): поле не password,
     вне <form>, без autocomplete входа; email рядом — тоже без него. Иначе браузер сохранил бы пароль под адресом
@@ -181,6 +190,17 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         aid = account["id"]
         pw.expect(page).to_have_url(re.compile(rf"#/owui/{aid}$"))
         pw.expect(page.locator("#owui-panel")).to_be_visible()              # телефон: чата нет — панель выехала сама
+        search_width = page.locator("#owui-search").evaluate("""el => {
+          const css = getComputedStyle(el);
+          const painter = document.createElement("canvas").getContext("2d");
+          painter.font = css.font;
+          const need = painter.measureText(el.placeholder).width + parseFloat(css.paddingLeft) + parseFloat(css.paddingRight);
+          return el.clientWidth > need;
+        }""")
+        search_box = page.locator("#owui-search").bounding_box()
+        new_chat_box = page.locator("#owui-new-chat").bounding_box()
+        assert search_width and abs(search_box["width"] - new_chat_box["width"]) < 1
+        assert new_chat_box["y"] >= search_box["y"] + search_box["height"]
         row = page.locator(".owui-account-row")
         pw.expect(row).to_have_count(1)
         pw.expect(row.locator(".owui-account-label")).to_have_text("s06 · рабочая")
@@ -188,7 +208,7 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         pw.expect(row.locator(".owui-state")).to_have_class(re.compile(r"\bon\b"))
         assert "Пароль" not in json.dumps(account) and FakeOwui.PASSWORD not in json.dumps(account)
 
-        pw.expect(page.locator("#owui-pinned .owui-chat")).to_have_text(["Pinned talk"])
+        pw.expect(page.locator("#owui-pinned .owui-chat-title")).to_have_text(["Pinned talk"])
         pw.expect(page.locator("#owui-folders .owui-folder")).to_have_text(["Work"])
         chats = page.locator("#owui-chat-list .owui-chat")
         pw.expect(chats).to_have_count(60)
@@ -200,7 +220,7 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         pw.expect(page.locator("#owui-chats-more")).to_be_hidden()
 
         page.locator("#owui-folders .owui-folder").click()
-        pw.expect(page.locator("#owui-folders .owui-folder-chats .owui-chat")).to_have_text(["In folder"])
+        pw.expect(page.locator("#owui-folders .owui-folder-chats .owui-chat-title")).to_have_text(["In folder"])
 
         page.locator("#owui-search").fill("Root 6")
         pw.expect(page.locator("#owui-results .owui-chat")).to_have_count(5)
@@ -301,7 +321,7 @@ def test_relogin_state_offers_password(owui_browser, live, fake, width):
         page.locator("#owui-relogin-password").press("Enter")
         pw.expect(page.locator("#owui-relogin")).to_have_count(0)
         pw.expect(row.locator(".owui-state")).to_have_class(re.compile(r"\bon\b"))
-        pw.expect(page.locator("#owui-chat-list .owui-chat")).to_have_text(["After relogin"])
+        pw.expect(page.locator("#owui-chat-list .owui-chat-title")).to_have_text(["After relogin"])
         assert call(live, cookie, "GET", "/api/owui/accounts").json()[0]["state"] == "ok"
         until(page, lambda: len(page.events) == 1)                          # вошли — поток учётки открылся
 
@@ -315,7 +335,7 @@ def test_relogin_state_offers_password(owui_browser, live, fake, width):
         page.locator(".owui-relogin-item").click()
         pw.expect(page.locator("#owui-relogin")).to_be_visible()
         page.locator("#owui-relogin-cancel").click()
-        pw.expect(page.locator("#owui-chat-list .owui-chat")).to_have_text(["After relogin"])
+        pw.expect(page.locator("#owui-chat-list .owui-chat-title")).to_have_text(["After relogin"])
         page.locator(".owui-account-more").click()
         page.locator(".owui-delete").click()
         pw.expect(page.locator("#owui-delete-dialog")).to_contain_text("«Работа · s06»")
@@ -462,6 +482,49 @@ def talk(answer: dict, question="Hi") -> list[dict]:
 def loaded_image(page, selector):
     page.wait_for_function("s => [...document.querySelectorAll(s)].some(img => img.complete && img.naturalWidth > 0)",
                            arg=selector)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_owui_dialog_toolbar_pin_and_draft(owui_browser, live, fake, width):
+    cookie = session(live, f"owui-tools-{owui_browser.browser_type.name}-{width}")
+    fake.add_model("m1", "Model One")
+    chat = fake.add_chat("Planning", updated_at=1800000000, models=["m1"],
+                         messages=talk({"id": "a1", "done": True, "content": "Some answer"}, question="Find this"))
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-feed-title")).to_have_text("Planning")
+        pw.expect(page.locator("#owui-send")).to_have_text("Отправить")
+        pw.expect(page.locator(".owui-feed-head time")).to_have_attribute("datetime", "2027-01-15T08:00:00.000Z")
+        toolbar_button(page, "#owui-find").click()
+        page.locator("#owui-find-input").fill("FIND THIS")
+        pw.expect(page.locator("#owui-find-count")).to_have_text("1 из 1")
+        page.locator("#owui-find-close").click()
+        page.locator("#owui-input").fill("Draft before navigation")
+        page.evaluate("location.hash = '#/settings'")
+        pw.expect(page.locator(".settings-nav")).to_be_visible()
+        page.evaluate("location.hash = '#/owui'")
+        pw.expect(page.locator("#owui-input")).to_have_value("Draft before navigation")
+        pw.expect(page).to_have_url(re.compile(f"/#/owui/{aid}/{chat}$"))
+        show_panel(page)
+        pin = page.locator("#owui-chat-list .chat-pin")
+        pw.expect(pin).to_have_css("opacity", "1")
+        pin.click()
+        pw.expect(page.locator("#owui-pinned .chat-pin")).to_have_attribute("aria-pressed", "true")
+        hide_panel(page)
+        toolbar_button(page, "#owui-title-actions").click()
+        page.locator("#owui-title-rename").click()
+        page.locator("#owui-chat-rename-dialog input").fill("Plan revised")
+        with page.expect_response(lambda res: res.request.method == "PATCH" and res.url.endswith(f"/chats/{chat}")) as saved:
+            page.locator("#owui-chat-rename-save").click()
+        assert saved.value.ok, saved.value.text()
+        pw.expect(page.locator(".owui-feed-title")).to_have_text("Plan revised")
+        toolbar_button(page, "#owui-title-actions").click()
+        page.locator("#owui-title-delete").click()
+        page.locator("#owui-chat-delete-confirm").click()
+        pw.expect(page).to_have_url(re.compile(f"/#/owui/{aid}$"))
+        pw.expect(page.locator("#owui-input")).to_have_value("")
+        assert chat not in fake.chats
+        assert fits(page) and not page.problems, page.problems
 
 
 @pytest.mark.parametrize("width", [320, 1280])

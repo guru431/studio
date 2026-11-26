@@ -79,8 +79,9 @@ ITEMS = {"transcripts": ("transcribe", "/api/transcripts"), "translations": ("tr
          # чат «Озвучки» (шаг 82): группа записей с одним `speeches.chat_id`, `item_id` — этот chat_id
          "speech_chats": ("speech", "/api/speeches/chats")}
 #: своя запись не из корзины, иначе 404 (`_row` раздела; у чата «Озвучки» — его записи)
-_ROWS = {"transcripts": transcripts._row, "translations": translate._row, "scans": ocr._row, "images": images._row,
+_ROWS = {"transcripts": transcripts._row, "translations": translate._row, "scans": ocr._row, "images": images.share_row,
          "videos": videos.share_row, "speech_chats": speeches._chat_rows}
+GALLERY_FEEDS = {"images": images.MCP_PHOTOS, "videos": videos.MCP_VIDEOS}
 #: переписка Open WebUI (шаг 82, owui_share.py): свой `item_kind`, а не вид «как у Агентов» — прежний код (откат) его
 #: не знает и ссылку не открывает; `item_id` — "<owui_accounts.id>:<id чата>"
 OWUI = "owui"
@@ -246,7 +247,7 @@ async def _store(request: Request, body: RefreshIn, snapshot: dict, expected, fi
     if source.get("chat_id"):
         chat.unprotected(chat._chat_row(request.state.user.id, source["chat_id"]))
     if kind in _ROWS:
-        _ROWS[kind](request.state.user.id, source["item_id"])     # запись не ушла в корзину, пока собирали снимок
+        _shareable_row(kind, request.state.user.id, source["item_id"])
     elif kind == OWUI:                                             # учётку Open WebUI не удалили, пока читали чат
         owui.load(request.state.user.id, int(source["item_id"].split(":", 1)[0]))
     current = _owned(request, **source)
@@ -534,13 +535,24 @@ def _not_ready(message: str) -> HTTPException:
     return HTTPException(409, {"code": "running", "message": message})
 
 
+def _shareable_row(kind, uid, item_id):
+    row = _ROWS[kind](uid, item_id)
+    if kind == "translations" and row["mcp_share_blocked"]:
+        raise _refuse(409, "protected", "Перевод защищённого источника нельзя открыть по ссылке")
+    if kind in GALLERY_FEEDS and "mcp_server_id" in row.keys() and state.DB.execute(
+        "SELECT 1 FROM mcp_servers WHERE id = ? AND protected = 1", (row["mcp_server_id"],)
+    ).fetchone():
+        raise _refuse(409, "protected", "Файл защищённого источника нельзя открыть по ссылке")
+    return row
+
+
 async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False) -> tuple[dict, list[str]]:
     """Снимок записи раздела (`ITEMS`) и id его файлов. Что видит получатель: у расшифровки — реплики с собеседником
     и временем (с правками владельца), у перевода — исходный текст и перевод, у скана — текст страниц, у картинки и
     ролика — сам файл, промпт и модель, у чата «Озвучки» — готовые записи по порядку (текст, голос, mp3; запись
     вне `speeches.TERMINAL` — 409 `running`). `source` — ещё исходный файл записи (запись разговора, документ) для
     скачивания. `messages` — заглушка `PLACEHOLDER`: её покажет прежний код (откат), новый смотрит `item`."""
-    row = _ROWS[kind](uid, item_id)
+    row = _shareable_row(kind, uid, item_id)
     item, title, attach = {"kind": kind}, "", None
     if kind == "transcripts":
         row = transcripts._done(uid, item_id)
@@ -597,7 +609,7 @@ def _item_routes(kind: str) -> None:
     path = ITEMS[kind][1] + "/{item_id}/share"
 
     async def get_share(item_id: str, request: Request):
-        _ROWS[kind](request.state.user.id, item_id)
+        _shareable_row(kind, request.state.user.id, item_id)
         return _out(_owned(request, item_kind=kind, item_id=item_id))
 
     async def create_share(item_id: str, body: ShareIn, request: Request):
@@ -606,7 +618,7 @@ def _item_routes(kind: str) -> None:
         return await _store(request, body, snapshot, expected, files, item_kind=kind, item_id=item_id)
 
     async def refresh_share(item_id: str, body: RefreshIn, request: Request):
-        _ROWS[kind](request.state.user.id, item_id)
+        _shareable_row(kind, request.state.user.id, item_id)
         expected = _owned(request, item_kind=kind, item_id=item_id) or _gone()
         snapshot, files = await item_snapshot(request.state.user.id, kind, item_id, body.source)
         return await _store(request, body, snapshot, expected, files, refresh=True, item_kind=kind, item_id=item_id)
@@ -643,10 +655,13 @@ def _same_origin(request):
 #: переписки Open WebUI — пока учётка Open WebUI подключена. Вид, которого здесь нет, недоступен — так прежний код
 #: (откат) не открывает ссылки новых видов
 _ALIVE = {**{t: f"s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL)"
-             for t in ("transcripts", "translations", "scans", "images")},
-          "videos": "(s.item_id IN (SELECT id FROM videos WHERE deleted IS NULL AND user_id = s.user_id)"
-                    " OR EXISTS (SELECT 1 FROM (" + videos.MCP_VIDEOS + ") v"
-                    " WHERE v.user_id = s.user_id AND v.media_id = s.item_id))",
+             for t in ("transcripts", "scans")},
+          "translations": ("s.item_id IN (SELECT id FROM translations WHERE deleted IS NULL AND user_id = s.user_id"
+                           f" AND NOT ({translate.MCP_SHARE_BLOCKED}))"),
+          **{t: (f"(s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL AND user_id = s.user_id)"
+                 f" OR EXISTS (SELECT 1 FROM ({feed}) v WHERE v.user_id = s.user_id AND v.media_id = s.item_id"
+                 " AND NOT EXISTS (SELECT 1 FROM mcp_servers p WHERE p.id = v.server_id AND p.protected = 1)))")
+             for t, feed in GALLERY_FEEDS.items()},
           "speech_chats": "s.item_id IN (SELECT chat_id FROM speeches WHERE deleted IS NULL AND user_id = s.user_id)",
           OWUI: "CAST(substr(s.item_id, 1, instr(s.item_id, ':') - 1) AS INTEGER) IN"
                 " (SELECT id FROM owui_accounts WHERE user_id = s.user_id)"}

@@ -4,7 +4,7 @@
  * - reload() — GET /api/chats; сначала группа «Закреплённые» (`pinned`, порядок сервера — по `updated`), затем дни
  *   group(updated). Строку строит row(item) (chat.js, listItem); модуль дописывает звезду button.chat-pin[aria-pressed]
  *   («Закрепить» / «Открепить» → PATCH {pinned}) и метки span.chat-mark[data-mark=busy|unread|draft] без текста —
- *   слова в aria-label и title, textContent строки остаётся названием; «идёт ответ» важнее «не прочитано».
+ *   слова в aria-label и title; «идёт ответ» важнее «не прочитано».
  *   Перерисовка — только когда ответ сервера изменился: опрос не сбивает фокус и открытое меню строки. Опрос — раз в
  *   LIST_POLL_MS, пока у диалога идёт ответ и страница видна. Удачный ответ — loaded(items); итог — items или null (отказ).
  *   Отказ при нарисованном списке (нет связи, выкладка) список не стирает — повтор через LIST_POLL_MS; без списка —
@@ -18,6 +18,7 @@
 import { tr } from './i18n.js';
 import { api } from './api.js';
 import { iconButton } from './icons.js';
+import { paintPin } from './chat-title.js';
 import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { el, words } from './ui.js';
 
@@ -25,7 +26,7 @@ export const LIST_POLL_MS = 5000;
 const SEEN_REPEAT_MS = 60000;     // как chat_pending.REMIND_TICK_SEC: проход напоминаний — раз в минуту
 const MARKS = { busy: tr("идёт ответ"), unread: tr("не прочитано"), draft: tr("есть черновик") };
 
-export function chatList(list, { row, group, failed = () => {}, loaded = () => {} }) {
+export function chatList(list, { row, group, pinItem, failed = () => {}, loaded = () => {} }) {
   const drafts = draftStore(CHAT_DRAFTS);
   const search = el('input', { type: 'search', id: 'chat-search', class: 'input chat-search', autocomplete: 'off',
     placeholder: tr("Поиск по названиям"), 'aria-label': tr("Поиск по названиям") });
@@ -63,18 +64,17 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
   function decorate(item) {
     const li = row(item);
     const box = el('span', { class: 'chat-marks' });
-    const label = item.pinned ? tr("Открепить") : tr("Закрепить");
-    const pin = iconButton('star', label, { class: 'icon-btn chat-pin', 'aria-pressed': String(!!item.pinned) });
+    const pin = iconButton('star', tr("Закрепить"), { class: 'icon-btn chat-pin' });
+    paintPin(pin, item.pinned);
     pin.addEventListener('click', async () => {
       pin.disabled = true;
       try {
-        await api('PATCH', `/api/chats/${item.id}`, { pinned: !item.pinned });
+        await pinItem(item);
       } catch (err) {
-        pin.disabled = false;
         failed(err);
-        return;
+      } finally {
+        pin.disabled = false;
       }
-      reload();
     });
     const more = li.querySelector('.chat-more');
     li.insertBefore(box, more);

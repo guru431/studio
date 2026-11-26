@@ -26,7 +26,7 @@ TRANSCRIBE = {"artifact_id": {"type": "string"},
               "topic": {"type": "string", "maxLength": 40}}
 
 
-def transcriber(gateway, result):
+def transcriber(gateway, result, *, properties=TRANSCRIBE):
     """MCP с `audio_transcribe` (поля «Протокол», «Говорящих», «Язык», «Тема») и итогом `result`; файл итога .srt."""
     calls = []
 
@@ -39,7 +39,7 @@ def transcriber(gateway, result):
         if method == "initialize":
             reply = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}
         elif method == "tools/list":
-            tools = {"audio_transcribe": (TRANSCRIBE, ["artifact_id"]), "artifact_upload": ({}, [])}
+            tools = {"audio_transcribe": (properties, ["artifact_id"]), "artifact_upload": ({}, [])}
             reply = {"tools": [{"name": name, "inputSchema": {"type": "object", "properties": props, "required": need}}
                                for name, (props, need) in tools.items()]}
         else:

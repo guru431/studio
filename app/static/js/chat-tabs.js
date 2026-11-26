@@ -1,10 +1,10 @@
 /* Вкладки диалогов «Чата» над лентой (спека 2026-11-25-studio-skills-status-local-models, п. 26); вид — ряд вкладок
  * «Агентов» (.code-tabs-row, .code-tabbar, .code-tab).
  *
- * chatTabs({ open, info }) → { node, show(chat | null), sync(ids), unmount() }:
- * - node — div#chat-tabs[hidden] > div#chat-tabbar[role=tablist] > div.code-tab[role=tab][data-chat][aria-selected]:
+ * chatTabs({ open, info, items }) → { node, show(chat | null), sync(ids), unmount() }:
+ * - node — div#chat-tabs > div#chat-tabbar[role=tablist] > div.code-tab[role=tab][data-chat][aria-selected]:
  *   название (info(id).title, пустое — «Новый диалог»), ✎ черновика (draftStore(CHAT_DRAFTS)), метка «идёт ответ»
- *   (info(id).busy) и «×»; ряд скрыт, пока вкладок меньше двух;
+ *   (info(id).busy) и «×»; «+» открывает поиск и создание диалога;
  * - show(chat) — диалог встаёт в конец ряда, если его нет (при TABS_MAX уходит самая левая не текущая), становится
  *   выбранным и прокручивается в видимую часть ряда; null (новый диалог) — выбранной нет;
  * - sync(ids) — вкладки диалогов, которых нет в удачно загруженном списке, уходят;
@@ -17,6 +17,8 @@ import { tr } from './i18n.js';
 import { me } from './api.js';
 import { icon } from './icons.js';
 import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
+import { chatTime } from './chat-title.js';
+import { popupPanel } from './menu.js';
 import { el } from './ui.js';
 
 export const TABS_MAX = 12;
@@ -42,13 +44,44 @@ function restore() {
   return [];
 }
 
-export function chatTabs({ open, info }) {
+export function chatTabs({ open, info, items }) {
   const drafts = draftStore(CHAT_DRAFTS);
   const bar = el('div', { id: 'chat-tabbar', class: 'code-tabbar', role: 'tablist', 'aria-label': tr("Открытые диалоги") });
-  const node = el('div', { id: 'chat-tabs', class: 'code-tabs-row chat-tabs', hidden: true }, bar);
+  const add = el('button', { type: 'button', id: 'chat-tab-add', class: 'code-tab-add', 'aria-label': tr("Диалоги"),
+    title: tr("Диалоги") }, '+');
+  bar.append(add);
+  const search = el('input', { type: 'search', class: 'input', autocomplete: 'off',
+    'aria-label': tr("Поиск по названиям"), placeholder: tr("Поиск по названиям") });
+  const newChat = el('button', { type: 'button', class: 'btn code-new-chat' }, icon('plus'), tr("Новый чат"));
+  const choices = el('div', { class: 'chat-tab-choices' });
+  const menu = el('div', { id: 'chat-tab-menu', class: 'chat-tab-menu' }, search, newChat, choices);
+  const node = el('div', { id: 'chat-tabs', class: 'code-tabs-row chat-tabs' }, bar, menu);
+  const popup = popupPanel(add, menu, { label: tr("Диалоги"), align: 'end' });
+  const choose = (id) => { popup.close(); open(id); };
+  newChat.addEventListener('click', () => choose(null));
+  search.addEventListener('input', paintChoices);
+  menu.addEventListener('beforetoggle', (event) => {
+    if (event.newState !== 'open') return;
+    search.value = '';
+    paintChoices();
+  });
   let ids = restore();
   let active = null;
   let painted = null;         // с чем нарисован ряд: тот же — без перерисовки
+
+  function paintChoices() {
+    const query = search.value.trim().toLocaleLowerCase();
+    const found = items().filter((item) => (item.title || tr("Новый диалог")).toLocaleLowerCase().includes(query));
+    const rows = [...found.filter((item) => item.pinned), ...found.filter((item) => !item.pinned)].map((item) => {
+      const title = item.title || tr("Новый диалог");
+      const pick = el('button', { type: 'button', class: 'code-chat-link', title },
+        el('span', { class: 'chat-link-title' }, title), chatTime(item.updated));
+      pick.addEventListener('click', () => choose(item.id));
+      return pick;
+    });
+    choices.replaceChildren(...rows);
+    if (!rows.length && query) choices.append(el('p', { class: 'muted small' }, tr("Ничего не найдено")));
+  }
 
   function save() {
     try {
@@ -116,8 +149,8 @@ export function chatTabs({ open, info }) {
     painted = signature;
     const focused = document.activeElement?.closest?.('.code-tab');
     const keep = focused && bar.contains(focused) ? focused.dataset.chat : null;
-    bar.replaceChildren(...ids.map(tabNode));
-    node.hidden = ids.length < 2;
+    for (const tab of bar.querySelectorAll('.code-tab')) tab.remove();
+    add.before(...ids.map(tabNode));
     if (keep) bar.querySelector(`.code-tab[data-chat="${keep}"]`)?.focus({ preventScroll: true });
     return true;
   }
@@ -125,10 +158,10 @@ export function chatTabs({ open, info }) {
   /** Выбранная — в видимой части ряда (телефон листает ряд вбок). */
   function reveal() {
     const tab = bar.querySelector('.code-tab[aria-selected="true"]');
-    if (!tab || node.hidden) return;
+    if (!tab) return;
     if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
-    else if (tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) {
-      bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
+    else if (tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth - add.offsetWidth) {
+      bar.scrollLeft = tab.offsetLeft + tab.offsetWidth + add.offsetWidth - bar.clientWidth;
     }
   }
 
@@ -161,6 +194,7 @@ export function chatTabs({ open, info }) {
       if (paint()) reveal();                         // названия пришли — ширина вкладок сменилась
     },
     unmount() {
+      popup.close();
       node.remove();
       document.removeEventListener('studio-dialog-draft', onDraft);
     },

@@ -55,12 +55,18 @@ def test_scan_and_transcript_upload_and_list_are_visible_on_iphone(engine, live,
         page.evaluate("section => location.hash='#/' + section", section)
         trigger = page.locator('#' + upload)
         pw.expect(trigger).to_be_visible()
-        pw.expect(page.locator('.split-toolbar .split-toggle')).to_have_text(name)
+        pw.expect(page.locator('.split-main .head .split-toggle')).to_have_text(name)
+        assert trigger.evaluate("""upload => {
+            const control = upload.closest('.composer');
+            const main = upload.closest('.split-main').getBoundingClientRect();
+            return !!control && control.getBoundingClientRect().top > main.top + main.height / 2 &&
+                control.getBoundingClientRect().bottom <= main.bottom;
+        }""")
         with page.expect_file_chooser():
             trigger.click()
-        page.locator('.split-toolbar .split-toggle').click()
+        page.locator('.split-main .head .split-toggle').click()
         pw.expect(page.locator('#' + aside)).to_be_visible()
-        pw.expect(page.locator('#' + aside + ' .tr-add')).to_be_visible()
+        pw.expect(page.locator('#' + aside + ' .tr-add')).to_have_count(0)
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 

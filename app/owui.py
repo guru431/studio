@@ -105,6 +105,7 @@ MIME = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,
 FAILS: dict[int, list[float]] = {}
 #: Отправка с вложениями и удаление черновика одной учётки не должны идти одновременно.
 FILE_LOCKS: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
+CHAT_LOCKS: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
 
 NOT_FOUND = {"code": "not_found", "message": "такой учётки Open WebUI нет"}
 OFFLINE = {"code": "owui_offline", "message": "Open WebUI не отвечает"}
@@ -176,6 +177,14 @@ class CertificateIn(BaseModel):
 
 class SearchIn(BaseModel):
     text: str = Field(max_length=SEARCH_MAX)
+
+
+class ChatTitleIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class ChatPinIn(BaseModel):
+    pinned: bool = Field(strict=True)
 
 
 class SendIn(BaseModel):
@@ -519,13 +528,13 @@ def _owui_id(value: str, missing: dict) -> str:
     return value
 
 
-def _ok(acc, response: httpx.Response, kind: type):
-    """Тело ответа Open WebUI нужного вида (`list` или `dict`); 429 и 5xx — отказы Студии, всё прочее — `owui_shape`."""
+def _ok(acc, response: httpx.Response, kind: type | tuple[type, ...]):
+    """Тело ответа Open WebUI нужного вида; 429 и 5xx — отказы Студии, всё прочее — `owui_shape`."""
     _refused(acc, response)
     try:
         body = response.json()
     except ValueError:
-        body = None
+        body = object()
     if response.status_code != 200 or not isinstance(body, kind):
         log.warning("owui %d: ответ Open WebUI не той формы (код %d)", acc.id, response.status_code)
         raise shape_error(acc)
@@ -629,6 +638,57 @@ async def chat_view(aid: int, chat: str, request: Request):
     body = upstream.json_body(tasks) if tasks.status_code == 200 else {}
     ids = body.get("task_ids")
     return {**view, "active": bool(ids) if isinstance(ids, list) else False}
+
+
+def chat_lock(aid: int, chat: str) -> asyncio.Lock:
+    return CHAT_LOCKS.setdefault((aid, chat), asyncio.Lock())
+
+
+@router.patch("/accounts/{aid}/chats/{chat}")
+async def rename_chat(aid: int, chat: str, body: ChatTitleIn, request: Request):
+    acc = load(request.state.user.id, aid)
+    chat = _owui_id(chat, NO_CHAT)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, EMPTY)
+    response = await call(acc, "POST", f"/api/v1/chats/{chat}", json={"chat": {"title": title}})
+    _cut_status(acc, response, NO_CHAT)
+    return _view(acc, owui_view.chat_item, _ok(acc, response, dict))
+
+
+@router.put("/accounts/{aid}/chats/{chat}/pin")
+async def pin_chat(aid: int, chat: str, body: ChatPinIn, request: Request):
+    acc = load(request.state.user.id, aid)
+    chat = _owui_id(chat, NO_CHAT)
+    path = f"/api/v1/chats/{chat}"
+    # Open WebUI переключает состояние. Сверяем его под блокировкой, чтобы повтор PUT не откреплял чат.
+    async with chat_lock(aid, chat):
+        auth.recheck(request)
+        response = await call(acc, "GET", f"{path}/pinned")
+        _cut_status(acc, response, NO_CHAT)
+        current = _ok(acc, response, (bool, type(None)))
+        if bool(current) == body.pinned:
+            return {"pinned": body.pinned}
+        auth.recheck(request)
+        response = await call(acc, "POST", f"{path}/pin")
+        _cut_status(acc, response, NO_CHAT)
+        return {"pinned": _ok(acc, response, dict).get("pinned") is True}
+
+
+@router.delete("/accounts/{aid}/chats/{chat}", status_code=204)
+async def delete_chat(aid: int, chat: str, request: Request):
+    from chat_shares import OWUI
+
+    acc = load(request.state.user.id, aid)
+    chat = _owui_id(chat, NO_CHAT)
+    async with chat_lock(aid, chat):
+        auth.recheck(request)
+        response = await call(acc, "DELETE", f"/api/v1/chats/{chat}")
+        _cut_status(acc, response, NO_CHAT)
+        if not _ok(acc, response, bool):
+            raise HTTPException(422, REFUSED)
+        state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = ? AND item_id = ?",
+                         (acc.user_id, OWUI, f"{aid}:{chat}"))
 
 
 class _Relay(StreamingResponse):

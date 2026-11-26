@@ -40,7 +40,7 @@ TOOLS = {
 }
 
 
-def bridge(gateway):
+def bridge(gateway, *, upscale_first=False):
     calls, polls = [], {}
 
     def artifact(aid, name):
@@ -60,7 +60,10 @@ def bridge(gateway):
         if method == "initialize":
             result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}
         elif method == "tools/list":
-            result = {"tools": [{"name": name, "inputSchema": {"type": "object", **schema}} for name, schema in TOOLS.items()]}
+            tools = list(TOOLS.items())
+            if upscale_first:
+                tools.sort(key=lambda item: item[0] != "upscale_image")
+            result = {"tools": [{"name": name, "inputSchema": {"type": "object", **schema}} for name, schema in tools]}
         else:
             name, args = (payload["params"][key] for key in ("name", "arguments"))
             calls.append((name, args))
@@ -99,7 +102,7 @@ def bridge(gateway):
 def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live, width):
     login = f"bridge-forms-{width}"
     live.add_user(login)
-    calls = bridge(live.gw)
+    calls = bridge(live.gw, upscale_first=True)
     options = ("[...document.querySelectorAll('#section-mcp-tool option')].map(o => o.value.split(':').pop())"
                ".filter(Boolean).join(',')")
     choose = lambda tool: ("eval", "tool", "(() => { const s = document.querySelector('#section-mcp-tool');"
@@ -115,6 +118,7 @@ def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live,
         ("wait", "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
         ("eval", "photo", "location.hash='#/photo'"), ("wait", ready("image_generate")),
         ("eval", "photoTools", options),
+        ("eval", "photoDefault", "document.querySelector('#section-mcp-tool').value.split(':').at(-1)"),
         ("type", "#photo-prompt", "Рыжий кот"), choose("image_generate"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=square]"), ("click", "#photo-go"),
         ("wait", "document.querySelector('#photo-feed .photo-card[data-state=done] img')"), ("eval", "photoFits", NO_OVERFLOW),
@@ -145,7 +149,8 @@ def test_bridge_section_tools_run_from_photo_video_and_scan_forms(browser, live,
     assert not result.get("failed"), result
     values = result["values"]
     # Сквозные инструменты aitools требуют поля по пути — страница их в разделах не предлагает.
-    assert values["photoTools"] == "image_generate,upscale_image" and values["videoTools"] == "video_create"
+    assert values["photoTools"] == "upscale_image,image_generate" and values["videoTools"] == "video_create"
+    assert values["photoDefault"] == "image_generate"
     assert values["ocrTools"] == "ocr_image"
     assert values["photoFits"] and values["videoFits"] and values["ocrFits"]
     assert not values["inlineVideo"] and values["viewerFile"].startswith("/api/media/")
@@ -187,13 +192,24 @@ def test_photo_upscaler_appears_in_mcp_menu_and_saves_the_result(browser, live):
         ("wait", "document.querySelector('#photo-feed .photo-card[data-state=done] img') && "
                  "document.querySelector('#section-mcp-tool-pick:not([disabled])')"),
         ("eval", "fits", NO_OVERFLOW),
-        ("click", "#section-mcp-tool-pick"), ("eval", "chooseGenerate", choose("MCP · srvllm · Создать фото")),
-        ("wait", "!document.querySelector('#photo-prompt').closest('.field-box').hidden && "
-                 "document.querySelector('.field-tools #chip-photo')")], width=390, mobile=True)
+        ("eval", "away", "location.hash='#/video'"), ("wait", "document.querySelector('#video-feed')"),
+        ("eval", "return", "location.hash='#/photo'"),
+        ("wait", "document.querySelector('#section-mcp-tool')?.value.endsWith(':image_generate') && "
+                 "!document.querySelector('#photo-prompt').closest('.field-box').hidden && "
+                 "document.querySelector('.field-tools #chip-photo')"),
+        ("click", "#photo-feed .photo-card[data-state=done] .card-open"),
+        *viewer_details(390),
+        ("eval", "share", "!!document.querySelector('#viewer .act-share')"),
+        ("click", "#viewer .act-upscale"), ("wait", "document.querySelector('#photo-upscale-dialog[open]')"),
+        set_value("[name=upscale-mode]", "fast"), set_value("[name=upscale-scale]", "2"),
+        ("click", "#photo-upscale-submit"),
+        ("wait", "document.querySelectorAll('#photo-feed .photo-card[data-state=done]').length === 2")],
+        width=390, mobile=True)
     assert not result.get("failed"), result
     assert "MCP · srvllm · Улучшить фото" in result["values"]["menu"]
-    assert result["values"]["uploadVisible"] and result["values"]["fits"]
-    assert [args for name, args in calls if name == "upscale_image"] == [{"artifact_id": UPLOADED, "mode": "restore", "scale": 1}]
+    assert result["values"]["uploadVisible"] and result["values"]["fits"] and result["values"]["share"]
+    assert [args for name, args in calls if name == "upscale_image"] == [
+        {"artifact_id": UPLOADED, "mode": "restore", "scale": 1}, {"artifact_id": UPLOADED, "mode": "fast", "scale": 2}]
     payload = next(args["data_base64"] for name, args in calls if name == "artifact_upload")
     with Image.open(io.BytesIO(base64.b64decode(payload))) as source:
         assert source.size == (2300, 1200)

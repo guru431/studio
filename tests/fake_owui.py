@@ -309,6 +309,13 @@ class FakeOwui:
             return self._create_session(request)
         if path.startswith("/api/v1/auths/sessions/") and method == "DELETE":
             return self._revoke(request, path.rsplit("/", 1)[1])
+        if path.startswith("/api/v1/chats/") and method == "DELETE":
+            if not self._caller_valid(request):
+                return httpx.Response(401, json={"detail": "Not authenticated"})
+            chat_id = path.removeprefix("/api/v1/chats/")
+            if self.chats.pop(chat_id, None) is None:
+                return httpx.Response(404, json={"detail": "Not found"})
+            return httpx.Response(200, json=True)
         if path.startswith("/api/v1/files/") and method == "DELETE":
             if not self._caller_valid(request):
                 return httpx.Response(401, json={"detail": "Not authenticated"})
@@ -393,6 +400,10 @@ class FakeOwui:
                                              "meta": {"name": name, "content_type": mime, "size": len(data)},
                                              "data": {"status": self.file_status.get(file_id, ["completed"])[-1]}})
         chat_id = path.removeprefix("/api/v1/chats/")
+        if chat_id.endswith("/pinned"):
+            chat = self.chats.get(chat_id.removesuffix("/pinned"))
+            if chat is not None:
+                return httpx.Response(200, json=chat["pinned"])
         if chat_id in self.raw_chat:
             return httpx.Response(200, json=self.raw_chat[chat_id])
         if chat_id in self.chats:
@@ -402,6 +413,14 @@ class FakeOwui:
     # ---- отправка ----
 
     def _send(self, request: httpx.Request, path: str) -> httpx.Response:
+        chat_id = path.removeprefix("/api/v1/chats/")
+        if chat_id.endswith("/pin") and (chat := self.chats.get(chat_id.removesuffix("/pin"))) is not None:
+            chat["pinned"] = not chat["pinned"]
+            return httpx.Response(200, json=self._chat_response(chat))
+        if chat_id in self.chats:
+            update = json.loads(request.content)["chat"]
+            self.chats[chat_id]["title"] = update["title"]
+            return httpx.Response(200, json=self._chat_response(self.chats[chat_id]))
         if path == "/api/chat/completions":
             body = self._body(request)
             self.completions.append(body)

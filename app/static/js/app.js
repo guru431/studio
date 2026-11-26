@@ -3,8 +3,8 @@ import { tr } from './i18n.js';
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/owui,
- * #/owui/<id>[/<chat>] (owui.js), #/code, #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js),
- * #/myfiles (my-files.js; пункт меню виден при наличии файлов Studio или сервера MCP с «Моими файлами»), #/admin (только
+ * #/owui/<id>[/<chat>] (owui.js), #/code, #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js),
+ * #/myfiles (my-files.js; значок папки рядом с поиском), #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -59,7 +59,6 @@ const LOADERS = {
   search: () => import('./search.js'),
   settings: () => import('./settings.js'),
   help: () => import('./help.js'),
-  trash: () => import('./trash.js'),
   myfiles: () => import('./my-files.js'),
   admin: () => import('./admin.js'),
 };
@@ -129,7 +128,7 @@ function allowed({ section, id }) {
   const def = SECTIONS[section];
   return def && !(def.admin && !me.is_admin)
     && (id === null || section === 'chat' || section === 'settings' || section === 'code'
-      || section === 'owui');
+      || section === 'owui' || section === 'help');
 }
 
 function revealView() {
@@ -164,6 +163,10 @@ async function render() {
     route = { section: 'settings', id: null, query: new URLSearchParams() };
     history.replaceState(history.state, '', '#/settings');
   }
+  if (route.section === 'trash') {
+    route = { section: 'myfiles', id: null, query: new URLSearchParams('trash=1') };
+    history.replaceState(history.state, '', '#/myfiles?trash=1');
+  }
   if (!allowed(route)) {
     route = { section: 'chat', id: null, query: new URLSearchParams() };
     history.replaceState(history.state, '', '#/chat');
@@ -173,7 +176,8 @@ async function render() {
   // Проверка идёт до update/mount: старые узлы и кэш защищённого раздела не мелькают при переходе.
   view.style.visibility = 'hidden';
   view.inert = true;
-  const guardedSection = route.section === 'settings' && route.id === 'cleaner' ? 'security'
+  const guardedSection = route.section === 'myfiles' && route.query.has('trash') ? 'trash'
+    : route.section === 'settings' && route.id === 'cleaner' ? 'security'
     : route.section === 'settings' && route.id in SECTIONS && route.id !== 'other' ? route.id : route.section;
   try {
     await ensureSectionOpen(guardedSection);
@@ -192,7 +196,7 @@ async function render() {
   // метка записи: hold() раздела отличает «Назад»/«Вперёд» (запись с меткой) от новой записи; разделы, меняя адрес
   // своей записи, держат history.state
   if (!(history.state && history.state.entry)) history.replaceState({ ...history.state, entry: ++entries }, '');
-  for (const tab of document.querySelectorAll('#rail .tab, #search-open')) {
+  for (const tab of document.querySelectorAll('#rail a[data-section]')) {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
@@ -249,6 +253,7 @@ function buildRail() {
   search.append(svgIcon('search'));
   search.setAttribute('aria-keyshortcuts', `${HOTKEY}/`);
   search.title = tr("Поиск · {0}/", HOTKEY);
+  document.getElementById('myfiles-open').append(svgIcon('folder'));
   document.getElementById('jobs').prepend(svgIcon('jobs'));
   const spacer = rail.querySelector('.spacer');
   let group = null;
@@ -313,21 +318,11 @@ function sectionKey(event) {
   location.hash = target.getAttribute('href');
 }
 
-/** «Мои файлы» в меню — при наличии файлов Studio или сервера MCP с контрактом `studio/files` (GET /api/my-files/servers; каталоги
- * серверов — из кэша сервера). Сбой проверки пункт не меняет. Пока заперт хоть один раздел, маршрут отвечает 423:
- * открытие меню экран блокировки не вызывает (`unlock: false`), пункт остаётся как был. */
-function checkMyFiles() {
-  api('GET', '/api/my-files/servers', undefined, { unlock: false }).then((items) => {
-    document.getElementById('menu-my-files').hidden = !(Array.isArray(items) && items.length);
-  }).catch(() => {});
-}
-
 function openMenu(open) {
   if (open) {
     const version = document.getElementById('menu-version');
     version.textContent = pageVersion ? `Studio ${pageVersion}` : '';   // версия страницы, не перечитанного профиля
     version.hidden = !pageVersion;
-    checkMyFiles();
   }
   menu.hidden = !open;
   avatar.setAttribute('aria-expanded', String(open));
@@ -351,7 +346,6 @@ function setupMenu() {
   document.addEventListener('studio-me', showName);
   showName();
   document.getElementById('menu-admin').hidden = !me.is_admin;
-  checkMyFiles();
   avatar.addEventListener('click', (event) => {
     event.stopPropagation();
     openMenu(menu.hidden);

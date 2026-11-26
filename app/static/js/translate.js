@@ -192,7 +192,17 @@ function build(view, ctx) {
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
   const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go', hidden: !!ctx.hint }, tr("Перевести"));
   const mcp = sectionMcp('translate', { native: !ctx.hint, fields: ['text', 'source_lang', 'target_lang', 'source_language', 'target_language'],
-    onChange: paintMcp, onBusy: paintGo, onText(value) { loose = value; paintRight(); } });
+    onChange: paintMcp, onBusy: paintGo, onText(value) { loose = value; paintRight(); },
+    async onHistory(item) {
+      const tid = item.result?.translation_id;
+      if (!tid || !alive) return;
+      const mine = choosing;
+      await docs.load();
+      if (alive && mine === choosing && !rec && !pending) {
+        picked = true;
+        await docs.select(tid);
+      }
+    } });
   const bar = el('div', { class: 'composer-bar' },
     el('div', { class: 'composer-opts' }, mcp.control, mcp.fields, count), ctx.hint ? null : goBtn);
   const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
@@ -462,6 +472,7 @@ function build(view, ctx) {
     cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
     acts.hidden = running || !text;
     exportBtn.hidden = !rec;
+    shareBtn.hidden = !rec || !!rec.mcp_share_blocked;
   }
 
   /** Пары «исходник — перевод» готовых кусков подряд (как двуязычный .docx); перевод скана — разметкой. */
@@ -662,6 +673,8 @@ function build(view, ctx) {
         input.focus();
       } else {
         const text = input.value;
+        choosing += 1;
+        sentText = text;
         rec = null;
         docs.deselect();
         selection.save(null);

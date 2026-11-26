@@ -428,6 +428,21 @@ def test_failing_prompts_keep_the_server_in_chat_and_catalog(studio):
 
 # ---- §7a п. 2: «интернет» и «с подтверждением» -----------------------------------------------------------
 
+def test_public_web_search_without_annotations_obeys_internet_switch(studio):
+    sid, calls, _ = setup(studio, tools=[tool("search"), tool("web_search")])
+    cid = new_chat(studio)
+    for enabled in (False, True, False):
+        assert studio.c.patch(f"/api/chats/{cid}", json={"web": enabled}).status_code == 200
+        calls.clear()
+        studio.gw.chat_script = ([{"tool_calls": [call(name_of(sid, "web_search"))]}, ["Готово"]]
+                                 if enabled else [["Готово"]])
+        first = len(studio.gw.chat_requests)
+        assert sse(turn(studio, cid, "Погода"))[-1] == ("done", {"status": "done"})
+        names = offered(studio.gw.chat_requests[first])
+        assert names == ["Shared tools: search"] + (["Shared tools: web_search"] if enabled else [])
+        assert (("tools/call", {"name": "web_search", "arguments": {}}) in calls) is enabled
+
+
 def test_open_world_only_with_internet_and_rechecked_midturn(studio):
     sid, calls, _ = setup(studio, tools=[tool("lookup"), tool("search", annotations={"openWorldHint": True})])
     cid = new_chat(studio)

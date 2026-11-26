@@ -11,9 +11,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 ROW = "document.querySelector('.chat-item[data-id=\"' + window.{0} + '\"]')"
 MARKS = "[...({0}?.querySelectorAll('.chat-mark') || [])].map((m) => m.dataset.mark)"
 FIRST = ("[document.querySelector('.chat-list .chat-group')?.textContent,"
-         " document.querySelector('.chat-list .chat-item .chat-link')?.textContent,"
+         " document.querySelector('.chat-list .chat-item .chat-link-title')?.textContent,"
          " document.querySelector('.chat-list .chat-item .chat-pin')?.getAttribute('aria-pressed')]")
-SHOWN = "[...document.querySelectorAll('.chat-list .chat-item .chat-link')].map((a) => a.textContent)"
+SHOWN = "[...document.querySelectorAll('.chat-list .chat-item .chat-link-title')].map((a) => a.textContent)"
 TABS = "document.querySelectorAll('#chat-tabbar .code-tab')"
 ACTIVE = "document.querySelector('#chat-tabbar .code-tab[aria-selected=\"true\"]')"
 TITLES = f"[...{TABS}].map((t) => t.querySelector('.code-tab-title').textContent)"
@@ -55,7 +55,9 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("eval", "pinned", FIRST),
             ("wait", f"{b}?.querySelector('.chat-mark[data-mark=unread]')"),      # опрос раз в LIST_POLL_MS
             ("eval", "unread", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({b}.querySelector('.chat-mark'))"),
-            ("eval", "text", f"{b}.textContent"),
+            ("eval", "text", f"{b}.querySelector('.chat-link-title').textContent"),
+            ("eval", "visible_pin", f"getComputedStyle({b}.querySelector('.chat-pin')).opacity"),
+            ("eval", "updated", f"{b}.querySelector('time').dateTime"),
             ("eval", "openB", "location.hash = '#/chat/' + window.B"),
             ("wait", f"{b}?.querySelector('[aria-current=page]') && !{b}.querySelector('.chat-mark')"),
             ("eval", "opened", MARKS.format(b)),
@@ -92,7 +94,8 @@ def test_list_marks_pin_and_title_search(browser, live, width):
     assert v["busy"] == ["busy", "идёт ответ"]              # .chat-mark[data-mark] строки Б и его aria-label
     assert v["pinned"] == ["Закреплённые", "Отчёт за квартал", "true"] and v["kept"] is True
     assert v["unread"] == ["unread", "не прочитано"]       # шлюз отпущен, Б не открывали
-    assert v["text"] == "План отпуска"                       # метки без текста: textContent строки — только название
+    assert v["text"] == "План отпуска"
+    assert v["visible_pin"] == "1" and v["updated"].endswith("Z")
     assert [v["opened"], f"POST /api/chats/{chat_b}/seen" in r["sent"]] == [[], True]
     assert f"POST /api/chats/{chat_a}/seen" in r["sent"]
     assert v["found"] == ["План отпуска"] and v["none"] == "Ничего не найдено" and v["asked"] == 0
@@ -104,6 +107,36 @@ def test_list_marks_pin_and_title_search(browser, live, width):
 def open_chat(i):
     return [("eval", "go", f"location.hash = '#/chat/' + window.ids[{i}]"),
             ("wait", f"{ACTIVE}?.dataset.chat === window.ids[{i}]")]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_section_return_restores_selected_dialog_and_its_draft(browser, live, width):
+    login = f"return-chat-{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+        ("eval", "created", f"""(async () => {{
+          const m = {API};
+          const chat = await m.api('POST', '/api/chats', {{}});
+          window.chatId = chat.id;
+          await m.api('POST', '/api/chats/' + chat.id + '/turns', {{text: 'Запрос для поиска'}});
+          location.hash = '#/chat/' + chat.id;
+        }})()"""),
+        ("wait", "document.querySelector('#chat-title-actions:not([hidden])')"),
+        ("eval", "send_label", "document.querySelector('#send').textContent"),
+        ("eval", "toolbar", "!!document.querySelector('#chat-find').closest('.chat-status-bar, #chat-status-menu')"),
+        ("eval", "find", """document.dispatchEvent(new KeyboardEvent('keydown',
+          {code: 'KeyF', ctrlKey: true, cancelable: true}))"""),
+        set_value("#chat-find-input", "ДЛЯ ПОИСКА"),
+        ("wait", "document.querySelector('#chat-find-count').textContent === '1 из 1'"),
+        ("press", "Escape"),
+        set_value("#chat-input", "Черновик текущего диалога"),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+        ("eval", "returned", "[location.hash === '#/chat/' + window.chatId, document.querySelector('#chat-input').value]"),
+    ], width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    assert r["values"]["returned"] == [True, "Черновик текущего диалога"]
+    assert r["values"]["send_label"] == "Отправить" and r["values"]["toolbar"]
 
 
 @pytest.mark.parametrize("width,lang", [(320, "en"), (1280, "ru")])      # Review Focus 5
@@ -124,6 +157,12 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
               return window.ids; }})()"""),
             *open_chat(0),
             ("eval", "one", "document.querySelector('#chat-tabs').hidden"),
+            ("click", "#chat-tab-add"),
+            ("wait", "document.querySelector('#chat-tab-menu:popover-open')"),
+            set_value("#chat-tab-menu input", "Диалог 2"),
+            ("wait", "document.querySelectorAll('#chat-tab-menu .code-chat-link').length === 1"),
+            ("click", "#chat-tab-menu .code-chat-link"),
+            ("wait", f"{ACTIVE}?.dataset.chat === window.ids[1]"),
             *open_chat(1), *open_chat(2),
             ("wait", "!document.querySelector('#chat-tabs').hidden"),
             ("eval", "three", TITLES),
@@ -152,6 +191,7 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
                 scrolls: bar.scrollWidth > bar.clientWidth && getComputedStyle(bar).overflowX === 'auto',
                 active: tab.left >= box.left - 0.5 && tab.right <= box.right + 0.5 }}; }})()"""),
             ("eval", "escape", "document.querySelector('.chat.panel-open') && document.querySelector('#chats-backdrop, .chats-backdrop').click()"),
+            ("wait", "document.querySelector('#ctx-meter:not([hidden])')"),
             ("click", "#avatar"), ("click", "#menu-logout"),
             ("wait", "location.pathname === '/login' && document.querySelector('#login')"),
             ("eval", "signed_out", "localStorage.getItem('studio-chat-tabs')")],
@@ -161,7 +201,7 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
     assert not r.get("failed"), r
     v = r["values"]
     ids = v["ids"]
-    assert v["one"] is True and v["three"] == ["Диалог 1", "Диалог 2", "Диалог 3"] and v["active"] == "Диалог 3"
+    assert v["one"] is False and v["three"] == ["Диалог 1", "Диалог 2", "Диалог 3"] and v["active"] == "Диалог 3"
     assert v["limit"] == [12, "Диалог 2"]                  # тринадцатый вытеснил самую левую не текущую вкладку
     assert v["stored"] == {"user": uid, "ids": ids[1:]}    # только id
     assert v["closed"] == [11, f"#/chat/{ids[11]}"]        # крестик текущей: вкладок 11, открыта соседняя

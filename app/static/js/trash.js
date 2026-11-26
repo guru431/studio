@@ -1,5 +1,5 @@
 import { tr } from './i18n.js';
-/* «Корзина» (#/trash, меню аватара): удалённые записи всех разделов (GET /api/trash, trash.py) по разделам в порядке
+/* «Корзина» в «Моих файлах»: удалённые записи всех разделов (GET /api/trash, trash.py) по разделам в порядке
  * рельса. «Вернуть» — POST /api/trash/<вид>/<id>/restore; «Удалить навсегда» — DELETE той же записи после окна
  * с паролем учётки; «Очистить корзину» — POST /api/trash/empty (паузы в обоих случаях — как у
  * выключения блокировки). Сервер прячет разделы, закрытые блокировкой; действия при запертом разделе — 423 словами. */
@@ -12,20 +12,17 @@ import { button, el, field, openDialog, words } from './ui.js';
 const TRASH_DAYS = 14;                       // trash.TRASH_SEC: запись удалится сама через столько дней
 const KIND_TAGS = { chat_media: tr("файл диалога"), voices: tr("голос"), voice_samples: tr("образец голоса"),
   knowledge_bases: tr("база знаний"), kb_documents: tr("документ базы знаний") };
-let controller = null;
-
 const moment = (ts) => dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
-export function mount(view) {
-  controller = new AbortController();
+export function renderTrash(view) {
+  const controller = new AbortController();
   const { signal } = controller;
   const host = view;
   const note = el('p', { id: 'trash-status', class: 'status', role: 'status', 'aria-live': 'polite' });
   const list = el('div', { id: 'trash-list', class: 'trash-list' });
   const empty = button(tr("Очистить корзину"), { class: 'btn btn-danger', id: 'trash-empty', hidden: true },
     () => emptyDialog());
-  view.append(el('header', { class: 'head' }, el('h1', {}, sectionName('trash'))),
-    el('div', { class: 'page trash-page' },
+  view.append(el('div', { class: 'trash-page' },
       el('p', { class: 'muted small' }, tr("Удалённое лежит здесь {0} дней, потом удаляется само. Вернуть может только владелец записи.", TRASH_DAYS)),
       el('div', { class: 'row' }, empty), note, list));
 
@@ -137,9 +134,8 @@ export function mount(view) {
   }
 
   load();
-}
-
-export function unmount() {
-  controller?.abort();
-  controller = null;
+  return () => {
+    controller.abort();
+    view.replaceChildren();
+  };
 }

@@ -17,7 +17,7 @@ import { tr } from './i18n.js';
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
  * Текст машины — только textContent. */
 import { api, me } from './api.js';
-import { dateTime } from './time.js';
+import { dialogDateTime } from './time.js';
 import { ENGINE_NAMES, engineOrder } from './code-options.js';
 import { button, el, openDialog } from './ui.js';
 import { icon } from './icons.js';
@@ -29,10 +29,6 @@ const UNTITLED = tr("Новый чат");
 /** Короткие подписи кнопок нового чата: четыре кнопки в ряд помещаются и на 320 px. */
 const SHORT = { claude: 'Claude', deepseek: 'DeepSeek' };
 const MONTH_SEC = 30 * 86400;    // «старше месяца» — без изменений 30 суток
-
-function when(ts) {
-  return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-}
 
 export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, readonly = false, contentSearch = false, worktrees = false, worktreeOpened, chatManage = false }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
@@ -62,7 +58,8 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
     else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, tr("идёт ход")));
     const link = el('button', { type: 'button', class: 'code-chat-link' },
       el('span', { class: 'code-chat-title', title: chat.title || UNTITLED }, chat.title || UNTITLED),
-      typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
+      typeof chat.modified === 'number' && chat.modified > 0
+        ? el('span', { class: 'muted small code-chat-time' }, dialogDateTime(chat.modified)) : null,
       el('span', { class: 'code-marks' }, ...marks));
     const url = `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`;
     link.addEventListener('click', () => busy(link, async () => {

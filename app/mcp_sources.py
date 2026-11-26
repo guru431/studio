@@ -8,8 +8,8 @@
 
 Пометки — свои ключи `_meta` (стандартного поля в MCP нет): `studio/confirm` — вызов с подтверждением,
 `studio/chat-files` — инструмент принимает файлы чата, `studio/poll` — опрос, его повтор не пропускается.
-Веб-инструмент — только при явном `annotations.openWorldHint = true` (вопреки умолчанию спецификации MCP:
-неразмеченные серверы не попадают под «Интернет»).
+Веб-инструмент — при явном `annotations.openWorldHint = true` или известном имени публичного веб-инструмента.
+Для остальных неразмеченных инструментов «Интернет» не требуется. Настройка администратора имеет приоритет.
 """
 
 import asyncio
@@ -33,6 +33,12 @@ CATALOG_TTL_SEC = 300                        # срок записи кэша
 CACHE_KEEP = 512                             # записей кэша; лишние — старейшие
 INSTRUCTIONS_MAX = 4000                      # правила одного сервера в системном сообщении (режет chat_system)
 INSTRUCTIONS_TOTAL = 12000                   # правила всех серверов хода
+PUBLIC_WEB_TOOLS = frozenset({
+    "web_search", "websearch", "search_web", "web_search_exa", "web_search_prime",
+    "web_fetch", "webfetch", "web_reader", "webreader", "web_extract",
+    "tavily_search", "tavily_extract", "tavily_crawl", "tavily_map",
+    "brave_web_search", "firecrawl_search", "firecrawl_scrape", "firecrawl_crawl", "firecrawl_map",
+})
 LIST_SEC = 8                                 # срок опроса сервера для списка каталога
 REFRESH_MIN_SEC = 10                         # «Обновить список» опрашивает сервер не чаще
 DEFAULT_WAIT_SEC = 5                         # общий срок каталогов серверов по умолчанию на холодном кэше хода
@@ -131,7 +137,7 @@ def _confirm(raw):
 
 
 def hints(tool) -> dict:
-    """Пометки инструмента: `open_world` (только явное true), `confirm` (см. `_confirm`), `chat_files` —
+    """Пометки инструмента: `open_world` (аннотация или известное имя), `confirm` (см. `_confirm`), `chat_files` —
     `max_bytes` из `_meta["studio/chat-files"]` или None, `poll` — опрос (`_meta["studio/poll"]`, только явное
     true): его повтор с теми же аргументами в одном ответе исполняется (`chat.StreamTask._calls`)."""
     annotations = tool.get("annotations")
@@ -139,7 +145,9 @@ def hints(tool) -> dict:
     meta = meta if isinstance(meta, dict) else {}
     files = meta.get("studio/chat-files")
     limit = files.get("max_bytes") if isinstance(files, dict) else None
-    return {"open_world": isinstance(annotations, dict) and annotations.get("openWorldHint") is True,
+    name = tool.get("name")
+    public_web = isinstance(name, str) and name.lower().replace("-", "_") in PUBLIC_WEB_TOOLS
+    return {"open_world": public_web or (isinstance(annotations, dict) and annotations.get("openWorldHint") is True),
             "confirm": _confirm(meta.get("studio/confirm")),
             "chat_files": limit if type(limit) is int and limit > 0 else None,
             "poll": meta.get("studio/poll") is True}

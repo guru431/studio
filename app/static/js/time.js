@@ -10,6 +10,10 @@ export function dateTime(stamp, options = {}) {
   return new Date(stamp * 1000).toLocaleString(locale(), { ...options, timeZone: timeZone() });
 }
 
+export function dialogDateTime(stamp) {
+  return dateTime(stamp, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 export function dateOnly(stamp, options = {}) {
   return new Date(stamp * 1000).toLocaleDateString(locale(), { ...options, timeZone: timeZone() });
 }

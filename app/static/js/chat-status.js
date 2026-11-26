@@ -104,7 +104,7 @@ export function stageText(stage, now = Date.now()) {
 
 /** Строка над полем. `job()` — ответ, который читает вкладка; `last()` — последний ответ открытого диалога;
  * `local()` — модель диалога локальная; `stepNode(step)` — строка шага; `stats()`, `files()` — открыть окна. */
-export function chatStatus(host, { ring, job, last, local, stepNode, stats, files, parts = null }) {
+export function chatStatus(host, { ring, job, last, local, stepNode, stats, files, parts = null, buttons = [] }) {
   const text = el('span', {}, tr("нет активного ответа"));
   // слова меняются каждую секунду: начало и конец ответа зачитывает #chat-status, а не эта строка
   const activity = el('div', { id: 'chat-activity', class: 'code-activity', role: 'status', 'aria-live': 'off',
@@ -122,7 +122,7 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
   host.append(toolsPanel);
   const toolsPopup = popupPanel(toolsButton, toolsPanel, { label: tr("Шаги текущего ответа"), side: 'above', align: 'end' });
   // `parts` — кнопка «Части» (chat-parts.js): в ряду перед «Файлами диалога», до разбора ряда statusActions
-  const actions = el('div', { class: 'code-chat-actions' }, ...(parts ? [parts.node] : []), filesButton, statsButton);
+  const actions = el('div', { class: 'code-chat-actions' }, ...buttons, ...(parts ? [parts.node] : []), filesButton, statsButton);
   const fixed = el('div', { class: 'code-status-fixed' }, toolsButton, ring);
   const bar = el('div', { class: 'code-status-bar chat-status-bar' });
   const controls = statusActions(host, bar, activity, actions, fixed, { id: 'chat-status' });

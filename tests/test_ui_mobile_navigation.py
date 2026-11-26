@@ -124,7 +124,7 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
         steps += [('eval', 'desktop', "[...document.querySelectorAll('#rail a.tab')].filter(e => e.getBoundingClientRect().width).length"),
             ('eval', 'moreHidden', "document.querySelector('#mobile-more').getBoundingClientRect().width === 0"),
             ('screenshot', str(tmp_path / f'navigation-{width}-{theme}.png'))]
-    steps += [('eval', 'services', "['#search-open','#jobs','#avatar'].every(s => document.querySelector(s).getBoundingClientRect().width > 0)"),
+    steps += [('eval', 'services', "['#search-open','#myfiles-open','#jobs','#avatar'].every(s => document.querySelector(s).getBoundingClientRect().width > 0)"),
         ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth')]
     r = browser.drive(live.url + '/', steps, width=width, mobile=width < 760)
     assert not r.get('failed'), r

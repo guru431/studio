@@ -78,6 +78,11 @@ Open WebUI тоже попадает в `relogin`.
 `owui.read_chat`, ею пользуются и ссылка, и экспорт.
 `GET …/files/{fid}` — поток с `no-store`, `nosniff`, `sandbox`; не картинка, звук или видео — `attachment`.
 
+`PATCH …/chats/{chat} {title}` меняет название в Open WebUI. `PUT …/chats/{chat}/pin {pinned}` сравнивает текущее
+состояние с желаемым перед запросом переключения. `DELETE …/chats/{chat}` удаляет чат в Open WebUI и отзывает
+ссылку на его снимок в Студии. В списке и над перепиской показано время изменения из Open WebUI в часовом поясе
+учётки Студии. Текст черновика сохраняется для каждого диалога в сессии вкладки, очищается при блокировке и выходе.
+
 «Поделиться» и экспорт (`owui_share.py`): `GET/POST/PUT/DELETE …/chats/{chat}/share` — ссылка `chat_shares` своего
 вида `chat_shares.OWUI` (снимок и название — шифром `STUDIO_DATA_KEY`, файлы остаются в Open WebUI, рассуждение не
 идёт); `POST …/chats/{chat}/export {format, lang}` — Markdown или PDF. Подробно — [sharing-export](sharing-export.md#записи-разделов).

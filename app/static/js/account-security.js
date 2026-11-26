@@ -224,7 +224,7 @@ export function accessBlock(host) {
       tr("открыта {0} {1}", s.views || 0, plural(s.views || 0, [tr("раз"), tr("раза"), tr("раз")])),
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');
     // чат в корзине: ссылка получателю недоступна, пока его не вернут; открыть его — со страницы «Корзина»
-    const href = s.trashed ? '#/trash' : s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
+    const href = s.trashed ? '#/myfiles?trash=1' : s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
       // переписка Open WebUI: `item_id` — "<учётка>:<чат>"
       : item && s.kind === 'owui' ? `#/owui/${s.item_id.slice(0, s.item_id.indexOf(':'))}/${encodeURIComponent(s.item_id.slice(s.item_id.indexOf(':') + 1))}`
       : item && s.kind === 'speech' ? `#/speech?chat=${encodeURIComponent(s.item_id)}`   // `item_id` — id чата озвучки

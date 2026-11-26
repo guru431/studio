@@ -110,8 +110,11 @@ export function agentDownload() {
   }
   const copy = button(tr("Копировать"), { class: 'btn', hidden: true }, () => copyText(command, copy));
   const copyOrigin = button(tr("Копировать адрес"), { class: 'btn', id: 'agent-install-copy-origin' }, () => copyText(origin, copyOrigin));
-  const getCommand = button(tr("Получить команду для Linux"), { class: 'btn' }, async () => {
+  const commandBox = el('div', { class: 'agent-install-result', hidden: true },
+    el('p', { class: 'agent-install-command' }, command), copy);
+  const getCommand = button(tr("Получить команду для Linux"), { class: 'btn', id: 'agent-install-linux-command' }, async () => {
     getCommand.disabled = true;
+    commandBox.hidden = true;
     copy.hidden = true;
     copy.textContent = tr("Копировать");
     command.textContent = '';
@@ -122,22 +125,23 @@ export function agentDownload() {
     } catch (err) {
       command.textContent = words(err);
     } finally {
+      commandBox.hidden = false;
       getCommand.disabled = false;
     }
   });
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
       tr("Установите мост на компьютер, который хотите подключить к Студии.")),
-    el('a', { id: 'agent-download', class: 'btn btn-accent', href: agentInstallers.win32.href, download: agentInstallers.win32.file },
-      tr("Скачать мост для Windows (.exe)")),
-    el('a', { id: 'agent-download-macos', class: 'btn', href: agentInstallers.darwin.href, download: agentInstallers.darwin.file },
-      tr("Скачать мост для macOS (.pkg)")),
-    el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
-      tr("Скачать мост для Linux (.sh)")),
+    el('div', { class: 'agent-install-platforms' },
+      el('a', { id: 'agent-download', class: 'btn btn-accent', href: agentInstallers.win32.href, download: agentInstallers.win32.file },
+        tr("Скачать для Windows (.exe)")),
+      el('a', { id: 'agent-download-macos', class: 'btn', href: agentInstallers.darwin.href, download: agentInstallers.darwin.file },
+        tr("Скачать для macOS (.pkg)")),
+      el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
+        tr("Скачать для Linux (.sh)")), getCommand, commandBox),
     el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex, OpenCode или DeepSeek Harness. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
     el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик и вставьте этот адрес в поле «Адрес студии». В Linux получите команду и выполните её в терминале в течение 10 минут.")),
-    el('div', { class: 'row agent-install-command' }, origin, copyOrigin),
-    getCommand, el('p', { class: 'agent-install-command' }, command), copy);
+    el('div', { class: 'agent-install-origin-row' }, origin, copyOrigin));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

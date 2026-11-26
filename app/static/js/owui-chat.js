@@ -20,6 +20,10 @@ import { tr } from './i18n.js';
  * Тексты пользователя, ответы модели, названия чатов и слова Open WebUI — только textContent/разметкой, без перевода. */
 import { api } from './api.js';
 import { shareMenu } from './chat-share.js';
+import { chatTitle } from './chat-title.js';
+import { findView } from './code-find.js';
+import { draftStore, draftsLocked, OWUI_DRAFTS, owuiDraftKey } from './dialog-drafts.js';
+import { fileDrop } from './chat-drop.js';
 import { enterSends, fieldBox } from './field.js';
 import { icon, iconButton } from './icons.js';
 import { renderMarkdownInto } from './markdown.js';
@@ -29,7 +33,9 @@ import { signal } from './sound.js';
 import { answerTools } from './code-answer-tools.js';
 import { quoteChip, selectionQuote } from './quote.js';
 import { messageMenu } from './message-menu.js';
-import { el, words } from './ui.js';
+import { messageNav } from './message-nav.js';
+import { statusActions } from './status-bar.js';
+import { el, openDialog, words } from './ui.js';
 
 /** Предел вложения, байт (owui.FILE_MAX) и число вложений сообщения (owui.FILES_MAX). */
 const FILE_MAX = 20 * 1024 * 1024;
@@ -40,9 +46,12 @@ const OWUI_FILE = /(^|[\s("'<])\/api\/v1\/files\/([A-Za-z0-9_.:-]{1,128})\/conte
 
 let localIds = 0;
 
-export function chatView(host, { account, chatId = null, readOnly = false, created = () => {} }) {
+export function chatView(host, { account, chatId = null, readOnly = false, manage, created = () => {} }) {
   const base = `/api/owui/accounts/${account}`;
   let chat = chatId;
+  let meta = null;
+  const drafts = draftStore(OWUI_DRAFTS);
+  const draftKey = () => owuiDraftKey(account, chat);
   let messages = [];
   let active = false;              // в чате идёт ответ (GET чата, события active/delta, своя отправка)
   let sending = false;
@@ -65,9 +74,12 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   const pendingBoxes = new Map();  // id ответа → узел карточки паузы: перерисовка ленты не теряет выбранное в ней
 
   /* ---- разметка ---- */
-  const titleNode = el('h2', { class: 'owui-feed-title' });
+  const title = chatTitle({ prefix: 'owui', heading: 'h2', name: 'owui-feed-title',
+    fallback: chat ? '' : tr("Новый чат"), href: (item) => `#/owui/${account}/${encodeURIComponent(item.id)}`,
+    rename: (item) => manage.rename(account, item), remove: (item) => manage.remove(account, item),
+    pinItem: (item) => manage.pin(account, item), said: (text) => { notice.textContent = text; } });
   const feed = el('div', { class: 'owui-feed-list' });
-  const scroller = el('div', { class: 'owui-messages', id: 'owui-messages' }, feed);
+  const scroller = el('div', { class: 'owui-messages', id: 'owui-messages', tabindex: '-1' }, feed);
   let follow = true;               // вид у последнего сообщения: перерисовка и дорисованная разметка докручивают вниз
   scroller.addEventListener('scroll', () => { follow = nearBottom(); }, { passive: true });
   const notice = el('p', { class: 'error owui-chat-error', id: 'owui-chat-error', 'aria-live': 'polite' });
@@ -75,40 +87,71 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   const chips = el('div', { class: 'att-chips', id: 'owui-atts' });
   const input = el('textarea', { id: 'owui-input', rows: '1', placeholder: tr("Напишите сообщение…"), 'aria-label': tr("Сообщение"),
     maxlength: '200000' });
+  if (!readOnly) input.value = drafts.saved()[draftKey()]?.text || '';
+  input.addEventListener('input', () => {
+    if (!draftsLocked && !readOnly) drafts.save(draftKey(), input.value.trim() ? input.value : '');
+  });
   const file = el('input', { type: 'file', id: 'owui-attach', class: 'sr', multiple: true });
   const clip = el('label', { class: 'icon-btn attach', title: tr("Прикрепить файл") }, icon('clip'),
     el('span', { class: 'sr' }, tr("Прикрепить файл")), file);
   const select = el('select', { id: 'owui-model' });
   const modelPick = picker(host, tr("Модель"), select);
-  const send = el('button', { type: 'submit', id: 'owui-send', class: 'send composer-go', 'aria-label': tr("Отправить"),
-    title: tr("Отправить") }, icon('send'));
+  const send = el('button', { type: 'submit', id: 'owui-send', class: 'btn btn-accent composer-go dialog-send' }, tr("Отправить"));
   const stop = el('button', { type: 'button', id: 'owui-stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
     title: tr("Остановить"), hidden: true }, icon('stop'));
   const inputBox = fieldBox(input, { attach: clip, fold: true });
   const form = el('form', { class: 'composer owui-composer', id: 'owui-composer', hidden: readOnly }, chips, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), stop, send));
-  const feedHead = el('div', { class: 'owui-feed-head' }, titleNode);
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), send, stop));
+  if (!readOnly) fileDrop(form, attach);
+  const feedHead = el('div', { class: 'owui-feed-head' }, title.label, title.note);
+  const findHost = el('div', { class: 'chat-find' });
+  const nav = messageNav({ scroller, feed, prefix: 'owui', own: '.owui-msg.user:not(.owui-msg-queued)',
+    steps: 'details.owui-tool, details.owui-think', expandLabels: [tr("Развернуть все шаги"), tr("Свернуть все шаги")],
+    stuck: () => follow, follow: (on) => { follow = on; } });
+  feed.addEventListener('toggle', () => nav.paint(), true);
+  const history = el('div', { class: 'chat-history' }, scroller, nav.node);
+  const bar = el('div', { class: 'code-status-bar chat-status-bar', hidden: true });
+  const activityText = el('span');
+  const activity = el('div', { class: 'code-activity' }, el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const root = el('div', { class: 'owui-chat-view', id: 'owui-feed', 'data-account': String(account) },
-    feedHead, scroller, queuedNote, notice, form);
+    feedHead, findHost, history, queuedNote, notice, bar, form);
   host.append(root);
+  const find = findView(findHost, { scroller, feed, prefix: 'owui', texts: '.owui-msg.user > .bubble, .owui-msg.assistant .md' });
   // «Поделиться и экспортировать» (owui_share.py): ссылка — снимок ветки, файлы — только именами
   const sharing = shareMenu(root, { id: 'owui-share', content: scroller, failed: (err) => { notice.textContent = words(err); } });
-  feedHead.append(sharing.button);
+  const filesCount = el('span', { class: 'code-changed-count', 'aria-hidden': 'true' }, '0');
+  const filesButton = iconButton('folder', tr("Файлы диалога: {0}", 0), { id: 'owui-files-open',
+    'aria-haspopup': 'dialog', hidden: true });
+  filesButton.append(filesCount);
+  filesButton.addEventListener('click', () => openDialog(root, { id: 'owui-files-dialog', title: tr("Файлы диалога"),
+    body: [filesNode(dialogFiles)] }));
+  const actions = el('div', { class: 'code-chat-actions' }, sharing.button, title.actions, title.menu, find.button, title.pin, filesButton);
+  const toolbar = statusActions(root, bar, activity, actions, el('div', { class: 'code-status-fixed' }), { id: 'owui-status' });
   // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
   const quote = quoteChip(form, input, { id: 'owui-quote' });
   const quoteText = (node) => messages.find((m) => m.id === node.dataset.id)?.text || '';
   const selQuote = readOnly ? null   // только чтение: поля нет — и кнопки у выделения
     : selectionQuote(scroller, { texts: '.owui-msg > .bubble, .owui-msg .md', quote: quote.set });
   const msgMenu = messageMenu(scroller, { message: '.owui-msg', text: quoteText, quote: readOnly ? null : quote.set });
-  function paintShare() {
-    const path = chat ? `${base}/chats/${encodeURIComponent(chat)}` : null;
-    sharing.set(path ? { share: `${path}/share`, export: `${path}/export`, title: titleNode.textContent, kind: 'owui' } : null);
+  function paintMeta() {
+    title.set(meta);
+    const path = meta ? `${base}/chats/${encodeURIComponent(meta.id)}` : null;
+    bar.hidden = sharing.button.hidden = find.button.hidden = !meta;
+    sharing.set(path ? { share: `${path}/share`, export: `${path}/export`, title: title.node.textContent, kind: 'owui' } : null);
+  }
+
+  function metadata(item) {
+    if (!meta) return;
+    meta = { ...meta, ...item };
+    paintMeta();
+    scheduleReload();          // обновляем метаданные и ленту после ответа сервера
   }
   if (readOnly) root.append(stop);
 
   /* ---- лента ---- */
 
   const fileUrl = (id) => `${base}/files/${encodeURIComponent(id)}`;
+  let dialogFiles = [];
 
   function filesNode(files) {
     if (!Array.isArray(files) || !files.length) return null;
@@ -215,7 +258,14 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
     }
     queuedNote.hidden = !queued.length;
     queuedNote.textContent = queued.length ? tr("Сообщение в очереди: Open WebUI отправит его после текущего ответа") : '';
+    dialogFiles = [...new Map(messages.flatMap((m) => (m.files || []).map((file) => [file.id, file]))).values()];
+    const filesLabel = tr("Файлы диалога: {0}", dialogFiles.length);
+    filesCount.textContent = String(dialogFiles.length);
+    filesButton.title = filesLabel;
+    filesButton.setAttribute('aria-label', filesLabel);
+    filesButton.hidden = !dialogFiles.length;
     if (stick) scroller.scrollTop = scroller.scrollHeight;
+    nav.paint();
     sync();
   }
 
@@ -236,6 +286,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       }
       dirty.clear();
       if (stick) scroller.scrollTop = scroller.scrollHeight;
+      nav.paint();
     });
   }
 
@@ -272,8 +323,8 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
         arrived.splice(at, 1);
         return false;
       });
-      titleNode.textContent = data.title || tr("Без названия");
-      paintShare();
+      meta = { id: chat, title: data.title || tr("Без названия"), updated: data.updated, pinned: data.pinned };
+      paintMeta();
       chatModel = Array.isArray(data.models) && typeof data.models[0] === 'string' ? data.models[0] : null;
       chooseModel();
       notice.textContent = '';
@@ -417,6 +468,8 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
     const pending = attachments.some((a) => a.uploading || a.removing);
     send.disabled = sending || pending || !select.value;
     stop.hidden = !chat || !active;
+    activity.dataset.state = active ? 'running' : 'idle';
+    activityText.textContent = active ? tr("идёт ответ") : tr("нет активного ответа");
     input.readOnly = sending;
     file.disabled = sending;
   }
@@ -440,20 +493,27 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
     paintChips();
     sync();
     const files = ready.map((a) => ({ id: a.id, name: a.name, kind: a.kind }));
+    const key = draftKey();
+    const saved = drafts.saved()[key];
+    const clearSent = () => {
+      if (saved && drafts.saved()[key] === saved) drafts.save(key, '');
+    };
     try {
       if (!chat) {
         const out = await api('POST', `${base}/chats`, { model, text, files: files.map((f) => f.id) });
+        clearSent();
         if (gone) return;
         chat = out.chat_id;
         messages = [localUser(text, files), placeholder(out.message_id, model)];
         active = true;
-        titleNode.textContent = tr("Новый чат");
-        paintShare();
+        meta = { id: chat, title: tr("Новый чат"), pinned: false };
+        paintMeta();
         created(chat);
       } else {
         const parent = messages[messages.length - 1]?.id;
         const out = await api('POST', `${base}/chats/${encodeURIComponent(chat)}/messages`,
           { model, text, files: files.map((f) => f.id), parent_id: parent });
+        clearSent();
         if (gone) return;
         if (out.queued) queued.push({ text });
         else {
@@ -594,8 +654,10 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       if (!active || messages.some((x) => x.pending) || (active && !was && !messages.some((x) => !x.done))) scheduleReload();
       sync();
     } else if (type === 'title' && typeof data.title === 'string') {
-      titleNode.textContent = data.title || tr("Без названия");
-      paintShare();
+      if (meta) {
+        meta = { ...meta, title: data.title || tr("Без названия") };
+        paintMeta();
+      }
     } else if (type === 'queued') {
       queuedNote.hidden = false;
       queuedNote.textContent = tr("Сообщение в очереди: Open WebUI отправит его после текущего ответа");
@@ -604,7 +666,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
 
   /* ---- начало ---- */
 
-  titleNode.textContent = chat ? '' : tr("Новый чат");
+  paintMeta();
   render();
   load();
   loadModels();
@@ -612,6 +674,8 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   return {
     account,
     chat: () => chat,
+    hasDraft: () => !readOnly && !!drafts.saved()[draftKey()]?.text,
+    metadata,
     event,
     retry,
     unmount() {
@@ -622,6 +686,10 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
       sharing.unmount();
+      title.unmount();
+      toolbar.unmount();
+      find.unmount();
+      nav.unmount();
       selQuote?.unmount();
       msgMenu.unmount();
       modelPick.unmount();

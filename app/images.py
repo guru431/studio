@@ -716,6 +716,11 @@ def _mcp_photo_row(uid, image_id, *, status=False):
     return state.DB.execute(MCP_PHOTOS + query, args).fetchone()
 
 
+def share_row(uid, image_id):
+    remote = _mcp_photo_row(uid, image_id)
+    return _mcp_photo_out(remote) if remote is not None else _row(uid, image_id)
+
+
 @router.get("")
 async def list_images(request: Request, before: "float | None" = None,
                       before_id: "str | None" = Query(None, max_length=64), after: "float | None" = None,
@@ -919,7 +924,7 @@ async def delete_image(image_id: str, request: Request):
     remote = _mcp_photo_row(uid, image_id)
     if remote is not None:
         from mcp_sections import delete_gallery_file
-        await delete_gallery_file(remote)
+        await delete_gallery_file(remote, share_kind="images")
         return Response(status_code=204)
     row = _row(uid, image_id)
     if row["state"] not in TERMINAL:

@@ -755,9 +755,9 @@ function storageBlock(host) {
       for (const s of cleaner_stalled || []) queue.textContent += tr(" Отложено после неудачи ({0}): {1}.", s.base_url, s.count);
       const trashed = Object.values(trash).reduce((sum, t) => ({ count: sum.count + t.count, bytes: sum.bytes + t.bytes }),
         { count: 0, bytes: 0 });
-      trashLine.replaceChildren(trashed.count
+      trashLine.textContent = (trashed.count
         ? tr("В корзине: {0} · {1} — удалятся через 14 дней после удаления. ", recordsText(trashed.count), sizeText(trashed.bytes))
-        : tr("Корзина пуста. "), el('a', { href: '#/trash', id: 'storage-trash-open' }, tr("Открыть корзину")));
+        : tr("Корзина пуста. ")).trimEnd();
       failedSections = Object.keys(failed);
       failedLine.textContent = failedSections.length
         ? tr("Неудачные без результата: {0}", failedSections.map((s) => `${sectionName(s)} — ${failed[s]}`).join(', ')) : '';

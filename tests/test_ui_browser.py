@@ -222,7 +222,7 @@ def test_avatar_menu_and_logout(browser, live, width):
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Справка", "Корзина", "Администрирование", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Администрирование", "Выйти"]
     assert r["values"]["inside"]
     assert not problems(r), problems(r)
 
@@ -336,7 +336,7 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
         ("eval", "items", MENU_ITEMS),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Справка", "Корзина", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Выйти"]
 
 
 def test_api_passes_the_deadline_through(browser, live):
@@ -8622,7 +8622,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
+    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать для Windows (.exe)", 1]
     assert v["origin"] == live.url
     assert v["nested"] and v["other"]
     assert v["notice"] == "Установите мост на компьютер, который хотите подключить к Студии."
@@ -8635,7 +8635,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         ("eval", "link", AGENTS_DOWNLOAD), ("eval", "fits", NO_OVERFLOW),
         ("screenshot", str(tmp_path / "installer-settings-1280.png"))], width=1280)
     assert not r.get("failed"), r
-    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
+    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать для Windows (.exe)", 1]
     assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
@@ -8904,10 +8904,11 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
     assert not problems(r), problems(r)
 
 
-def test_code_empty_offers_agent_download(browser, live):
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_empty_offers_agent_download(browser, live, tmp_path, width):
     """Компьютеров нет: значок, «Компьютеров пока нет.», ссылка на EXE на /api/agent/download
     (download), что нужно и шаги установки (спека 2026-10-28-studio-agent-download-and-window-design, 4.2)."""
-    login = "code-download"
+    login = f"code-download-{width}"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
         ("wait", "document.querySelector('#code-empty #agent-download')"),
@@ -8915,17 +8916,23 @@ def test_code_empty_offers_agent_download(browser, live):
           return [a.tagName, a.getAttribute('href'), a.hasAttribute('download'), a.textContent,
             document.querySelectorAll('#agent-download').length]; })()"""),
         ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p:not(.agent-install-command)')].map((p) => p.textContent)"),
-        ("eval", "origin", "document.querySelector('#code-empty .row.agent-install-command code').textContent"),
-        ("click", "#code-empty .agent-download > button:not([hidden])"),
+        ("eval", "origin", "document.querySelector('#agent-install-origin').textContent"),
+        ("eval", "alignment", """(() => {
+          const sizes = ['#agent-download', '#agent-download-macos', '#agent-download-linux', '#agent-install-linux-command']
+            .map(id => document.querySelector(id).getBoundingClientRect());
+          return sizes.every(rect => rect.x === sizes[0].x && rect.width === sizes[0].width);
+        })()"""),
+        ("screenshot", str(tmp_path / f"installer-code-{width}.png")),
+        ("click", "#agent-install-linux-command"),
         ("wait", "document.querySelector('#code-empty p.agent-install-command code')?.textContent.includes('curl -fsS')"),
         ("eval", "command", "document.querySelector('#code-empty p.agent-install-command code').textContent"),
         ("eval", "macos", "(() => {const a=document.querySelector('#agent-download-macos'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "linux", "(() => {const a=document.querySelector('#agent-download-linux'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
-        ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+        ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 320)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows (.exe)", 1]
+    assert v["link"] == ["A", "/api/agent/download", True, "Скачать для Windows (.exe)", 1]
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
     assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
@@ -8933,7 +8940,7 @@ def test_code_empty_offers_agent_download(browser, live):
                           "В Windows и macOS откройте установщик и вставьте этот адрес в поле «Адрес студии». В Linux получите команду и выполните её в терминале в течение 10 минут."]
     assert v["origin"] == live.url
     assert live.url + "/api/agent/linux-installer" in v["command"]
-    assert v["badge"] is True and v["fits"] is True
+    assert v["badge"] and v["fits"] and v["alignment"]
     assert not problems(r), problems(r)
 
 

@@ -1,12 +1,12 @@
 import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Расшифровка» (#/transcribe) — раскладка Б спеки 2026-10-20 (раздел 6.3).
  *
- * Слева — «+ Загрузить запись» и записи по дням (имя, длительность, состояние), справа — выбранная:
+ * Слева — записи по дням (имя, длительность, состояние), справа — выбранная:
  * длительность, число собеседников, время, «Копировать», «Скачать ▾» (txt, docx, srt), «Удалить»,
  * плеер исходной записи и реплики «Собеседник N · мм:сс». Идущая — состояние словами и «Отменить».
- * На телефоне список выезжает сбоку, как диалоги чата.
+ * Внизу — выбор источника, язык, параметры, загрузка и запись. На телефоне список выезжает по кнопке в шапке.
  *
- * Загрузка — XMLHttpRequest (ход в процентах над видом записи, `.tr-sending`, и «Отменить загрузку» — xhr.abort()):
+ * Загрузка — XMLHttpRequest (ход в процентах над кнопкой загрузки, `.tr-sending`, и «Отменить загрузку» — xhr.abort()):
  * тело — сама запись, имя — заголовком X-Studio-Name
  * (encodeURIComponent; строка запроса попала бы в журнал Apache); 423 запертой студии (XHR идёт
  * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Состояние загрузки — модуля (transfer): уход из
@@ -139,6 +139,36 @@ function durationOf(file) {
 
 const languageOptions = (value) => SPEECH_LANGUAGES.map(([id, label]) => el('option', { value: id, selected: id === value }, label));
 
+function languageCode(value) {
+  const key = value.toLowerCase();
+  if (!key || key === 'automatic' || key === 'авто') return 'auto';
+  if (key === 'russian' || key === 'русский' || /^ru[-_]/.test(key)) return 'ru';
+  if (key === 'english' || key === 'английский' || /^en[-_]/.test(key)) return 'en';
+  return key;
+}
+
+/** Страница подписывает язык, инструмент получает ровно объявленное им значение. */
+function toolLanguages(prop, required) {
+  const fallback = () => el('option', { value: 'auto', 'data-omit': true }, tr("По умолчанию"));
+  if (!prop) return [fallback()];
+  const declared = typeof prop.const === 'string' ? [prop.const]
+    : Array.isArray(prop.enum) ? prop.enum.filter((value) => typeof value === 'string') : null;
+  if (declared?.length) {
+    const choices = declared.map((value) => {
+      const code = languageCode(value);
+      const label = SPEECH_LANGUAGES.find(([id]) => id === code)?.[1] || value;
+      const distinct = declared.some((other) => other !== value && languageCode(other) === code);
+      return el('option', { value }, distinct ? `${label} · ${value}` : label);
+    });
+    if (!required && !declared.some((value) => languageCode(value) === 'auto')) choices.unshift(fallback());
+    return choices;
+  }
+  const choices = languageOptions('auto');
+  if (!required) choices[0].dataset.omit = '';
+  if (prop.type === 'string') choices.push(el('option', { value: 'custom', 'data-custom': true }, tr("Другой язык")));
+  return choices;
+}
+
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -184,15 +214,15 @@ function build(view, ctx) {
   const { select, refresh } = records;
 
   const input = el('input', { type: 'file', id: 'transcribe-file', class: 'sr', accept: ACCEPT, multiple: true });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"), input);
-  // ход загрузки и её отмена — над видом записи, а не в списке: на телефоне список спрятан
+  const add = el('div', { id: 'transcribe-add', hidden: true }, input);
+  // Ход загрузки и отмена рядом с кнопкой загрузки, внизу раздела.
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
   const stop = el('button', { type: 'button', class: 'btn btn-sm', id: 'transcribe-cancel' }, tr("Отменить загрузку"));
   stop.addEventListener('click', () => transfer.abort?.());
   const sending = el('div', { class: 'tr-sending', hidden: true }, progress, stop);
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Записи") });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
-  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add]), list);
+  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Записи"),
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
@@ -200,11 +230,15 @@ function build(view, ctx) {
   upload.addEventListener('click', () => input.click());
   const record = el('button', { type: 'button', class: 'ctl-chip', id: 'transcribe-record', hidden: !!ctx.hint }, icon('mic'), tr("Записать"));
   let starting = false;        // запись встречи ждёт разрешения на микрофон
-  const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy,
+  const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: ['language'], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy,
     turns: mcpTurns });
-  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ...(ctx.hint ? [] : [upload, record]));
+  const optionsToggle = el('button', { class: 'ctl-chip', type: 'button', id: 'tr-options-toggle',
+    'aria-expanded': 'false', 'aria-controls': 'tr-options', hidden: true }, tr("Параметры запроса"));
+  const options = el('div', { class: 'block row', id: 'tr-options', hidden: true }, mcp.fields);
+  optionsToggle.addEventListener('click', () => showOptions(options.hidden));
+  const toolbar = el('div', { class: 'composer-opts', id: 'tr-control-row', hidden: !!ctx.hint }, mcp.control, upload, record, add);
   const title = el('h1', {}, NAMES.transcribe);
-  const head = el('header', { class: 'head' }, title);
+  const head = el('header', { class: 'head' }, title, el('div', { class: 'head-tools' }, toggle));
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const checked = el('p', { class: 'muted small', id: 'transcribe-check', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
@@ -217,16 +251,29 @@ function build(view, ctx) {
   const recPanel = el('div', { class: 'tr-rec', id: 'rec-panel', hidden: true }, recTime, recPause, recStop, recCancel, recNote);
   const restoreBar = el('div', { class: 'tr-rec', id: 'rec-restore-bar', hidden: true });
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, checked, recPanel, restoreBar, sending,
-    mcp.output, body);
+  const content = el('div', { class: 'tr-content' }, nativeHint, restoreBar, body);
+  const composer = el('footer', { class: 'composer tr-composer', id: 'tr-composer' }, recPanel, sending, options, toolbar);
+  const main = el('section', { class: 'split-main' }, head, content, error, checked, mcp.output, composer);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
-  // язык загрузки — «как у Агентов» (picker.js) после выбора инструмента MCP
+  // Язык загрузки и записи остаётся на одном месте при смене источника.
   const langSelect = el('select', { id: 'tr-language' }, ...languageOptions('auto'));
   const languagePick = picker(root, tr("Язык"), langSelect);
+  const customLang = el('input', { id: 'tr-custom-language', autocomplete: 'off', spellcheck: 'false', maxlength: '32' });
+  customLang.style.width = '7ch';
+  const customLanguage = el('label', { class: 'chip ctl-chip chip-num mcp-field-text', for: customLang.id, hidden: true },
+    tr("Код языка"), customLang);
+  let preferredLanguage = 'auto';
+  langSelect.addEventListener('change', () => {
+    paintCustomLanguage();
+    if (!customLanguage.hidden) customLang.focus();
+    else preferredLanguage = langSelect.value;
+  });
+  customLang.addEventListener('change', () => {
+    if (customLang.value.trim()) preferredLanguage = customLang.value.trim();
+  });
   languagePick.wrap.hidden = !!ctx.hint;
-  mcp.control.after(languagePick.wrap);
-  languagePick.wrap.after(mcp.fields);           // поля инструмента MCP по его схеме: «Протокол», «Говорящих», «Язык»
+  mcp.control.after(languagePick.wrap, customLanguage, optionsToggle);
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -706,25 +753,49 @@ function build(view, ctx) {
   }
 
   /* загрузка */
+  function showOptions(open) {
+    options.hidden = !open;
+    optionsToggle.setAttribute('aria-expanded', String(open));
+  }
+
+  function paintCustomLanguage() {
+    customLanguage.hidden = languagePick.wrap.hidden || !langSelect.selectedOptions[0]?.hasAttribute('data-custom');
+  }
+
+  function paintLanguage() {
+    const schema = mcp.argument('language');
+    const choices = mcp.tool ? toolLanguages(schema, mcp.requires('language')) : languageOptions('auto');
+    const preferred = choices.find((option) => option.value === preferredLanguage)
+      || choices.find((option) => !option.hasAttribute('data-custom')
+        && languageCode(option.value) === languageCode(preferredLanguage));
+    const custom = choices.find((option) => option.hasAttribute('data-custom'));
+    if (!preferred && custom && preferredLanguage !== 'auto') customLang.value = preferredLanguage;
+    const selected = preferred || (preferredLanguage !== 'auto' && custom)
+      || choices.find((option) => option.value === schema?.default) || choices[0];
+    const max = schema?.maxLength;
+    customLang.maxLength = Number.isInteger(max) && max > 0 ? Math.min(max, 200) : 32;
+    langSelect.replaceChildren(...choices);
+    langSelect.value = selected.value;
+    languagePick.wrap.hidden = !!ctx.hint && !mcp.tool;
+    paintCustomLanguage();
+    paintBusy();
+  }
+
   function paintMcp() {
-    add.hidden = !mcp.control.hidden || !!ctx.hint;
-    upload.hidden = !!ctx.hint && !mcp.tool;
-    record.hidden = upload.hidden;
-    if (nativeHint && mcp.tool) {
-      nativeHint.hidden = true;
-      if (!upload.parentNode) {
-        aside.prepend(add);
-        toolbar.append(upload, record);
-      }
-    }
+    toolbar.hidden = upload.hidden = record.hidden = !!ctx.hint && !mcp.tool;
+    if (nativeHint) nativeHint.hidden = !!mcp.tool;
     input.multiple = !mcp.tool;                    // инструмент MCP берёт один файл
-    languagePick.wrap.hidden = !!ctx.hint || !!mcp.tool;
-    languagePick.sync();
+    optionsToggle.hidden = !mcp.fields.querySelector('[data-field]');
+    showOptions(false);
+    paintLanguage();
   }
 
   function paintBusy() {
     input.disabled = upload.disabled = transfer.busy || mcp.busy || transfer.checking;
     record.disabled = !!meeting() || starting;
+    optionsToggle.disabled = customLang.disabled = upload.disabled;
+    langSelect.disabled = upload.disabled || langSelect.options.length < 2;
+    languagePick.sync();
   }
 
   /** Проверка до загрузки: записи, которые можно отправить; «не подходит» — в `error`, «частями» — в `checked`.
@@ -774,10 +845,21 @@ function build(view, ctx) {
   async function deliver(files, seconds = null) {
     if (transfer.checking || transfer.busy || mcp.busy) return false;
     error.textContent = checked.textContent = '';
-    const tool = mcp.tool, chosen = langSelect.value;
+    const tool = mcp.tool, server = mcp.serverId;
+    const option = langSelect.selectedOptions[0];
+    let chosen = option?.hasAttribute('data-omit') ? undefined : langSelect.value;
+    if (!customLanguage.hidden) {
+      chosen = customLang.value.trim();
+      if (!chosen) {
+        error.textContent = tr("Укажите код языка.");
+        customLang.focus();
+        return false;
+      }
+    }
     const ok = await fit(files, seconds);
-    if (!ok.length || tool !== mcp.tool) return false;    // пока проверяли, сменили инструмент — выбрать заново
-    const sent = tool ? await mcp.run({}, { files: { artifact_id: ok[0] } }) : await sendAll(ok, chosen === 'auto' ? '' : chosen);
+    if (!ok.length || tool !== mcp.tool || server !== mcp.serverId) return false;
+    const sent = tool ? await mcp.run({ language: chosen }, { files: { artifact_id: ok[0] } })
+      : await sendAll(ok, chosen === 'auto' ? '' : chosen);
     return sent && ok.length === files.length;
   }
 

@@ -1,7 +1,6 @@
 import { tr } from './i18n.js';
-/* Поиск по тексту открытого чата «Агентов» (спека 2026-11-25, п. 9): строка над лентой, только память страницы —
- * запросов модуль не делает, текст на сервер не уходит. Ищется без регистра текст сообщений человека
- * (`.code-user-text`) и ответов (`.code-timeline-text`) загруженной ленты; шаги не ищутся. Подсветка — CSS Custom
+/* Поиск по тексту открытого диалога: строка над лентой, только память страницы.
+ * Ищется без регистра текст сообщений человека и ответов загруженной ленты; шаги не ищутся. Подсветка — CSS Custom
  * Highlight API (`code-find`, текущее — `code-find-current`); без него — только счётчик и переход.
  *
  * findView(host, { scroller, feed, earlier, hasEarlier }) → { button, open(), close(), unmount() }:
@@ -25,19 +24,21 @@ function fold(text) {
   return out;
 }
 
-export function findView(host, { scroller, feed, earlier, hasEarlier }) {
-  const input = el('input', { type: 'text', id: 'code-find-input', class: 'input code-find-input', autocomplete: 'off',
+export function findView(host, { scroller, feed, earlier, hasEarlier = () => false,
+  prefix = 'code', texts = '.code-user-text, .code-timeline-text' }) {
+  const id = (part = '') => `${prefix}-find${part}`;
+  const input = el('input', { type: 'text', id: id('-input'), class: 'input code-find-input', autocomplete: 'off',
     spellcheck: 'false', enterkeyhint: 'search', 'aria-label': tr("Найти в чате"), placeholder: tr("Найти в чате") });
-  const count = el('span', { id: 'code-find-count', class: 'code-find-count', 'aria-live': 'polite' });
-  const prev = iconButton('upward', tr("Предыдущее совпадение"), { id: 'code-find-prev' });
-  const next = iconButton('downward', tr("Следующее совпадение"), { id: 'code-find-next' });
-  const earlierButton = el('button', { type: 'button', id: 'code-find-earlier', class: 'btn btn-sm code-find-earlier',
+  const count = el('span', { id: id('-count'), class: 'code-find-count', 'aria-live': 'polite' });
+  const prev = iconButton('upward', tr("Предыдущее совпадение"), { id: id('-prev') });
+  const next = iconButton('downward', tr("Следующее совпадение"), { id: id('-next') });
+  const earlierButton = el('button', { type: 'button', id: id('-earlier'), class: 'btn btn-sm code-find-earlier',
     hidden: true }, tr("Искать в более ранней части"));
-  const closeButton = iconButton('x', tr("Закрыть поиск"), { id: 'code-find-close' });
-  const bar = el('div', { id: 'code-find-bar', class: 'code-find-bar', role: 'search', hidden: true,
+  const closeButton = iconButton('x', tr("Закрыть поиск"), { id: id('-close') });
+  const bar = el('div', { id: id('-bar'), class: 'code-find-bar', role: 'search', hidden: true,
     'aria-label': tr("Поиск в чате") }, input, count, prev, next, earlierButton, closeButton);
-  const button = el('button', { type: 'button', id: 'code-find', class: 'icon-btn', 'aria-label': tr("Найти в чате"),
-    title: tr("Найти в чате · Ctrl+F"), 'aria-controls': 'code-find-bar' }, icon('search'));
+  const button = el('button', { type: 'button', id: id(), class: 'icon-btn', 'aria-label': tr("Найти в чате"),
+    title: tr("Найти в чате · Ctrl+F"), 'aria-controls': bar.id, 'aria-expanded': 'false' }, icon('search'));
   host.prepend(bar);
 
   const highlights = typeof Highlight === 'function' && globalThis.CSS?.highlights ? CSS.highlights : null;
@@ -53,10 +54,11 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   function collect(query) {
     const found = [];
     let total = 0;
-    for (const box of feed.querySelectorAll('.code-user-text, .code-timeline-text')) {
+    for (const box of feed.querySelectorAll(texts)) {
       // Кнопки разметки («Копировать» у кода) и скрытое — не текст сообщения.
       const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: (node) =>
-        node.parentElement?.closest('button, [hidden], [aria-hidden="true"]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+        node.parentElement?.closest('button, [hidden], [aria-hidden="true"], details:not([open])')
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
       const nodes = [];
       let text = '';
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -171,6 +173,7 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   function open() {
     if (bar.hidden) {
       bar.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
       observer.observe(feed, { childList: true, subtree: true, characterData: true });
       if (input.value.trim()) recount(false);
       else paint();
@@ -183,6 +186,7 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
     if (bar.hidden) return;
     const inside = bar.contains(document.activeElement);
     bar.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
     stop = true;
     observer.disconnect();
     clearTimeout(typing);
@@ -197,7 +201,7 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
   function onKey(event) {
     if (event.code !== 'KeyF' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
     if (document.activeElement === input) return;              // второе нажатие — поиск браузера
-    if (!host.isConnected || !(host.checkVisibility?.() ?? host.offsetParent !== null)) return;
+    if (button.hidden || !host.isConnected || !(host.checkVisibility?.() ?? host.offsetParent !== null)) return;
     if (document.querySelector('dialog[open], :popover-open')) return;
     event.preventDefault();
     open();
@@ -228,6 +232,10 @@ export function findView(host, { scroller, feed, earlier, hasEarlier }) {
 
   return {
     button, open, close,
+    reset() {
+      close();
+      input.value = '';
+    },
     unmount() {
       alive = false;
       close();

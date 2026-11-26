@@ -275,6 +275,7 @@ def branch(raw_chat: dict) -> dict:
     found.reverse()
     models = chat.get("models")
     return {"id": chat_id, "title": _str(raw_chat.get("title")) or _str(chat.get("title")) or "",
+            "updated": int(_num(raw_chat.get("updated_at")) or 0), "pinned": raw_chat.get("pinned") is True,
             "models": [m for m in models if isinstance(m, str)] if isinstance(models, list) else [],
             "folder_id": _str(raw_chat.get("folder_id")), "messages": found}
 

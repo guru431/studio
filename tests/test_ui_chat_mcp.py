@@ -54,8 +54,8 @@ def admin_client(live) -> httpx.Client:
     return client
 
 
-def shared_server(live, name: str, path: str) -> int:
-    server(live, path, tools=TOOLS, instructions=RULES)
+def shared_server(live, name: str, path: str, *, tools=TOOLS) -> int:
+    server(live, path, tools=tools, instructions=RULES)
     client = admin_client(live)
     try:
         response = client.post("/api/admin/shared/mcp", json={"name": name, "url": HOST + path, "token": MCP_KEY})
@@ -219,8 +219,9 @@ def test_default_off_shared_server_is_switched_on_in_the_dialog(browser, live, w
     text, bad = values["badge"]
     assert not bad and "ошибк" not in text and "заметк" in text, text
     assert values["kept"] is True and values["dialogFits"] is True
+    prefix = mcp_client.tool_name(name, "t0").removesuffix("t0")
     offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
-               if t["function"]["name"].startswith(mcp_client.tool_name(name, ""))]
+               if t["function"]["name"].startswith(prefix)]
     assert len(offered) == mcp_client.LOCAL_MAX_TOOLS and offered[0] == f"{name}: t0"   # local-gemma-abl — локальная
     assert not problems(result), result.get("log")
 
@@ -233,7 +234,7 @@ def test_internet_without_exa_key_opens_for_mcp_web_tools(browser, live, width):
     """Находка 2026-11-22: без ключа Exa «Интернет» включается, когда набор MCP диалога даёт веб-инструмент; подсказка
     — только веб-инструменты MCP; включённый до создания диалога уходит в него, и ход предлагает веб-инструмент."""
     login = f"mcp-web-{width}"
-    sid = shared_server(live, f"Веб {width}", f"/mcp-web-{width}")
+    sid = shared_server(live, f"Веб {width}", f"/mcp-web-{width}", tools=[tool("lookup"), tool("web_search")])
     live.add_user(login)
     mobile = width == 320
     try:
@@ -262,9 +263,8 @@ def test_internet_without_exa_key_opens_for_mcp_web_tools(browser, live, width):
     _, chat = values["created"]
     assert chat["web"] is True and chat["web_tools"] == []
     assert values["after"] == ["true", False] and values["composerFits"] is True
-    offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
-               if t["function"]["name"].startswith(mcp_client.tool_name(f"Веб {width}", ""))]
-    assert f"Веб {width}: web_search" in offered
+    offered = {t["function"]["name"] for t in live.gw.chat_requests[-1].get("tools", [])}
+    assert mcp_client.tool_name(f"Веб {width}", "web_search") in offered
     assert not problems(result), result.get("log")
 
 

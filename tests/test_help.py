@@ -43,6 +43,19 @@ def test_help_without_server_resources(studio):
     assert studio.c.get("/api/help").json()["servers"] == []
 
 
+def test_help_topics_have_stable_unique_routes_and_no_repo_paths(studio):
+    member_with_server(studio, resources=None)
+    response = studio.c.get("/api/help/topics")
+    assert response.status_code == 200, response.text
+    topics = response.json()["topics"]
+    keys = [topic["id"] for topic in topics]
+    assert keys[0] == "start" and {"chat", "owui", "agents", "security"} <= set(keys)
+    assert len(set(keys)) == len(keys)
+    for topic in topics:
+        assert topic["group"] and topic["title"] and topic["markdown"]
+        assert not re.search(r"\.md\b|docs/|/etc/|\.py\b", topic["markdown"])
+
+
 def test_help_guide_strips_intro_and_relative_links():
     text = help_module.studio_text("# Заголовок\n\n[Описание](../README.md) intro\n\n## Раздел\n"
                                    "См. [правила](../docs/publication.md), ![схема](img/a.png), "

@@ -71,10 +71,11 @@ function partCount(text, limit) {
         continue;
       }
       for (let word of sentence.split(/\s+/)) {
-        while (word.length > limit) {
-          count += 1;
+        if (word.length > limit) {
+          const whole = Math.floor((word.length - 1) / limit);
+          count += whole;
           last = limit;
-          word = word.slice(limit);
+          word = word.slice(whole * limit);
         }
         if (word) add(word.length, 1);
       }
@@ -88,6 +89,7 @@ function build(view, ctx) {
   let voices = [];
   let editing = null;
   let sending = false;
+  let needsVoice = false;
   let sampleId = '', serviceVoice;
   let shownChat = null;
   let alive = true;
@@ -153,17 +155,18 @@ function build(view, ctx) {
   const langView = picker(view, tr("Язык озвучки"), langPick);
   const voiceBox = el('span', { class: 'sp-voice' });
   const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, tr("Озвучить"));
-  const addVoice = el('button', { type: 'button', id: 'speech-add-voice', class: 'btn btn-accent composer-go',
+  const addVoice = el('button', { type: 'button', id: 'speech-add-voice', class: 'chip ctl-chip',
     'aria-describedby': 'speech-voice-hint', hidden: true }, tr("Добавить голос"));
   const hint = el('p', { id: 'speech-voice-hint', class: 'muted small sp-voice-hint', hidden: true });
   const editNote = el('p', { class: 'muted small', id: 'speech-edit-note', hidden: true }, tr("Изменение записи"));
   const cancelEdit = el('button', { type: 'button', class: 'btn btn-sm', id: 'speech-edit-cancel', hidden: true },
     tr("Отменить изменение"));
-  const mcp = sectionMcp('speech', { native: !ctx.hint, fields: ['text', 'voice', 'model', 'engine', 'reference_text'],
+  const mcp = sectionMcp('speech', { native: !ctx.hint, fields: ['text', 'voice', 'model', 'engine', 'reference_text', 'language'],
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, langView.wrap, mcp.fields, count, cancelEdit), go, addVoice));
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap,
+      voiceBox, addVoice, langView.wrap, mcp.fields, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, error, chainBox, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
@@ -184,6 +187,30 @@ function build(view, ctx) {
     return { connection_id: Number(connId), model: rest.join(':'), kind: link ? link.connection.kind : 'srvllm' };
   }
 
+  function languageKey(value) {
+    const lower = String(value).toLowerCase();
+    if (lower === 'russian' || lower === 'русский') return 'ru';
+    if (lower === 'english') return 'en';
+    return lower;
+  }
+
+  function paintLanguage(useSample = false) {
+    const schema = mcp.argument('language');
+    const active = !!mcp.tool;
+    langView.wrap.hidden = active ? !schema || (mcp.canClone() && !useSample) : chosen().kind !== 'srvllm';
+    if (langView.wrap.hidden) return;
+    const previous = languageKey(langPick.value);
+    const declared = schemaLimits(schema)?.enum?.filter(value => typeof value === 'string' && !!value);
+    const values = declared?.length ? declared : active && useSample ? ['Russian', 'English'] : ['ru', 'en'];
+    const same = values.find(value => languageKey(value) === previous);
+    langPick.replaceChildren(...values.map(value => {
+      const code = languageKey(value);
+      return el('option', { value }, code === 'ru' ? tr("Русский") : code === 'en' ? 'English' : value);
+    }));
+    langPick.value = same ?? (values.includes(schema?.default) ? schema.default : values[0]);
+    langView.sync();
+  }
+
   function paintVoice() {
     const { kind } = chosen();
     const active = !!mcp.tool;
@@ -194,8 +221,7 @@ function build(view, ctx) {
     const canClone = mcp.canClone();
     const requiresSample = canClone && (mcp.requires('reference_artifact_id') || mcp.requires('reference_text'));
     const clone = canClone && !!voices.length;
-    const needsVoice = requiresSample && !clone;
-    go.hidden = needsVoice;
+    needsVoice = active ? requiresSample && !clone : kind === 'srvllm' && !voices.length;
     addVoice.hidden = !needsVoice;
     // голоса сервера MCP — перечень (`enum`) поля voice инструмента: группой «имя сервера» рядом с личными
     const schema = requiresSample ? null : mcp.argument('voice');
@@ -217,6 +243,7 @@ function build(view, ctx) {
       const sampleHint = () => {
         hint.textContent = tr("Выбранный образец голоса будет отправлен на MCP-сервер.");
         hint.hidden = !!pick.selectedOptions[0]?.dataset.mcp;
+        paintLanguage(!hint.hidden);
       };
       pick.addEventListener('change', sampleHint);
       voiceView?.unmount();
@@ -233,10 +260,6 @@ function build(view, ctx) {
       if (active) {
         hint.textContent = tr("Выбранный образец голоса будет отправлен на MCP-сервер.");
         hint.hidden = false;
-      } else if (!voices.length) {
-        hint.replaceChildren(tr("Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: "),
-          el('a', { href: '#/settings/speech' }, tr("открыть настройки")));
-        hint.hidden = false;
       }
     } else {
       const options = el('datalist', { id: 'service-voices' }, ...SERVICE_VOICES.map((v) => el('option', { value: v })));
@@ -246,7 +269,8 @@ function build(view, ctx) {
         value: serviceVoice || '', placeholder: tr("Голос сервиса"),
         maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' })), options);
     }
-    langView.wrap.hidden = active || kind !== 'srvllm';
+    const voice = voiceBox.querySelector('#chip-voice');
+    paintLanguage(requiresSample || (canClone && voice?.tagName === 'SELECT' && !voice.selectedOptions[0]?.dataset.mcp));
     syncPicks();
     paintCount();
   }
@@ -259,13 +283,17 @@ function build(view, ctx) {
     langView.sync();
   }
 
-  /** Предел поля: новая озвучка — LONG_MAX частями; правка записи и инструмент MCP — одна запись. */
+  /** Предел поля новой озвучки общий. Размер части учитывает меньший предел инструмента. */
   function partMax() {
+    if (mcp.tool) {
+      const max = mcp.argument('text')?.maxLength;
+      if (Number.isInteger(max) && max > 0) return Math.min(max, PART_MAX.srvllm);
+    }
     return PART_MAX[chosen().kind === 'srvllm' || mcp.tool ? 'srvllm' : 'other'];
   }
 
   function limit() {
-    return editing || mcp.tool ? partMax() : LONG_MAX;
+    return editing ? partMax() : LONG_MAX;
   }
 
   function paintMcp() {
@@ -282,7 +310,7 @@ function build(view, ctx) {
     mcpModelPick.replaceChildren(...choices.map(id => el('option', { value: id }, modelLabel(id))));
     if (choices.includes(previous)) mcpModelPick.value = previous;
     else if (choices.includes(schema?.default)) mcpModelPick.value = schema.default;
-    mcpModelView.wrap.hidden = choices.length < 2 || (mcp.canClone() && !voices.length);
+    mcpModelView.wrap.hidden = choices.length < 2;
     modelView.wrap.hidden = modelPick.options.length < 2 || active;
     paintVoice();
   }
@@ -290,7 +318,7 @@ function build(view, ctx) {
   function paintBusy() {
     fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
     addVoice.disabled = fresh.disabled;
-    go.disabled = go.hidden || fresh.disabled || text.value.length > limit();
+    go.disabled = needsVoice || fresh.disabled || text.value.length > limit();
   }
 
   function paintCount() {
@@ -625,7 +653,7 @@ function build(view, ctx) {
     if (!alive || addVoice.hidden) return;
     editVoice(root, null, (voice) => {
       if (!alive) return;
-      voices = [voice];
+      voices = [...voices, voice];
       sampleId = voice.id;
       paintMcp();
       go.focus({ preventScroll: true });
@@ -659,7 +687,7 @@ function build(view, ctx) {
         const shared = !!voiceField?.selectedOptions?.[0]?.dataset.mcp;
         const voiceId = voiceField?.tagName === 'SELECT' && !shared && mcp.canClone() ? voice : undefined;
         const mcpModel = voiceId || !mcp.canClone() ? mcpModelPick.value || undefined : undefined;
-        const ok = await mcp.run({ text: value, model: mcpModel,
+        const ok = await mcp.run({ text: value, model: mcpModel, language: langView.wrap.hidden ? undefined : langPick.value,
           voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
         if (ok) {
           draft.sent(raw);

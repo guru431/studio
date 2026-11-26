@@ -1,5 +1,6 @@
 """«Агенты» (D2): задания через «В работе», плашка вопроса над полем, признаки и порядок вкладок, клавиши,
 поиск проектов, «Отметить прочитанными» и «был на связи» — в настоящем браузере."""
+import httpx
 import pytest
 
 from browser import run_playwright
@@ -7,6 +8,7 @@ from browser import run_playwright
 from fake_bridge import T0, pid
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_loaded,
                              code_online, code_requests, code_session, go, live, problems, set_value, signin)
+from test_ui_desktop import desktop_browser
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 C = 'c3333333-3333-4333-8333-333333333333'
@@ -114,6 +116,46 @@ def press_keys(code, key, target='document', **mods):
 TABS = "[...document.querySelectorAll('#code-tabbar .code-tab')].map(n => n.dataset.chat)"
 
 
+def test_mouse_drag_keeps_reordering_outside_tab_bar_and_saves_order(desktop_browser, live):
+    login = f'tab-drag-{desktop_browser.browser_type.name}'
+    live.add_user(login)
+    chats = {CODE_CHAT_A: code_session('Первый'), CODE_CHAT_B: code_session('Второй'), C: code_session('Третий')}
+    aid, server = code_online(live, login, code_free_machine(chats))
+    try:
+        signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+        cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
+        with desktop_browser.new_context(viewport={'width': 1280, 'height': 850},
+                                         extra_http_headers={'Cookie': cookie}) as context:
+            if desktop_browser.browser_type.name == 'firefox':
+                context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                                     'httpOnly': True, 'sameSite': 'Lax'} for key, value in signed.cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            for chat in chats:
+                page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{chat}')
+                page.locator(f'#code-chat[data-chat="{chat}"][data-loaded="1"]').wait_for()
+            tabs = page.locator('#code-tabbar .code-tab')
+            a, b, c = [tab.bounding_box() for tab in tabs.all()]
+            x, y = a['x'] + 12, a['y'] + a['height'] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + 8, y)
+            page.mouse.move(b['x'] + b['width'] - 8, y)
+            assert page.evaluate(TABS) == [CODE_CHAT_B, CODE_CHAT_A, C]
+            # A уже переместилась в DOM. Протянуть её за C и отпустить ниже ряда.
+            page.mouse.move(c['x'] + c['width'] - 8, y + 60)
+            assert page.evaluate(TABS) == [CODE_CHAT_B, C, CODE_CHAT_A]
+            with page.expect_response(lambda r: r.request.method == 'PATCH' and r.url.endswith('/api/code/workspace')
+                                      and r.request.post_data_json['op'] == 'move') as saved:
+                page.mouse.up()
+            assert saved.value.ok
+            page.reload()
+            page.locator(f'#code-chat[data-chat="{C}"][data-loaded="1"]').wait_for()
+            assert page.evaluate(TABS) == [CODE_CHAT_B, C, CODE_CHAT_A]
+    finally:
+        server.stop()
+
+
 def workspace_tabs(aid):
     return ('eval', 'stored', "import('/static/js/api.js').then(({api}) => api('GET', '/api/code/workspace'))"
                               f".then(d => d.projects.find(p => p.aid === {aid} && p.pid === '{pid('alpha')}').tabs)")
@@ -207,7 +249,6 @@ def test_tab_marks_order_shortcuts_project_search_and_read_marks(browser, live, 
 def test_webkit_taps_open_workspace_jobs_and_pinned_question_and_long_press_reorders_tabs(live, size, tmp_path):
     """Движок Safari: касание числа «Агентов», строки «В работе» и «Разрешить» плашки; удержание вкладки пальцем
     переставляет её (синтетические PointerEvent touch: настоящего перетаскивания пальцем Playwright WebKit не умеет)."""
-    import httpx
     pw = pytest.importorskip('playwright.sync_api')
     width, height = size
     login = f'inbox-webkit-{width}'

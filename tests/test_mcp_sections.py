@@ -432,7 +432,16 @@ def test_background_photo_series_appears_in_gallery_and_deletes_individual_files
     polled = studio.c.get("/api/images/" + rid)
     assert polled.status_code == 200 and polled.json()["id"] in {p["id"] for p in photos}
     first, second = ["/api/images/" + p["id"] for p in photos]
+    share = studio.c.post(first + "/share", json={"pin": "0123"})
+    assert share.status_code == 201, share.text
+    credentials = {"token": urlsplit(share.json()["url"]).fragment, "pin": "0123"}
+    snapshot = studio.c.post("/share/unlock", json=credentials)
+    assert snapshot.json()["item"]["file"]["file"] == photos[0]["media_id"]
+    state.DB.execute("UPDATE mcp_servers SET protected = 1 WHERE id = ?", (sid,))
+    assert studio.c.post("/share/unlock", json=credentials).status_code == 404
+    assert studio.c.post(second + "/share", json={"pin": "0123"}).json()["detail"]["code"] == "protected"
     assert studio.c.delete(first).status_code == 204
+    assert not state.DB.execute("SELECT 1 FROM chat_shares WHERE item_id = ?", (photos[0]["id"],)).fetchone()
     assert studio.c.get(first).status_code == 404
     assert studio.c.get(second).json()["state"] == "done"
     history = studio.c.get("/api/mcp-tools/photo/history/" + rid).json()
@@ -499,13 +508,16 @@ def test_durable_video_job_copies_artifact_in_background(studio):
 def test_legacy_mcp_video_results_are_listed_and_owner_scoped(studio):
     uid = make_user(studio, "video-owner")
     signin(studio, "video-owner")
+    sid = add(studio)
+    stamp = mcp_sections.mcp_sources.stamp(state.DB.execute("SELECT secret_enc FROM mcp_servers WHERE id = ?", (sid,)).fetchone()[0])
+    calls = service(studio.gw, catalogs=True)
     preview = "640×640, 5 с (1 отрезк.), seed 424648865. Запрос для Wan: expanded prompt."
     files = [media.save(uid, MP4, "video/mp4", f"clip-{number}.mp4") for number in range(2)]
     legacy_id = "e" * 32
     result = {"text": preview, "files": [{"url": f"/api/media/{mid}", "mime": "video/mp4"} for mid in files]}
     state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, "
-                     "created, stamp, status, result) VALUES (?, ?, 'video', 42, 'Spark', 'video_create', '', ?, ?, '', 'completed', ?)",
-                     (legacy_id, uid, "original prompt", studio.clock[0], json.dumps(result)))
+                     "created, stamp, status, result) VALUES (?, ?, 'video', ?, 'Spark', 'video_create', '', ?, ?, ?, 'completed', ?)",
+                     (legacy_id, uid, sid, "original prompt", studio.clock[0], stamp, json.dumps(result)))
     state.DB.executemany("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
                          [(legacy_id, uid, mid) for mid in files])
     opts = {"model": "wan", "limit": 1}
@@ -515,6 +527,8 @@ def test_legacy_mcp_video_results_are_listed_and_owner_scoped(studio):
     assert studio.c.get("/api/videos", params=opts | {"after": second["created"], "after_id": second["id"]}).json()["items"] == [first]
     assert (first["prompt"], first["seconds"], first["seed"], first["size"]) == ("original prompt", 5, 424648865, "640×640")
     path = "/api/videos/" + first["id"]
+    step = studio.c.get(path).json()["chain"][-1]
+    assert step["media_id"] == first["media_id"] and not step.get("gone")
     make_user(studio, "other-video")
     signin(studio, "other-video")
     assert studio.c.get(path).status_code == studio.c.delete(path).status_code == 404
@@ -524,6 +538,13 @@ def test_legacy_mcp_video_results_are_listed_and_owner_scoped(studio):
     assert studio.c.delete(path).status_code == 204
     assert [clip["id"] for clip in studio.c.get("/api/videos").json()["items"]] == [second["id"]]
     assert studio.c.get("/api/media/" + second["id"], headers={"Range": "bytes=0-9"}).content == MP4[:10]
+    source = {"data": base64.b64encode(PNG_REAL).decode(), "mime_type": "image/png"}
+    repeat = studio.c.post("/api/videos/" + second["id"] + "/repeat", json={"count": 2, "source": source})
+    assert repeat.status_code == 201, repeat.text
+    assert len(repeat.json()["items"]) == 2
+    assert len({clip["source_media_id"] for clip in repeat.json()["items"]}) == 1
+    assert [args for name, args in calls if name == "video_create"] == [
+        {"artifact_id": ARTIFACT, "prompt": "original prompt", "seconds": 5}] * 2
 
 
 def test_chat_model_uses_mcp_and_saves_normal_conversation(studio):

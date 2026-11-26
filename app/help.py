@@ -22,6 +22,8 @@ log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/help")
 
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "guide.ru.md"
+TOPIC_GUIDE = Path(__file__).with_name("help-guide.ru.md")
+TOPIC = re.compile(r"^## ([a-z][a-z-]*) (.+)$")
 MIME = "text/markdown"
 NAME_MAX = 160
 #: ссылка или картинка Markdown, чей адрес — не http(s) и не почта: относительный путь репозитория или якорь.
@@ -64,6 +66,29 @@ def guide() -> str:
         return _guide(GUIDE.stat().st_mtime_ns)
     except OSError:
         raise mcp.refused(NOT_FOUND, "not_found", 404) from None
+
+
+@lru_cache(maxsize=1)
+def _topics(_stamp) -> list[dict]:
+    """Короткие статьи приложения. Идентификатор темы в заголовке задаёт постоянный адрес статьи."""
+    topics, lines = [], []
+    group = ""
+    for line in TOPIC_GUIDE.read_text(encoding="utf-8").splitlines():
+        heading = TOPIC.fullmatch(line)
+        if line.startswith("# ") or heading:
+            if lines and topics:
+                topics[-1]["markdown"] = plain_links("\n".join(lines).strip())
+            lines = []
+        if line.startswith("# "):
+            group = line[2:]
+        elif heading:
+            topic_id, title = heading.groups()
+            topics.append({"id": topic_id, "title": title, "group": group, "markdown": ""})
+        else:
+            lines.append(line)
+    if topics:
+        topics[-1]["markdown"] = plain_links("\n".join(lines).strip())
+    return topics
 
 
 def _for_user(item) -> bool:
@@ -117,6 +142,14 @@ async def index(request: Request):
 @router.get("/studio")
 async def studio_guide():
     return {"markdown": guide()}
+
+
+@router.get("/topics")
+async def topics():
+    try:
+        return {"topics": _topics(TOPIC_GUIDE.stat().st_mtime_ns)}
+    except OSError:
+        raise mcp.refused(NOT_FOUND, "not_found", 404) from None
 
 
 class ServerGuideIn(BaseModel):

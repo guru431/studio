@@ -4,19 +4,14 @@
  * (dialog-drafts.js). Квитанция `receipt` (id сообщения очереди, ушло ли которое — неизвестно, chat-queue.js) живёт,
  * пока текст черновика тот же: такой текст уходит тем же `request_id`. До отпирания (с <html> снят `shrouded`,
  * lock.js) ввод и уход из диалога черновик не пишут — как очередь (chat-queue.js); поле на экране остаётся. */
-import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
+import { CHAT_DRAFTS, draftStore, draftsLocked } from './dialog-drafts.js';
 
 const store = draftStore(CHAT_DRAFTS);
 const keyOf = (id) => id ?? 'new';
-let locked = false;
-document.addEventListener('studio-locked', () => { locked = true; });
-new MutationObserver(() => {
-  if (!document.documentElement.classList.contains('shrouded')) locked = false;
-}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
 export function chatDrafts(input, { autosize, skills }) {
   const save = (id) => {
-    if (locked) return;
+    if (draftsLocked) return;
     const text = input.value.trim() ? input.value : '';
     const old = store.saved()[keyOf(id)];
     const chosen = skills.chosen();

@@ -22,7 +22,8 @@ import { tr } from './i18n.js';
  *   телефон прячет панель, адрес меняет сама ссылка; title(chat) — название известного чата.
  * Названия чатов, подписи учёток и тексты сервера — только textContent и без перевода. */
 import { api } from './api.js';
-import { icon } from './icons.js';
+import { icon, iconButton } from './icons.js';
+import { chatTime, paintPin } from './chat-title.js';
 import { menuItem, popupMenu } from './menu.js';
 import { dateOnly } from './time.js';
 import { button, computerPin, el, field, openDialog, showError, words } from './ui.js';
@@ -63,7 +64,7 @@ function hostOf(url) {
   }
 }
 
-export function panelView(host, { selected: first = null, chose, opened }) {
+export function panelView(host, { selected: first = null, chose, opened, manage }) {
   const controller = new AbortController();
   const { signal } = controller;
   let items = [];                  // учётки
@@ -72,6 +73,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
   const links = new Map();         // id учётки → up | down | relogin (события SSE)
   const offline = new Set();       // id учёток, чьё дерево не прочиталось: Open WebUI не ответил
   const known = new Map();         // id чата → строка дерева показанной учётки (для событий)
+  let pinnedIds = new Set();
   let gen = 0;                     // номер показа учётки: ответы прежнего показа не рисуются
   let tree = null;                 // { page, done, loading, open: Set(fid), folders: [] }
   let reloadTimer = 0;
@@ -81,7 +83,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
   let lost = false;                // поток показанной учётки прерывался: следующее `link up` перечитывает дерево
 
   const list = el('ul', { id: 'owui-account-list', class: 'owui-account-list' });
-  const connectButton = el('button', { type: 'button', id: 'owui-connect', class: 'btn-link owui-connect',
+  const connectButton = el('button', { type: 'button', id: 'owui-connect', class: 'btn owui-connect',
     'aria-haspopup': 'dialog' }, icon('plus'), el('span', {}, tr("Подключить")));
   const accountsBox = el('div', { id: 'owui-accounts', class: 'owui-accounts' }, list, connectButton);
 
@@ -419,9 +421,35 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     const current = here.aid === aid && here.chat === chat.id;
     const link = el('a', { class: 'owui-chat', href: `#/owui/${aid}/${encodeURIComponent(chat.id)}`, 'data-chat': chat.id,
       'aria-current': current ? 'page' : null },
-    el('span', { class: 'owui-chat-title' }, chat.title || tr("Без названия")), mark(chat));
+    el('span', { class: 'owui-chat-name' },
+      el('span', { class: 'owui-chat-title' }, chat.title || tr("Без названия")), chatTime(chat.updated)), mark(chat));
     link.addEventListener('click', () => chose(aid, chat.id));
-    return el('li', {}, link);
+    const pin = iconButton('star', tr("Закрепить"), { class: 'icon-btn chat-pin' });
+    paintPin(pin, pinnedIds.has(chat.id));
+    const item = () => ({ ...chat, ...known.get(chat.id), pinned: pinnedIds.has(chat.id) });
+    pin.addEventListener('click', async () => {
+      pin.disabled = true;
+      try {
+        await manage.pin(aid, item());
+      } catch (err) {
+        if (!signal.aborted && shown === aid) {
+          status.classList.add('error');
+          status.textContent = words(err);
+        }
+      } finally {
+        pin.disabled = false;
+      }
+    });
+    const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
+    const menu = el('div', { class: 'chat-menu', 'aria-label': tr("Действия с диалогом") });
+    popupMenu(more, menu, { align: 'end', fill: (close) => {
+      const items = [
+        menuItem(tr("Переименовать"), { onSelect: () => { close(); manage.rename(aid, item()); } }),
+        menuItem(tr("Удалить"), { attrs: { class: 'danger' }, onSelect: () => { close(); manage.remove(aid, item()); } }),
+      ];
+      return [items, items];
+    } });
+    return el('li', { class: 'chat-item owui-chat-row' }, link, pin, more, menu);
   }
 
   function remember(rows) {
@@ -500,6 +528,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
       if (!mine(n, aid)) return;
       const wasOffline = offline.delete(aid);
       known.clear();
+      pinnedIds = new Set(found.pinned.map((chat) => chat.id));
       tree = { page: 1, done: found.chats.length < PAGE, loading: false, open: keep || new Set() };
       status.textContent = '';
       pinnedList.replaceChildren(...remember(found.pinned).map((chat) => chatRow(aid, chat)));
@@ -653,6 +682,29 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     }
   }
 
+  function changed(aid, item, deleted = false) {
+    if (shown !== aid) return;
+    const row = known.get(item.id);
+    const links = treeBox.querySelectorAll(`.owui-chat[data-chat="${CSS.escape(item.id)}"]`);
+    if (deleted) {
+      known.delete(item.id);
+      pinnedIds.delete(item.id);
+      for (const link of links) link.closest('li').remove();
+    } else if (row) {
+      if (item.pinned !== undefined) {
+        if (item.pinned) pinnedIds.add(item.id);
+        else pinnedIds.delete(item.id);
+        for (const link of links) paintPin(link.parentElement.querySelector('.chat-pin'), item.pinned);
+      }
+      if (item.updated !== undefined && item.updated !== row.updated) {
+        for (const link of links) link.querySelector('time').replaceWith(chatTime(item.updated));
+      }
+      Object.assign(row, item);
+      repaintChat(row);
+    }
+    scheduleReload();
+  }
+
   const ready = loadAccounts();
   ready.catch(() => {});
 
@@ -662,6 +714,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     accounts: () => items,
     select: (aid) => select(aid),
     here: markHere,
+    changed,
     relogin: needRelogin,
     title: (chat) => known.get(chat)?.title ?? null,
     connect,

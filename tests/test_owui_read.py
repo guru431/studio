@@ -58,6 +58,26 @@ def test_tree_lists_pinned_folders_and_root_chats(setup):
     assert s.c.get(f"{BASE}/{aid}/tree").json()["folders"] == []
 
 
+def test_chat_management_updates_remote_chat_without_replacing_history(setup):
+    s, fake, aid = setup
+    chat = talk(fake, updated_at=30)
+    url = f"{BASE}/{aid}/chats/{chat}"
+    assert s.c.patch(url, json={"title": "  Updated  "}).json()["title"] == "Updated"
+    assert s.c.patch(url, json={"title": " "}).status_code == 422
+    for desired in (True, True, False, True):
+        assert s.c.put(url + "/pin", json={"pinned": desired}).json() == {"pinned": desired}
+    pin_requests = [r for r in fake.requests if r.method == "POST" and r.url.path.endswith("/pin")]
+    assert len(pin_requests) == 3
+    view = s.c.get(url).json()
+    assert (view["title"], view["updated"], view["pinned"]) == ("Updated", 30, True)
+    assert [m["text"] for m in view["messages"]] == ["hello", "hi there"]
+    shared = s.c.post(url + "/share", json={"pin": "4387", "days": 7})
+    assert shared.status_code == 201, shared.text
+    assert s.c.delete(url).status_code == 204
+    assert s.c.get(url).status_code == 404
+    assert s.c.get(url + "/share").json() == {"enabled": False}
+
+
 def test_chat_pages_and_folder_chats(setup):
     s, fake, aid = setup
     for n in range(65):

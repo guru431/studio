@@ -7,8 +7,10 @@
 import httpx
 import pytest
 
-from test_ui_browser import NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, signin  # noqa: F401
+from test_speech_segments import TRANSCRIBE, UPLOADED, transcriber
+from test_ui_browser import NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, set_value, signin  # noqa: F401
 from test_ui_chat_focus import focus_browser  # noqa: F401
+from test_ui_section_limits import ready, start
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -135,6 +137,27 @@ def test_without_device_storage_the_recording_still_uploads_whole(browser, live)
     sent, wav = v["whole"]
     assert sent == wav, v["whole"]
     assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
+
+
+def test_mcp_record_uses_the_shared_language_control_and_keeps_its_result(browser, live):
+    login = "rec-mcp"
+    live.add_user(login)
+    properties = {**TRANSCRIBE, "language": {"type": "string", "maxLength": 32}}
+    calls = transcriber(live.gw, {"text": "Запись распознана."}, properties=properties)
+    r = browser.drive(live.url + "/", [*start(login), *go("transcribe"), ("wait", ready("audio_transcribe")),
+        set_value("#tr-language", "custom"), set_value("#tr-custom-language", "de"),
+        ("click", "#transcribe-record"),
+        ("wait", f"!{PANEL}.hidden && {LAST}?.state === 'recording'"),
+        ("click", "#rec-stop"),
+        ("wait", "document.querySelector('#section-mcp-result').textContent.includes('Запись распознана.')"),
+        ("wait", "document.querySelector('.mcp-history-entry')"),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()"),
+        ("eval", "fits", NO_OVERFLOW)], init=FAKE_RECORDER, width=320, height=900, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["fits"]
+    assert calls[0][0] == "artifact_upload" and calls[0][1]["mime_type"] == "audio/webm"
+    assert calls[1:] == [("audio_transcribe", {"language": "de", "artifact_id": UPLOADED})]
+    assert not problems(r), problems(r)
 
 
 def test_cancel_erases_the_recording_after_a_question(browser, live):

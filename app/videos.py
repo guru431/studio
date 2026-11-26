@@ -69,7 +69,7 @@ MCP_VIDEOS = f"""
 SELECT COALESCE(f.media_id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server_id, j.server, j.tool, j.stamp,
        j.status, j.error, COALESCE(NULLIF(j.model, ''), CASE
            WHEN instr(substr(json_extract(j.result, '$.text'), 1, 256), '. Запрос для Wan:') > 0 THEN 'wan' ELSE '' END
-       ) AS model, j.prompt, j.created, f.media_id,
+       ) AS model, j.model AS requested_model, j.prompt, j.created, f.media_id,
        json_extract(j.result, '$.video') AS video, substr(json_extract(j.result, '$.text'), 1, 256) AS report,
        source.id AS source_media_id
 FROM mcp_section_jobs j
@@ -223,7 +223,9 @@ def _mcp_video_out(row, *, with_chain=True):
         out["mcp_arguments"] = arguments
         step = chains.video_step(video_id=row["id"], prompt=out["prompt"], prompt_source=out["prompt_source"],
                                  seconds=seconds, quality=out["quality"], created=out["created"])
-        out["chain"] = chains.annotate(row["user_id"], chains.of_source(row["user_id"], source) + [step])
+        if result:
+            step["media_id"] = result
+        out["chain"] = chains.annotate(row["user_id"], chains.of_source(row["user_id"], source)) + [step]
     return out
 
 
@@ -516,6 +518,7 @@ def _asked_prompt(row) -> str:
 
 class RepeatIn(BaseModel):
     count: int = Field(default=1, ge=1, le=REPEAT_MAX)
+    source: mcp_sections.FileIn | None = None
 
 
 @router.post("/{video_id}/repeat", status_code=201)
@@ -525,13 +528,15 @@ async def repeat_video(video_id: str, request: Request):
     (`given`) повторяется, придуманный шлюзом — снова на усмотрение шлюза. Задания уходят шлюзу по одному
     (очередь — у шлюза); отказ после первого — уже принятые остаются, в ответе `message` словами."""
     uid = request.state.user.id
+    remote = _mcp_video(uid, video_id)
+    needs_source = remote is not None and not remote["source_media_id"]
+    limit = (mcp_sections.UPLOAD_MAX + 2) // 3 * 4 + 4096 if needs_source else 1024
     try:
-        body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
+        body = RepeatIn.model_validate_json(await forms.read_body(request, limit) or b"{}")
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
-    remote = _mcp_video(uid, video_id)
     if remote is not None:
-        return await _repeat_mcp(uid, remote, body.count)
+        return await _repeat_mcp(uid, remote, body)
     row = _row(uid, video_id)
     # Если прежнее подключение недоступно, берём доступную связь раздела с моделью ролика.
     conn_id = row["connection_id"] if _connection(row, gate=True) is not None else None
@@ -557,17 +562,25 @@ async def repeat_video(video_id: str, request: Request):
     return {"items": [_out(r) for r in rows if r is not None], "message": message}
 
 
-async def _repeat_mcp(uid, row, count):
-    if row["status"] in mcp_sections.GALLERY_ACTIVE or not row["source_media_id"]:
+async def _repeat_mcp(uid, row, repeat):
+    source = mcp_sections.FileIn(media_id=row["source_media_id"]) if row["source_media_id"] else repeat.source
+    if row["status"] in mcp_sections.GALLERY_ACTIVE or source is None:
         raise HTTPException(409, {"code": "source", "message": "Для повтора выберите исходное фото"})
-    metadata = json.loads(row["video"])
-    arguments = {key: value for key, value in metadata["arguments"].items() if key != "seed"}
+    if row["video"]:
+        arguments = {key: value for key, value in json.loads(row["video"])["arguments"].items() if key != "seed"}
+    else:
+        stored = _mcp_video_out(row, with_chain=False)
+        arguments = {}
+        if stored["seconds"] is not None:
+            arguments["seconds"] = stored["seconds"]
+        if row["requested_model"]:
+            arguments["model"] = row["requested_model"]
     if row["prompt"]:
         arguments["prompt"] = row["prompt"]
     body = mcp_sections.RunIn(tool=row["tool"], arguments=arguments, record=True,
-                             files={"artifact_id": mcp_sections.FileIn(media_id=row["source_media_id"])})
+                             files={"artifact_id": source})
     items, message = [], None
-    for _ in range(count):
+    for _ in range(repeat.count):
         try:
             reply = await mcp_sections.run_tool("video", row["server_id"], uid, body, stamp=row["stamp"])
         except HTTPException as exc:
@@ -575,7 +588,11 @@ async def _repeat_mcp(uid, row, count):
                 raise
             message = exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc.detail)
             break
-        job_id = reply["history"]["id"]
+        saved = reply["history"]
+        job_id = saved["id"]
+        source_id = ((saved["result"] or {}).get("video") or {}).get("source_media_id")
+        if source_id:
+            body.files["artifact_id"] = mcp_sections.FileIn(media_id=source_id)
         entries = state.DB.execute(MCP_VIDEOS + " AND j.user_id = ? AND j.id = ? ORDER BY f.media_id", (uid, job_id))
         items.extend(_mcp_video_out(entry, with_chain=False) for entry in entries)
     return {"items": items, "message": message}

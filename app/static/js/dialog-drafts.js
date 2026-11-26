@@ -1,13 +1,19 @@
-/* Черновики диалогов «Агентов» и «Чата» в sessionStorage: `{scope: me.csrf, items: {id: {text, receipt?, skill?}}}`.
+/* Черновики диалогов в sessionStorage: `{scope: me.csrf, items: {id: {text, receipt?, skill?}}}`.
  * Запись чужой сессии (другой `scope`) не читается и удаляется. Смена «есть / нет» — событие
- * `studio-dialog-draft` { store, id, draft } на document. Блокировка, выход и аварийный выход стирают оба ключа. */
+ * `studio-dialog-draft` { store, id, draft } на document. Блокировка, выход и аварийный выход стирают черновики. */
 import { me } from './api.js';
 
 export const AGENT_DRAFTS = 'studio-agent-drafts';
 export const CHAT_DRAFTS = 'studio-chat-drafts';
-const KEYS = [AGENT_DRAFTS, CHAT_DRAFTS];
+export const OWUI_DRAFTS = 'studio-owui-drafts';
+export const owuiDraftKey = (aid, chat) => `${aid}/${chat ?? ''}`;
+const KEYS = [AGENT_DRAFTS, CHAT_DRAFTS, OWUI_DRAFTS];
 const stores = new Map();         // ключ → хранилище
 const clears = new Map();         // ключ → стереть хранилище
+export let draftsLocked = false;
+new MutationObserver(() => {
+  if (!document.documentElement.classList.contains('shrouded')) draftsLocked = false;
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
 /** Одно хранилище на ключ. */
 export function draftStore(key) {
@@ -70,7 +76,10 @@ function clear() {
   }
 }
 
-document.addEventListener('studio-locked', clear);
+document.addEventListener('studio-locked', () => {
+  draftsLocked = true;
+  clear();
+});
 document.addEventListener('studio-signed-out', clear);     // api.js toLogin, аварийный выход; login.js — тоже
 document.addEventListener('submit', (event) => {
   if (event.target.matches('form[action="/logout"]')) clear();

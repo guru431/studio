@@ -830,8 +830,14 @@ router = APIRouter(prefix="/api/translate")
 #: десятки МБ на цикле событий; кусок — до CHUNK_CHARS)
 _HEAD = ("(SELECT substr({0}, 1, %d) FROM translation_parts WHERE translation_id = translations.id AND n = 1)"
          % HEAD_CHARS)
+MCP_SHARE_BLOCKED = (
+    "EXISTS (SELECT 1 FROM mcp_section_jobs j LEFT JOIN mcp_servers s ON s.id = j.server_id"
+    " WHERE j.section = 'translate' AND j.user_id = translations.user_id AND j.id = translations.id"
+    " AND json_extract(j.result, '$.translation_id') = translations.id AND (s.id IS NULL OR s.protected))"
+)
 COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang, result_lang, name,"
            " source_media_id, scan_id, parts, done_parts, state, detail, created, finished, cleaner_used,"
+           f" {MCP_SHARE_BLOCKED} AS mcp_share_blocked,"
            f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
            f" {_HEAD.format('text')} AS text_head,"
            # скан записи нужен и другой живой (повтор берёт тот же скан): удаление этой его не уносит (`purge`)
@@ -897,7 +903,8 @@ def _out(row) -> dict:
             "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"]),
             "scan_owned": row["scan_id"] is not None and row["source_media_id"] is not None,
             # «готово», но не всё: нераспознанные страницы скана (UNREAD), снимок без текста (NO_TEXT)
-            "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None}, "translate", row)
+            "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None,
+            **({"mcp_share_blocked": True} if row["mcp_share_blocked"] else {})}, "translate", row)
 
 
 def _name(text: str) -> str:
@@ -908,6 +915,41 @@ def _name(text: str) -> str:
 def _langs(source: str, target: str) -> None:
     if source != translate_text.AUTO and source not in translate_text.LANGS or target not in translate_text.LANGS:
         raise HTTPException(422, {"code": "lang", "message": "такого языка нет в списке"})
+
+
+def mcp_metadata(args: dict, sid: int) -> "dict | None":
+    """Keep the submitted source and the language choices declared by the MCP tool."""
+    text = args.get("text")
+    source = args.get("source_lang", args.get("source_language", translate_text.AUTO))
+    target = args.get("target_lang", args.get("target_language"))
+    if not isinstance(text, str) or len(text) > 2 * translate_text.TEXT_MAX:
+        return None
+    value = translate_text.normalize(text)
+    if not value or len(value) > translate_text.TEXT_MAX or not isinstance(source, str) or not isinstance(target, str):
+        return None
+    if (source != translate_text.AUTO and source not in translate_text.LANGS) or target not in translate_text.LANGS:
+        return None
+    if not state.DB.execute("SELECT 1 FROM mcp_servers WHERE id = ? AND protected = 0", (sid,)).fetchone():
+        return None
+    return {"source": value, "source_lang": source, "target_lang": target}
+
+
+def store_mcp_translation(user_id: int, rid: str, meta: dict, text: str) -> bool:
+    """Add a finished MCP text translation within the same transaction as the job result."""
+    row = state.DB.execute("SELECT j.created, j.model, j.server FROM mcp_section_jobs j JOIN mcp_servers s"
+                           " ON s.id = j.server_id AND s.protected = 0 WHERE j.user_id = ? AND j.id = ?",
+                           (user_id, rid)).fetchone()
+    if row is None:
+        return False
+    source = meta["source"]
+    state.DB.execute("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name,"
+                     " source, text, parts, done_parts, state, detail, created, finished)"
+                     " VALUES (?, ?, 'text', ?, ?, ?, ?, ?, ?, 1, 1, 'done', ?, ?, ?)",
+                     (rid, user_id, row["model"] or row["server"], meta["source_lang"], meta["target_lang"],
+                      _name(source), source, text, DONE, row["created"], clock.NOW()))
+    state.DB.execute("INSERT INTO translation_parts(translation_id, n, source, text, state)"
+                     " VALUES (?, 1, ?, ?, 'done')", (rid, source, text))
+    return True
 
 
 @router.get("/languages")
@@ -1355,7 +1397,15 @@ async def purge(user_id: int, item_id: str) -> None:
         if scan is not None and scan["state"] not in ocr.TERMINAL:
             raise HTTPException(409, {"code": "running", "message": (
                 "распознавание ещё останавливается — удалите чуть позже")})
-    state.DB.execute("DELETE FROM translations WHERE id = ?", (item_id,))
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("DELETE FROM translations WHERE id = ?", (item_id,))
+        state.DB.execute("DELETE FROM mcp_section_jobs WHERE user_id = ? AND section = 'translate' AND id = ?"
+                         " AND json_extract(result, '$.translation_id') = id", (user_id, item_id))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
     if scan is not None:
         await ocr.remove(user_id, scan)
     media_id = row["source_media_id"]

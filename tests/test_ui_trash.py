@@ -1,4 +1,4 @@
-"""«Корзина» в настоящем браузере: пункт меню аватара, удалённый диалог — в группе «Чат», «Вернуть» возвращает его в
+"""«Корзина» в «Моих файлах»: удалённый диалог — в группе «Чат», «Вернуть» возвращает его в
 ленту чатов, «Очистить корзину» — только паролем учётки в окне подтверждения (неверный — словами в окне)."""
 import time
 
@@ -6,7 +6,7 @@ import pytest
 
 from conftest import browser  # noqa: F401 — фикстура браузера
 from live_app import start_live_app
-from test_ui_browser import API, MENU_OPEN, READY, go, is_open, live_sql, problems, set_value, signin
+from test_ui_browser import API, READY, go, is_open, live_sql, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -38,7 +38,7 @@ def test_trash_restores_and_empties_only_by_password(browser, live, width):
         ("eval", "deleted", f"""(async () => {{ const m = {API};
           await m.api('DELETE', '/api/chats/keep{width}'); await m.api('DELETE', '/api/chats/drop{width}');
           return true; }})()"""),
-        ("click", "#avatar"), ("wait", MENU_OPEN), ("click", "#menu a[href='#/trash']"),
+        ("click", "#myfiles-open"), ("wait", "document.querySelector('#myfiles-trash')"), ("click", "#myfiles-trash"),
         ("wait", "document.querySelectorAll('#trash-list .trash-item').length === 2"),
         ("eval", "title", "document.querySelector('#view h1').textContent"),
         ("eval", "group", "[...document.querySelectorAll('#trash-list .trash-group h2')].map((h) => h.textContent)"),
@@ -60,7 +60,8 @@ def test_trash_restores_and_empties_only_by_password(browser, live, width):
         ("wait", "document.querySelector('#trash-none') && !" + is_open("#trash-empty-dialog")),
         ("eval", "done", "document.querySelector('#trash-status').textContent"),
         ("eval", "emptyHidden", "document.querySelector('#trash-empty').hidden"),
-        *go("settings/data"), ("wait", "document.querySelector('#storage-trash a')"),
+        *go("settings/data"), ("wait", "document.querySelector('#storage-trash')?.textContent"),
+        ("eval", "duplicate", "!!document.querySelector('#storage-trash a, #menu a[href=\"#/trash\"]')"),
         ("eval", "storage", "document.querySelector('#storage-trash').textContent")],
         width=width, mobile=width == 320)
     assert not r.get("failed"), r
@@ -72,7 +73,7 @@ def test_trash_restores_and_empties_only_by_password(browser, live, width):
     assert v["blank"] == "Введите пароль учётки"
     assert v["wrong"] == "Пароль неверен" and v["kept"] == [f"drop{width}"]
     assert v["done"] == "Корзина очищена: 1" and v["emptyHidden"] is True
-    assert v["storage"] == "Корзина пуста. Открыть корзину"
+    assert v["storage"] == "Корзина пуста." and not v["duplicate"]
     # единственный отказ — неверный пароль, которого тест и ждал
     assert [line for line in problems(r) if "403" not in line or "/api/trash/empty" not in line] == []
     assert len(problems(r)) == 1
@@ -91,7 +92,7 @@ def test_trash_localizes_only_default_title_and_prompts_to_purge_one(browser, li
           await m.api('DELETE', '/api/chats/default');
           await m.api('DELETE', '/api/chats/custom');
         }})()"""),
-        *go("trash"), ("wait", "document.querySelectorAll('.trash-item').length === 2"),
+        *go("trash"), ("wait", "location.hash === '#/myfiles?trash=1' && document.querySelectorAll('.trash-item').length === 2"),
         ("eval", "titles", "Object.fromEntries([...document.querySelectorAll('.trash-item')]"
                           ".map(e => [e.dataset.id, e.querySelector('b').textContent]))"),
         ("click", ".trash-item[data-id='default'] .trash-forever"), ("wait", is_open("#trash-forever-dialog")),

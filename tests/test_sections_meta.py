@@ -77,10 +77,11 @@ def test_every_section_has_an_icon_and_no_module_keeps_its_own_table():
 
 
 def test_login_returns_only_to_screens_the_router_knows():
-    """auth.PAGE_SECTIONS (куда вернуть после входа) — те же экраны, что LOADERS роутера app.js."""
+    """Имена после входа — экраны app.js и старый адрес корзины, который перенаправляет роутер."""
     import auth
     loaders = re.findall(r"^  (\w+): \(\) => import\(", (JS / "app.js").read_text(encoding="utf-8"), re.M)
-    assert loaders and tuple(loaders) == auth.PAGE_SECTIONS
+    assert "trash" in auth.PAGE_SECTIONS
+    assert tuple(loaders) == tuple(section for section in auth.PAGE_SECTIONS if section != "trash")
 
 
 def test_svg_markup_lives_only_in_icons_js():

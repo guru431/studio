@@ -49,7 +49,7 @@ import { enterSends, fieldBox, imagePaste } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
-import { sectionMcp } from './mcp-sections.js';
+import { schemaLimits, sectionMcp } from './mcp-sections.js';
 import { presetChip } from './presets.js';
 import { resizePhoto } from './resize-photo.js';
 import { saveMedia } from './save.js';
@@ -296,7 +296,6 @@ function build(view, ctx) {
   /** Варианты чипа «модель» — отмеченные модели раздела «Фото», выбор — его умолчание. */
   function loadModels(section) {
     canUpscale = section.links.some(({ connection }) => connection.kind === 'srvllm' && connection.proxied);
-    upscalePick.hidden = !canUpscale;
     const many = section.links.filter((l) => l.models.length).length > 1;
     choices = section.links.flatMap(({ connection: c, models }) => models.map((m) => {
       const pick = { connection_id: c.id, model: m, kind: c.kind };
@@ -329,6 +328,7 @@ function build(view, ctx) {
 
   function paintSource() {
     const active = !!mcp.tool;
+    upscalePick.hidden = !canUpscale && !mcp.fileSource(['upscale_image']);
     const describe = ['image_describe', 'describe_image'].includes(mcp.tool);
     const upscale = mcp.tool === 'upscale_image';
     form.hidden = !!ctx.hint && !active;
@@ -993,9 +993,9 @@ function build(view, ctx) {
         describe({ mediaId: item.media_id });
       }),
       act(tr("Ещё варианты"), 'act-variants', () => chooseVariants(item, () => dialog.close()))];
-    const upscale = canUpscale && act(tr("Улучшить фото"), 'act-upscale', () => {
+    const upscale = (canUpscale || mcp.fileSource(['upscale_image'])) && act(tr("Улучшить фото"), 'act-upscale', () => {
       dialog.close();
-      chooseUpscale({ mediaId: item.media_id });
+      chooseUpscale({ mediaId: item.media_id, server: item.mcp_server_id });
     });
     if (upscale) starts.push(upscale);
     // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
@@ -1010,7 +1010,7 @@ function build(view, ctx) {
       item.prompt && (canNative || remoteSource) ? act(tr("В поле"), 'act-to-field', () => toField(item, dialog)) : null,
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
       // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
-      remoteSource ? null : act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
+      act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
         tr("Картинка"), api, { kind: 'images' })),
       act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
@@ -1412,21 +1412,43 @@ function build(view, ctx) {
     autosize();
     prompt.focus();
   });
-  function chooseUpscale({ file: input, mediaId }) {
+  function chooseUpscale({ file: input, mediaId, server = mcp.serverId }) {
     if (isBusy()) return;
-    const mode = el('select', { class: 'input', name: 'upscale-mode' },
-      el('option', { value: 'restore' }, tr("Восстановление · SeedVR2")),
-      el('option', { value: 'fast' }, tr("Быстрое увеличение · RealESRGAN")));
-    const scale = el('input', { class: 'input', name: 'upscale-scale', type: 'number', min: '1', max: '4',
-      step: 'any', value: '2', required: true });
+    const tools = ['upscale_image'];
+    const key = (server && mcp.fileSource(tools, server)) || (!canUpscale && mcp.fileSource(tools));
+    if (!key && !canUpscale) {
+      error.textContent = tr("Инструмент MCP недоступен");
+      return;
+    }
+    const props = key ? mcp.option(key).schema.properties : null;
+    const limits = schemaLimits(props?.scale);
+    const names = { restore: tr("Восстановление · SeedVR2"), fast: tr("Быстрое увеличение · RealESRGAN") };
+    const modes = props ? schemaLimits(props.mode)?.enum || [] : Object.keys(names);
+    const mode = modes.length ? el('select', { class: 'input', name: 'upscale-mode' },
+      ...modes.map(value => el('option', { value }, Object.hasOwn(names, value) ? names[value] : String(value)))) : null;
+    if (mode && modes.includes(props?.mode?.default)) mode.value = props.mode.default;
+    const low = limits?.min ?? 1;
+    const high = limits?.max ?? 4;
+    const scale = !props || props.scale ? el('input', { class: 'input', name: 'upscale-scale', type: 'number',
+      min: String(low), max: String(high), step: limits?.type === 'integer' ? '1' : 'any',
+      value: String(limits?.default ?? Math.min(high, Math.max(low, 2))), required: true }) : null;
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
     const submit = button(tr("Улучшить фото"), { class: 'btn btn-accent', id: 'photo-upscale-submit' });
     const dialog = openDialog(root, { id: 'photo-upscale-dialog', title: tr("Улучшить фото"),
-      body: [field(tr("Режим улучшения"), mode, 'upscale-mode'), field(tr("Масштаб от 1 до 4"), scale, 'upscale-scale'), fail],
-      actions: [submit], guard: () => !submitting });
+      body: [key && el('p', { class: 'muted small' }, tr("Обработка на сервере {0}", mcp.sourceName(key))),
+        mode && field(tr("Режим улучшения"), mode, 'upscale-mode'),
+        scale && field(tr("Масштаб от {0} до {1}", low, high), scale, 'upscale-scale'), fail],
+      actions: [submit], guard: () => !submitting && !mcp.busy });
     submit.addEventListener('click', async () => {
-      if (!scale.reportValidity() || isBusy()) return;
+      if ((scale && !scale.reportValidity()) || isBusy()) return;
       submit.disabled = true;
+      if (key) {
+        const ok = await mcp.run({ mode: mode?.value, scale: scale ? Number(scale.value) : undefined },
+          { source: key, files: { artifact_id: input || { mediaId } } });
+        if (ok) dialog.close();
+        else { fail.textContent = mcp.error || tr("Инструмент MCP недоступен"); submit.disabled = false; }
+        return;
+      }
       const body = new FormData();
       if (input) body.append('image', input);
       else body.append('source_media_id', mediaId);

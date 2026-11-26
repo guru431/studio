@@ -118,11 +118,15 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
   let deferred = null;      // show() во время перетаскивания
   function begin() {
     if (!drag) return;
+    const node = nodes.get(drag.chat);
+    if (!node || state.tabs.length < 2) { finish(false); return; }
     clearTimeout(drag.timer);
+    drag.node = node;
     drag.active = true;
-    drag.node.classList.add('dragging');
+    node.classList.add('dragging');
     bar.classList.add('reordering');
-    try { drag.node.setPointerCapture(drag.id); } catch { /* указатель уже отпущен */ }
+    // Вкладка перемещается в DOM. Захват остаётся у ряда до отпускания указателя.
+    try { bar.setPointerCapture(drag.id); } catch { /* указатель уже отпущен */ }
   }
   function finish(commit) {
     const current = drag;
@@ -132,6 +136,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     bar.classList.remove('reordering');
     current.node.classList.remove('dragging');
     if (!current.active) return;
+    if (bar.hasPointerCapture(current.id)) bar.releasePointerCapture(current.id);
     swallowClick = true;
     setTimeout(() => { swallowClick = false; }, 0);
     const order = [...bar.querySelectorAll('.code-tab')].map((n) => n.dataset.chat);
@@ -140,11 +145,12 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     deferred = null;
     bar.replaceChildren(...state.tabs.map((id) => nodes.get(id)).filter(Boolean), add);
     if (later) show(later);
-    if (commit && index !== state.tabs.indexOf(current.chat)) move(current.chat, index);
+    const previous = state.tabs.indexOf(current.chat);
+    if (commit && previous >= 0 && index !== previous) move(current.chat, index);
   }
   bar.addEventListener('pointerdown', (event) => {
     const node = event.target.closest('.code-tab');
-    if (!node || event.target.closest('.code-tab-close') || event.button !== 0 || state.tabs.length < 2) return;
+    if (!node || event.target.closest('.code-tab-close') || !event.isPrimary || event.button !== 0 || state.tabs.length < 2) return;
     finish(false);
     drag = { chat: node.dataset.chat, node, id: event.pointerId, x: event.clientX, y: event.clientY,
       touch: event.pointerType !== 'mouse', active: false, timer: null };
@@ -170,6 +176,12 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
   });
   bar.addEventListener('pointerup', (event) => { if (drag && event.pointerId === drag.id) finish(true); });
   bar.addEventListener('pointercancel', (event) => { if (drag && event.pointerId === drag.id) finish(false); });
+  bar.addEventListener('pointerleave', (event) => {
+    if (drag && event.pointerId === drag.id && !drag.active && !drag.touch) finish(false);
+  });
+  bar.addEventListener('lostpointercapture', (event) => {
+    if (event.target === bar && drag && event.pointerId === drag.id) finish(false);
+  });
   // Пока палец тащит вкладку, ряд не прокручивается и страница не листается (слушатель не пассивный).
   bar.addEventListener('touchmove', (event) => { if (drag?.active) event.preventDefault(); }, { passive: false });
   bar.addEventListener('contextmenu', (event) => { if (drag?.touch) event.preventDefault(); });
@@ -190,6 +202,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     },
     show,
     unmount() {
+      finish(false);
       root.remove();
     },
   };

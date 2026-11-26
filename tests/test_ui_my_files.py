@@ -1,4 +1,4 @@
-"""«Мои файлы» в настоящем браузере (my-files.js, my_files.py): пункт меню аватара при сервере с `studio/files`,
+"""«Мои файлы» в настоящем браузере (my-files.js, my_files.py): кнопка рельса и сервер с `studio/files`,
 загрузка кусками, папка, «Ссылка на сутки»; ссылка `/f#<token>` открывается в чистом контексте браузера без входа."""
 import pytest
 
@@ -48,8 +48,14 @@ def test_my_files_upload_folder_and_day_link_opens_in_a_clean_browser(browser, c
     login = f"files{width}"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
-        ("click", "#avatar"), ("wait", f"{MENU_OPEN} && !document.querySelector('#menu-my-files').hidden"),
-        ("click", "#menu-my-files"),
+        ("eval", "railOrder", """(() => {
+          const [search, files, jobs] = ['#search-open', '#myfiles-open', '#jobs']
+            .map(id => document.querySelector(id).getBoundingClientRect());
+          return matchMedia('(max-width: 760px)').matches
+            ? search.right <= files.left && files.right <= jobs.left
+            : search.bottom <= files.top && files.bottom <= jobs.top;
+        })()"""),
+        ("click", "#myfiles-open"),
         ("wait", "document.querySelector('#myfiles-none')"),
         ("eval", "title", "document.querySelector('#view h1').textContent"),
         ("eval", "picked", UPLOAD),
@@ -66,7 +72,7 @@ def test_my_files_upload_folder_and_day_link_opens_in_a_clean_browser(browser, c
         width=width, mobile=width == 320)
     assert not r.get("failed"), r
     values = r["values"]
-    assert values["title"] == "Мои файлы" and values["picked"] == 1 and not values["overflow"]
+    assert values["title"] == "Мои файлы" and values["picked"] == 1 and values["railOrder"] and not values["overflow"]
     assert values["url"].startswith(live.url + "/f#")
     assert not problems(r), problems(r)
 
@@ -88,6 +94,23 @@ def test_my_files_upload_folder_and_day_link_opens_in_a_clean_browser(browser, c
     assert not got["overflow"] and "studio_file" not in got["cookie"] and got["clicked"] == "/f/file"
     assert got["body"][0] == 200 and got["body"][1].startswith("attachment;") and got["body"][2] == TEXT
     assert not problems(shared), problems(shared)
+
+
+def test_my_files_trash_switches_between_studio_records_and_server_files(browser, live):
+    login = "files-trash-switch"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
+        ("wait", "document.querySelector('#myfiles-none')"), ("eval", "upload", UPLOAD),
+        ("wait", ITEM.format("отчёт.txt")), ("click", '#myfiles-list button[aria-label="Удалить: отчёт.txt"]'),
+        ("wait", "document.querySelector('#myfiles-none')"), ("click", "#myfiles-trash"),
+        ("wait", "document.querySelector('#trash-none') && document.querySelector('#myfiles-tabs [data-sid]:not([data-sid=\"0\"])')"),
+        ("click", '#myfiles-tabs [data-sid]:not([data-sid="0"])'),
+        ("wait", "document.querySelector('.myfiles-trash-item')?.textContent.includes('отчёт.txt')"),
+        ("click", ".myfiles-trash-item button"),
+        ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent.includes('Возвращено')"),
+        ("click", "#myfiles-back"), ("wait", ITEM.format("отчёт.txt"))], width=320, mobile=True)
+    assert not r.get("failed"), r
+    assert not problems(r), problems(r)
 
 
 def test_avatar_menu_under_expired_partial_lock_does_not_force_the_lock_screen(browser, live):

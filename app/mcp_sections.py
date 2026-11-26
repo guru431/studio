@@ -32,6 +32,7 @@ import media
 import operations
 import security
 import speech
+import speeches
 import state
 import upstream
 import voices
@@ -67,6 +68,9 @@ INLINE_MIME = {mime for mime in media.EXT if mime.startswith(("image/", "audio/"
 TICKET_MIME = INLINE_MIME | {"text/plain", "text/markdown", "application/json", "application/octet-stream", media.DOCX}
 SRT_MAX = 2 << 20                # файл .srt итога «Расшифровки», который Studio читает сама для вида расшифровки
 SRT_MIME = "application/x-subrip"
+# A queued Studio part has no upstream job ID yet. Only the watcher uses this sentinel.
+SPEECH_QUEUE = "studio:speech-queue"
+SPEECH_PARTS_MAX = 256
 
 
 def section_tools(section: str) -> set[str]:
@@ -630,8 +634,12 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
     item = mcp.row(uid, sid)
     if stamp is not None and stamp != mcp_sources.stamp(item["secret_enc"]):
         raise mcp.refused("Подключение или права MCP изменились")
+    long_speech = section == "speech" and body.record and isinstance(body.arguments.get("text"), str)
+    parameters = {key: value for key, value in body.arguments.items() if key != "text"} if long_speech else body.arguments
+    if long_speech and len(body.arguments["text"]) > speeches.LONG_MAX:
+        raise mcp.refused("Текст озвучки больше 200 000 знаков", "too_big", 413)
     try:
-        arguments = json.dumps(body.arguments, allow_nan=False)
+        arguments = json.dumps(parameters, allow_nan=False)
     except (ValueError, RecursionError):
         raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422) from None
     if body.tool not in names or len(arguments) > PARAMS_MAX or not access.tool_allowed(uid, sid, body.tool):
@@ -652,12 +660,24 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
         if tool is None:
             raise mcp.refused("Инструмент недоступен в этом разделе MCP")
         args = {key: value for key, value in body.arguments.items() if key not in body.files}
+        if stamp is not None:  # Replay may restore parameters from an older tool schema.
+            args = {key: value for key, value in args.items() if key in tool["schema"].get("properties", {})}
         if not body.files.keys() <= tool["files"].keys():
             raise mcp.refused("Инструмент не принимает этот файл MCP", "invalid", 422)
         if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
             model_schema = tool["schema"].get("properties", {}).get("model", {})
             if "enum" not in model_schema and any(isinstance(t, dict) and t.get("name") == "services_list" for t in listed):
                 args["model"] = images.MODELS.get(args["model"], args["model"])
+        parts = []
+        if long_speech and "text" in args:
+            cap = tool["schema"].get("properties", {}).get("text", {}).get("maxLength")
+            limit = min(cap, speeches.TEXT_MAX) if type(cap) is int and cap > 0 else speeches.TEXT_MAX
+            if len(args["text"]) > limit:
+                if len(args["text"]) <= SPEECH_PARTS_MAX * limit:
+                    parts = speeches.split_text(args["text"], limit)
+                if not parts or len(parts) > SPEECH_PARTS_MAX:
+                    raise mcp.refused("Слишком много частей озвучки для выбранного инструмента", "too_big", 413)
+                args["text"] = parts[0]
         if body.voice_id:
             for key in ("voice", "reference_artifact_id"):
                 args.pop(key, None)
@@ -680,6 +700,11 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
         if body.record:
             operations.check(uid)
+        if len(parts) > 1:
+            batch = {"parts": parts, "args": {key: val for key, val in args.items() if key != "text"},
+                     "jobs": tool["jobs"]}
+            return await record_result(session, section, item["name"], body.tool, args, None, SPEECH_QUEUE, body.files,
+                                       speech_batch=batch)
         result = await call(session, body.tool, args)
         data = result.get("structuredContent")
         jid = data.get("id") if isinstance(data, dict) else None
@@ -736,17 +761,21 @@ def history_view(row, *, details=True):
         "active": row["remote_id"] is not None, "server_id": row["server_id"],
         "result": json.loads(row["result"]) if details and row["result"] else None,
     }
+    if output["result"] is not None:
+        output["result"].pop("speech_batch", None)
+        output["result"].pop("translate", None)
     if not details:
         output["has_photo"] = bool(row["has_photo"])
         output["has_video"] = bool(row["has_video"])
     return output
 
 
-async def record_result(session, section, server, tool, args, result, remote_id, input_files, *, video_source=None):
+async def record_result(session, section, server, tool, args, result, remote_id, input_files, *, video_source=None, speech_batch=None):
     operations.check(session.uid)
     rid = uuid.uuid4().hex
     stamp = mcp_sources.stamp(session.stamp)
-    prompt = clean_text(args.get("prompt") or args.get("text"), 24_000)
+    text = "\n\n".join(speech_batch["parts"]) if speech_batch else args.get("text")
+    prompt = clean_text(args.get("prompt") or text, 24_000)
     model = clean_text(args.get("model"), MODEL_ID_MAX)
     metadata = {}
     if section == "photo":
@@ -762,6 +791,12 @@ async def record_result(session, section, server, tool, args, result, remote_id,
         if type(strength) in (int, float) and 0 <= strength <= 1:
             metadata["strength"] = strength
     initial = {"photo": metadata} if metadata else {}
+    if speech_batch:
+        initial["speech_batch"] = speech_batch
+    if section == "translate":
+        import translate
+        if translation := translate.mcp_metadata(args, session.sid):
+            initial["translate"] = translation
     if section == "video" and tool in VIDEO_TOOLS:
         initial["video"] = {"source_media_id": video_source,
                             "arguments": {key: value for key, value in args.items() if key not in {"artifact_id", "prompt"}}}
@@ -788,17 +823,27 @@ async def record_result(session, section, server, tool, args, result, remote_id,
 
 
 def end_history(rid, status, error=""):
-    state.DB.execute("UPDATE mcp_section_jobs SET status = ?, error = ?, remote_id = NULL WHERE id = ?",
+    state.DB.execute("UPDATE mcp_section_jobs SET status = ?, error = ?, remote_id = NULL,"
+                     " result = CASE WHEN section = 'speech' THEN json_remove(result, '$.speech_batch') ELSE result END"
+                     " WHERE id = ?",
                      (status, error, rid))
 
 
 async def save_history(session, section, rid, result):
     output = await shown(session, section, result)
+    operations.check(session.uid)
     data = result.get("structuredContent")
     sources = iter(artifacts(data) if isinstance(data, dict) else ())
     remaining = DOWNLOAD_MAX
     saved, media_ids = [], []
     missing = False
+    stored = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()[0]
+    previous = json.loads(stored) if stored else {}
+    batch = previous.get("speech_batch")
+    if batch:
+        remaining -= state.DB.execute(
+            "SELECT COALESCE(SUM(m.size), 0) FROM mcp_section_files f JOIN media m ON m.id = f.media_id WHERE f.job_id = ?",
+            (rid,)).fetchone()[0]
     for file in output["files"]:
         mime = file["mime"]
         name = clean_text(file.get("name"), 120).replace("\\", "/").rsplit("/", 1)[-1]
@@ -826,39 +871,79 @@ async def save_history(session, section, rid, result):
         remaining -= state.DB.execute("SELECT size FROM media WHERE id = ?", (mid,)).fetchone()[0]
         media_ids.append(mid)
         saved.append({"mime": mime, "name": name, "url": f"/api/media/{mid}"})
-    output["files"] = saved
+    output["files"] = previous.get("files", []) + saved if batch else saved
     operations.check(session.uid)
     if section == "photo":
-        stored = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()[0]
-        output["photo"] = images.mcp_photo_metadata(output | (json.loads(stored) if stored else {}))
+        output["photo"] = images.mcp_photo_metadata(output | previous)
         if isinstance(data, dict) and len(saved) == 1:
             seed = data.get("seed")
             if type(seed) is int and 0 <= seed <= 2**53 - 1:
                 output["photo"]["seed"] = seed
     elif section == "video":
-        stored = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()[0]
-        metadata = json.loads(stored).get("video") if stored else None
+        metadata = previous.get("video")
         if metadata is not None:
             metadata["finished"] = clock.NOW()
             seed = data.get("seed") if isinstance(data, dict) else None
             if type(seed) is int and 0 <= seed <= 2**53 - 1:
                 metadata["seed"] = seed
             output["video"] = metadata
+    audio_missing = batch and not any(file["mime"].startswith("audio/") for file in saved)
+    if batch and not audio_missing and not missing and batch["parts"][1:]:
+        output["speech_batch"] = {**batch, "parts": batch["parts"][1:]}
     state.DB.execute("BEGIN")
     try:
         state.DB.executemany("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
                              ((rid, session.uid, mid) for mid in media_ids))
+        if (section == "translate" and previous.get("translate") and output["text"].strip()
+                and not output["files"] and not missing):
+            import translate
+            if translate.store_mcp_translation(session.uid, rid, previous["translate"], output["text"]):
+                output["translation_id"] = rid
         state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?",
                          (json.dumps(output, ensure_ascii=False), rid))
-        video_missing = "video" in output and not any(file["mime"].startswith("video/") for file in saved)
-        failed = missing and (video_missing or not (saved or output["text"]))
-        end_history(rid, "failed" if failed else "completed",
-                    "Часть файлов MCP не удалось сохранить" if missing and saved else
-                    "Файлы MCP не удалось сохранить" if missing else "")
+        if "speech_batch" in output:
+            state.DB.execute("UPDATE mcp_section_jobs SET status = 'queued', remote_id = ? WHERE id = ?",
+                             (SPEECH_QUEUE, rid))
+        else:
+            video_missing = "video" in output and not any(file["mime"].startswith("video/") for file in saved)
+            failed = audio_missing or (missing and (batch or video_missing or not (saved or output["text"])))
+            end_history(rid, "failed" if failed else "completed",
+                        "MCP не вернул аудио для части озвучки" if audio_missing else
+                        "Часть файлов MCP не удалось сохранить" if missing and output["files"] else
+                        "Файлы MCP не удалось сохранить" if missing else "")
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+
+
+async def start_speech_part(session, row, item):
+    rid = row["id"]
+    batch = json.loads(row["result"])["speech_batch"]
+    # The request may succeed upstream without a reply. A restart in this interval must not submit it again.
+    state.DB.execute("UPDATE mcp_section_jobs SET status = 'saving' WHERE id = ?", (rid,))
+    try:
+        with operations.bind(session.uid):
+            operations.check(session.uid)
+            if cleaner_route.web_only():
+                async with asyncio.timeout(DISCOVERY_TIMEOUT):
+                    tools = await session.tools()
+                if not any(tool["name"] == row["tool"] for tool in supported("speech", tools, uid=session.uid,
+                                                                                  sid=session.sid, item=item)):
+                    raise mcp.refused("Подключение или права MCP изменились")
+            if not access.tool_allowed(session.uid, session.sid, row["tool"]):
+                raise mcp.refused("Подключение или права MCP изменились")
+            operations.check(session.uid)
+            result = await call(session, row["tool"], {**batch["args"], "text": batch["parts"][0]})
+            operations.check(session.uid)
+            data = result.get("structuredContent")
+            remote = data.get("id") if isinstance(data, dict) else None
+            if batch["jobs"] and isinstance(remote, str) and JOB_ID.fullmatch(remote):
+                state.DB.execute("UPDATE mcp_section_jobs SET status = 'queued', remote_id = ? WHERE id = ?", (remote, rid))
+            else:
+                await save_history(session, "speech", rid, result)
+    except (HTTPException, TimeoutError):
+        end_history(rid, "failed", "Не удалось запустить часть озвучки MCP")
 
 
 async def refresh_history(row):
@@ -881,6 +966,13 @@ async def refresh_history(row):
         session = mcp.Session(item, uid=uid)
         try:
             await session.initialize()
+            if row["remote_id"] == SPEECH_QUEUE:
+                if state.DB.execute("SELECT 1 FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone():
+                    if row["status"] == "queued":
+                        await start_speech_part(session, row, item)
+                    else:
+                        end_history(rid, "failed", "Не удалось запустить часть озвучки MCP")
+                return
             args = {"job_id": row["remote_id"]}
             job = (await call(session, "job_status", args, timeout=DISCOVERY_TIMEOUT)).get("structuredContent")
             if not isinstance(job, dict) or not isinstance(job.get("status"), str):
@@ -911,7 +1003,9 @@ async def refresh_history(row):
 
 async def watch_history():
     # No remote id means an inline result was interrupted before Studio finished saving it.
-    state.DB.execute("UPDATE mcp_section_jobs SET status = 'failed', error = ? WHERE status = 'saving'",
+    state.DB.execute("UPDATE mcp_section_jobs SET status = 'failed', error = ?, remote_id = NULL,"
+                     " result = CASE WHEN section = 'speech' THEN json_remove(result, '$.speech_batch') ELSE result END"
+                     " WHERE status = 'saving'",
                      ("Сохранение результата прервано перезапуском Studio",))
     cursor = (0.0, "")
     while True:
@@ -941,6 +1035,8 @@ async def history(section: str, request: Request, before: str = "", without_clip
     filtered = without_clips and section == "video"
     if filtered:
         extra += f" AND NOT (j.tool IN {tuple(sorted(VIDEO_TOOLS))} AND (j.status <> 'completed' OR {has_video}))"
+    if section == "translate":
+        extra += " AND json_extract(j.result, '$.translation_id') IS NULL"
     rows = state.DB.execute("SELECT j.*, EXISTS (SELECT 1 FROM mcp_section_files f JOIN media m ON m.id = f.media_id"
                             " WHERE f.job_id = j.id AND m.mime LIKE 'image/%') AS has_photo,"
                             f" {has_video} AS has_video FROM mcp_section_jobs j WHERE user_id = ? AND section = ?"
@@ -974,14 +1070,17 @@ async def history_item(section: str, rid: str, request: Request):
 async def delete_history(section: str, rid: str, request: Request):
     uid = request.state.user.id
     row = history_row(uid, section, rid)
+    if section == "translate" and row["result"] and json.loads(row["result"]).get("translation_id"):
+        raise mcp.refused("Запись истории MCP недоступна", "not_found", 404)
     if row["remote_id"] or row["status"] == "saving":
         raise mcp.refused("Дождитесь завершения задания MCP")
     mids = state.DB.execute("SELECT media_id FROM mcp_section_files WHERE job_id = ?", (rid,)).fetchall()
     state.DB.execute("BEGIN")
     try:
-        if section == "video":
-            state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = 'videos' AND item_id IN"
-                             " (SELECT media_id FROM mcp_section_files WHERE job_id = ?)", (uid, rid))
+        share_kind = {"photo": "images", "video": "videos"}.get(section)
+        if share_kind:
+            state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = ? AND item_id IN"
+                             " (SELECT media_id FROM mcp_section_files WHERE job_id = ?)", (uid, share_kind, rid))
         state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (rid,))
         state.DB.execute("COMMIT")
     except BaseException:

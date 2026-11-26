@@ -341,6 +341,13 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
     live.gw.chat_hold = lambda: hold["on"] and "Составь план" in json.dumps(live.gw.chat_requests[-1], ensure_ascii=False)
     TITLE = "document.querySelector('#chat-title')"
     ACTIONS = "document.querySelector('#chat-title-actions')"
+    manage = [
+        ("eval", "reveal_actions", f"""(() => {{
+          if ({ACTIONS}.closest('#chat-status-menu:not(:popover-open)')) document.querySelector('#chat-status-more').click();
+          return true;
+        }})()"""),
+        ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
+    ]
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
             ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(mobile),
@@ -354,7 +361,7 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
             ("wait", f"{ANSWERED} && {TITLE}.textContent === 'Мой план'"),
             ("eval", "title", f"[{TITLE}.textContent, {ACTIONS}.hidden]"),
             ("eval", "cid", CHAT),
-            ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
+            *manage,
             ("eval", "menu", "[...document.querySelectorAll('#chat-title-menu .menu-option')].map(i => i.textContent.trim())"),
             ("click", "#chat-title-copy"), ("wait", "window.copied"),
             ("eval", "copied", "window.copied"),
@@ -363,11 +370,11 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
             ("wait", "document.querySelector('#chat-title-note').hidden"),
             ("eval", "clip_fail", """(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); };
               return true; })()"""),
-            ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
+            *manage,
             ("click", "#chat-title-copy"), ("wait", "document.querySelector('#chat-error').textContent"),
             ("eval", "copy_fail", """[document.querySelector('#chat-error').textContent,
               document.querySelector('#chat-error').offsetParent !== null, document.querySelector('#chat-title-note').hidden]"""),
-            ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
+            *manage,
             ("click", "#chat-title-rename"), ("wait", is_open("#rename-dialog")),
             ("eval", "clear", "document.querySelector('#rename-dialog input').value = ''"),
             ("type", "#rename-dialog input", "Новое имя"), ("click", "#rename-save"),

@@ -7,7 +7,7 @@ import db
 import media
 from fake_owui import FakeOwui  # noqa: F401
 from test_ui_browser import live  # noqa: F401 — модульная живая служба
-from test_ui_owui import connected, fake, fits, opened, owui_browser, session, talk  # noqa: F401
+from test_ui_owui import connected, fake, fits, opened, owui_browser, session, talk, toolbar_button  # noqa: F401
 from test_ui_webkit import pw
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -75,7 +75,7 @@ def test_speech_chat_and_open_webui_are_shared_from_their_sections(owui_browser,
     aid = connected(live, cookie)
     with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
         pw.expect(page.locator(".owui-feed-title")).to_have_text("Boats")
-        trigger = page.locator("#owui-share")
+        trigger = toolbar_button(page, "#owui-share")
         pw.expect(trigger).to_be_enabled()
         trigger.click()
         items = page.locator("#owui-share-menu [data-action]:visible")

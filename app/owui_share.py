@@ -56,9 +56,10 @@ async def chat_share(aid: int, chat: str, request: Request):
 @router.post("/accounts/{aid}/chats/{chat}/share", status_code=201)
 async def create_chat_share(aid: int, chat: str, body: chat_shares.ShareIn, request: Request):
     acc, source = _source(request, aid, chat)
-    expected = chat_shares._owned(request, **source)
-    shot = await snapshot(acc, chat)
-    out = await chat_shares._store(request, body, shot, expected, **source)
+    async with owui.chat_lock(aid, chat):
+        expected = chat_shares._owned(request, **source)
+        shot = await snapshot(acc, chat)
+        out = await chat_shares._store(request, body, shot, expected, **source)
     log.info("owui %d: ссылка «Поделиться» создана", aid)
     return out
 
@@ -66,9 +67,10 @@ async def create_chat_share(aid: int, chat: str, body: chat_shares.ShareIn, requ
 @router.put("/accounts/{aid}/chats/{chat}/share")
 async def refresh_chat_share(aid: int, chat: str, body: chat_shares.RefreshIn, request: Request):
     acc, source = _source(request, aid, chat)
-    expected = chat_shares._owned(request, **source) or chat_shares._gone()
-    shot = await snapshot(acc, chat)
-    return await chat_shares._store(request, body, shot, expected, refresh=True, **source)
+    async with owui.chat_lock(aid, chat):
+        expected = chat_shares._owned(request, **source) or chat_shares._gone()
+        shot = await snapshot(acc, chat)
+        return await chat_shares._store(request, body, shot, expected, refresh=True, **source)
 
 
 @router.delete("/accounts/{aid}/chats/{chat}/share", status_code=204)

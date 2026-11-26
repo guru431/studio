@@ -478,11 +478,12 @@ function build(view, ctx) {
 
   /* «Повторить» и «Ещё варианты»: тот же кадр, промпт, длительность и качество, seed — новый у каждого
    * (POST /api/videos/<id>/repeat). Новые ролики — в начало ленты; отказ после первого — словами. */
-  async function repeat(item, count, control, after = () => {}) {
+  async function repeat(item, count, control, after = () => {}, frame = null) {
     control.disabled = true;
     error.textContent = '';
     try {
-      const out = await api('POST', `/api/videos/${encodeURIComponent(item.id)}/repeat`, { count });
+      const body = frame ? { count, source: await mcp.fileInput(frame) } : { count };
+      const out = await api('POST', `/api/videos/${encodeURIComponent(item.id)}/repeat`, body);
       kick();
       if (!alive) return;
       admit(out.items);
@@ -497,30 +498,43 @@ function build(view, ctx) {
   }
 
   function repeatButton(item, cls, after) {
-    if (item.mcp_job_id && !item.source_media_id) return null;
     return button(tr("Повторить"), { class: `${cls} card-repeat`, title: tr("Тот же кадр, промпт и параметры, новый seed") },
-      (event) => repeat(item, 1, event.currentTarget, after).catch(() => {}));
+      (event) => {
+        if (item.mcp_job_id && !item.source_media_id) chooseVariants(item, after, true);
+        else repeat(item, 1, event.currentTarget, after).catch(() => {});
+      });
   }
 
   function variantsButton(item, cls, after) {
-    if (item.mcp_job_id && !item.source_media_id) return null;
     return button(tr("Ещё варианты"), { class: `${cls} card-variants` }, () => chooseVariants(item, after));
   }
 
-  function chooseVariants(item, after = () => {}) {
+  function chooseVariants(item, after = () => {}, single = false) {
     const count = el('select', { id: 'video-variants-count', 'aria-label': tr("Сколько вариантов") },
       ...[2, 3, 4].map((n) => el('option', { value: String(n) }, String(n))));
+    const frame = item.mcp_job_id && !item.source_media_id
+      ? el('input', { type: 'file', id: 'video-repeat-source', accept: ACCEPT }) : null;
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
-    const go = button(tr("Сделать"), { class: 'btn btn-accent', id: 'video-variants-go' });
-    const dialog = openDialog(root, { id: 'video-variants-dialog', title: tr("Ещё варианты"),
-      body: [el('p', {}, tr("Тот же кадр, промпт, длительность и качество; seed у каждого ролика — новый.")),
-        el('label', {}, tr("Роликов: "), count), fail], actions: [go] });
+    const go = button(single ? tr("Повторить") : tr("Сделать"), { class: 'btn btn-accent', id: 'video-variants-go', disabled: !!frame });
+    const dialog = openDialog(root, { id: 'video-variants-dialog', title: single ? tr("Повторить") : tr("Ещё варианты"),
+      body: [frame ? el('label', {}, tr("Для повтора выберите исходное фото"), frame)
+        : el('p', {}, tr("Тот же кадр, промпт, длительность и качество; seed у каждого ролика — новый.")),
+      single ? null : el('label', {}, tr("Роликов: "), count), fail], actions: [go], guard: () => !dialog.dataset.busy });
+    frame?.addEventListener('change', () => { go.disabled = !frame.files.length || !!dialog.dataset.busy; });
     go.addEventListener('click', () => {
+      if (frame && !frame.files.length) return;
       fail.textContent = '';
-      repeat(item, Number(count.value), go, () => {
+      dialog.dataset.busy = '1';
+      if (frame) frame.disabled = true;
+      count.disabled = true;
+      repeat(item, single ? 1 : Number(count.value), go, () => {
         dialog.close();
         after();
-      }).catch((err) => { fail.textContent = words(err); });
+      }, frame?.files[0]).catch((err) => { fail.textContent = words(err); }).finally(() => {
+        delete dialog.dataset.busy;
+        if (frame) frame.disabled = false;
+        count.disabled = false;
+      });
     });
   }
 

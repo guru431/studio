@@ -10,7 +10,7 @@ import { answerSteps, chatStatus } from './chat-status.js';
 import { contextWindow } from './chat-context-window.js';
 import { statsDialog } from './chat-stats.js';
 import { filesDialog } from './chat-dialog-files.js';
-import { chatTitle } from './chat-title.js';
+import { chatTime, chatTitle } from './chat-title.js';
 import { MS_MAX, REJECTED, usageBody, usageOf, usageRefused, withSpeed } from './chat-usage.js';
 import { placeSummary } from './chat-summary.js';
 import { chatSkills, humanText, skillMessage } from './chat-skills.js';
@@ -123,6 +123,7 @@ import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { chatList } from './chat-list.js';
 import { chatTabs } from './chat-tabs.js';
+import { findView } from './code-find.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
@@ -171,6 +172,7 @@ const NOT_READY_MS = 3000;       // прямое подключение: опр�
 const SCAN_RUNNING = ['queued', 'working', 'cancelling'];   // как ocr.RUNNING
 const NOT_READY = tr("скан ещё распознаётся — отправлю, когда будет готов");
 const EXTERNAL_NOTE = tr("Запись уйдёт во внешний сервис — выберите модель");
+const MCP_TEXT_CHAT = tr("Ответы через MCP доступны в текстовых диалогах без вложений и баз знаний");
 const WEB_HINT = tr("Задайте ключ Exa в Настройках → Ввод и интернет → Интернет");
 // chats.protected_used: в диалоге сработал «Защищённый источник» MCP — сервер не включит «Интернет» (409 `protected`)
 const PROTECTED_HINT = tr("В этом диалоге сработал защищённый источник — «Интернет» здесь недоступен");
@@ -205,6 +207,7 @@ const tokens = new Map();        // id подключения → { token, url }
  * вкладки; у ответа «Сохранить ещё раз», пока сервер держит его `streaming`. */
 const unsaved = new Map();
 let screen = null;               // смонтированный раздел
+let lastChat = null;             // последний диалог в этой вкладке Студии
 // перезагрузка потеряла бы ответ, который читает сама вкладка (прямое подключение, ещё не принятый ход), и
 // несохранённые ответы — автоматическую (refresh.js) они запрещают; ответ через сервер идёт и без вкладки
 document.addEventListener('studio-before-auto-refresh', (event) => {
@@ -790,10 +793,9 @@ function build(view, ctx) {
   const routedTag = el('span', { class: 'tag server chat-routed', id: 'chat-routed', hidden: true, title: tr("Диалог идёт через Cleaner") },
     el('span', { 'aria-hidden': 'true' }, 'Cleaner'), el('span', { class: 'sr' }, tr("Диалог идёт через Cleaner")));
   // название диалога и «Действия с диалогом» (chat-title.js): те же окна, что в меню строки списка
-  const title = chatTitle({ rename: (item) => renameDialog(item), remove: (item) => deleteDialog(item),
+  const title = chatTitle({ rename: renameDialog, remove: deleteDialog, pinItem,
     said: (text) => { notice.textContent = text; } });
-  const head = el('header', { class: 'head chat-head' }, toggle, title.node, title.actions, title.menu, title.note,
-    el('span', { class: 'grow' }));
+  const head = el('header', { class: 'head chat-head' }, toggle, title.label, title.note);
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -807,8 +809,7 @@ function build(view, ctx) {
   const file = el('input', { type: 'file', id: 'attach', class: 'sr', accept: ACCEPT, multiple: true });
   const clip = el('label', { class: 'icon-btn attach', title: tr("Прикрепить файл") }, icon('clip'),
     el('span', { class: 'sr' }, tr("Прикрепить файл")), file);
-  const send = el('button', { type: 'submit', id: 'send', class: 'send composer-go', 'aria-label': tr("Отправить"),
-    title: tr("Отправить") }, icon('send'));
+  const send = el('button', { type: 'submit', id: 'send', class: 'btn btn-accent composer-go dialog-send' }, tr("Отправить"));
   const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
     title: tr("Остановить"), hidden: true }, icon('stop'));
   // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
@@ -860,6 +861,7 @@ function build(view, ctx) {
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
     dialog: voiceDialog, fold: true });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
+  const attachmentNote = el('p', { class: 'chat-passport muted', id: 'chat-attachment-note', hidden: true }, MCP_TEXT_CHAT);
   const moveNote = el('p', { class: 'chat-passport', id: 'chat-move', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },
     el('span', {}, tr("Правка сообщения. После отправки последующие сообщения будут удалены.")),
@@ -870,7 +872,7 @@ function build(view, ctx) {
   const ring = contextRing(estimateContext, { open: () => ctxWindow.open() });
   // навык над полем (chat-skills.js): меню «/» и чип #skill-chip; выбор и снятие — новая оценка контекста
   const skillHost = el('div', { class: 'chat-skill', id: 'chat-skill', hidden: true });
-  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, skillHost, inputBox.box, inputBox.error,
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, attachmentNote, moveNote, editNote, skillHost, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, effort.chip, effort.menu), send, stop),
     webNote, talkNote);
@@ -884,6 +886,13 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
+  const findHost = el('div', { class: 'chat-find' });
+  scroller.before(findHost);
+  const find = findView(findHost, { scroller, feed, prefix: 'chat', texts: '.msg.user > .bubble, .msg.assistant .md' });
+  const sharing = shareMenu(root, { id: 'chat-share', content: scroller, archive: true,
+    failed: (err) => { notice.textContent = words(err); } });
+  const share = sharing.button;
+  share.hidden = find.button.hidden = true;
   // строка состояния над полем (chat-status.js), окна «Диалог и контекст», «Статистика», «Файлы диалога»
   const ctxWindow = contextWindow(root, { dialog: () => (chatId && chat?.chat.id === chatId ? chat : null),
     connection: () => connName.textContent, estimate: estimateContext,
@@ -894,7 +903,8 @@ function build(view, ctx) {
       return m ? liveOf(m) : null;
     },
     local: () => !!chat?.chat.local, stepNode, stats: () => statsDialog(root),
-    files: showFiles, parts: partsButton({ root }) });
+    files: showFiles, parts: partsButton({ root }),
+    buttons: [share, title.actions, title.menu, find.button, title.pin] });
   form.before(status.bar);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
@@ -922,11 +932,6 @@ function build(view, ctx) {
   let idleTimer = 0;
   // вставка и перетаскивание файлов в поле — тем же путём, что скрепка
   fileDrop(form, (files) => addFiles(files));
-  const sharing = shareMenu(root, { id: 'chat-share', content: scroller, archive: true,
-    failed: (err) => { notice.textContent = words(err); } });
-  const share = sharing.button;
-  share.hidden = true;
-  head.append(share);
   // «Новый диалог с итогом» у отказа по длине (chat-continue.js) — строкой под #chat-error
   const offer = continueOffer({ chatId: () => chatId, openWith, busy: summaryBusy,
     failed: (err) => { notice.textContent = words(err); } });
@@ -942,6 +947,7 @@ function build(view, ctx) {
     const current = chat?.chat.id === chatId ? chat.chat : null;
     if (current?.protected) dropPreviews(root);     // сработал защищённый источник — окна HTML и SVG нет
     share.hidden = !current;
+    find.button.hidden = !current;
     title.set(current);
     status.dialog(current ? chat : null);
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
@@ -969,8 +975,9 @@ function build(view, ctx) {
   }
 
   // список (chat-list.js): метки, звезда, поиск по названиям; вкладки диалогов над лентой (chat-tabs.js)
-  const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : newChat()), info: tabInfo });
-  const listing = chatList(list, { row: listItem, group: groupOf, failed: (err) => { notice.textContent = words(err); },
+  const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : newChat()), info: tabInfo,
+    items: () => listed });
+  const listing = chatList(list, { row: listItem, group: groupOf, pinItem, failed: (err) => { notice.textContent = words(err); },
     loaded: (items) => { listed = items; tabs.sync(items.map((c) => c.id)); } });
   fresh.after(listing.search);
   modelNote.after(tabs.node);
@@ -985,9 +992,19 @@ function build(view, ctx) {
     await listing.reload();                          // удачный ответ — listed и tabs.sync через loaded
   }
 
+  async function pinItem(item) {
+    const out = await api('PATCH', `/api/chats/${item.id}`, { pinned: !item.pinned });
+    if (!alive) return;
+    if (item.id === chat?.chat.id) {
+      chat.chat = { ...chat.chat, pinned: out.pinned };
+      title.set(chat.chat);
+    }
+    await loadList();
+  }
+
   function listItem(item) {
     const link = el('a', { href: `#/chat/${item.id}`, class: 'chat-link', 'aria-current': item.id === chatId ? 'page' : null },
-      item.title || tr("Новый диалог"));
+      el('span', { class: 'chat-link-title' }, item.title || tr("Новый диалог")), chatTime(item.updated));
     const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
     const li = el('div', { class: 'chat-item', 'data-id': item.id }, link, more);
     link.addEventListener('click', () => {
@@ -1093,6 +1110,11 @@ function build(view, ctx) {
 
   function paintChip() {
     const { connection_id: connId, model, mcp_model_sid: sid } = chosen();
+    file.disabled = !!sid;
+    clip.setAttribute('aria-disabled', String(!!sid));
+    clip.title = sid ? MCP_TEXT_CHAT : tr("Прикрепить файл");
+    attachmentNote.hidden = !sid;
+    if (!sid && notice.textContent === MCP_TEXT_CHAT) notice.textContent = '';
     const modelServer = mcpModelServers.find(server => server.id === sid);
     // ни подключения, ни модели (раздел без модели, подключение диалога удалено) — «по умолчанию» нечему
     const none = connId === null && !model;
@@ -1540,6 +1562,10 @@ function build(view, ctx) {
   /* файлы из скрепки, буфера и перетаскивания (chat-drop.js): звук и видео — в диалог для MCP, если он их примет;
      не подходящие — словами у чипа сразу */
   function addFiles(picked) {
+    if (chosen().mcp_model_sid) {
+      notice.textContent = MCP_TEXT_CHAT;
+      return;
+    }
     const media = mediaState();
     if (media && picked.some(isMedia)) pickMedia(picked.filter(isMedia), media);
     for (const f of media ? picked.filter((x) => !isMedia(x)) : picked) {
@@ -2525,12 +2551,13 @@ function build(view, ctx) {
     scrollDown(false);
   }
 
-  async function open(id) {
+  async function open(id, restore = false) {
     panel(false);
     models.close();
     roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
+    find.reset();
     dropPreviews(root);
     root.querySelector('#kb-source-dialog[open]')?.close();
     quote.clear();
@@ -2540,6 +2567,7 @@ function build(view, ctx) {
     if (talking) talking();                          // «Разговор» — у своего диалога, другой его останавливает
     const mine = ++opened;
     chatId = id;
+    lastChat = id;
     dialogDrafts.enter(id);
     queue.show(id);
     found = null;                                    // ?m= нового адреса ставит query() следом
@@ -2584,7 +2612,7 @@ function build(view, ctx) {
     feed.replaceChildren(el('p', { class: 'muted feed-note' }, tr("Загружаю диалог…")));
     try {
       const data = await api('GET', `/api/chats/${encodeURIComponent(id)}`);
-      if (mine !== opened) return;
+      if (!alive || mine !== opened) return;
       chat = settle(data);
       shareContext();
       if (prefill?.id === id) {                      // openWith: текст — в поле открытого диалога
@@ -2595,7 +2623,12 @@ function build(view, ctx) {
       }
     } catch (err) {
       if (prefill?.id === id) prefill = null;       // текст openWith не ждёт следующего открытия этого диалога
-      if (mine !== opened) return;
+      if (!alive || mine !== opened) return;
+      if (restore && err.status === 404) {
+        history.replaceState(history.state, '', '#/chat');
+        open(null);
+        return;
+      }
       feed.replaceChildren(el('p', { class: 'error feed-note' }, words(err)));
       needsReload = err.status !== 404;
       schedulePoll();
@@ -2804,7 +2837,10 @@ function build(view, ctx) {
       draftRole = was.role || null;
       draftEffort = was.effort || null;
       draftKbs = knew;
-      if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
+      if (alive && location.hash === `#/chat/${id}`) {
+        lastChat = null;
+        history.replaceState(history.state, '', '#/chat');
+      }
       shareContext();
       feed.replaceChildren(emptyNote());
       syncBusy();
@@ -2840,7 +2876,10 @@ function build(view, ctx) {
     shareContext();
     draft = null;
     // ушли из раздела или в другой диалог, пока создавался этот, — адрес не трогать: ход дочитает «В работе»
-    if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
+    if (alive && location.hash === '#/chat') {
+      lastChat = created.id;
+      history.replaceState(history.state, '', `#/chat/${created.id}`);
+    }
     loadList();
     const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
     if (created.mcp_model_sid) {
@@ -2888,7 +2927,7 @@ function build(view, ctx) {
       throw new Error(tr("Выберите модель"));
     }
     if (chosen().mcp_model_sid && atts.length) {
-      throw new Error(tr("Ответы через MCP доступны в текстовых диалогах без вложений и баз знаний"));
+      throw new Error(MCP_TEXT_CHAT);
     }
     await ensureChat(made);
     const id = chatId;
@@ -3227,6 +3266,8 @@ function build(view, ctx) {
       if (chatId !== undefined) dialogDrafts.leave(chatId);   // черновик — у диалога (chat-drafts.js), не у раздела
       queue.unmount();
       nav.unmount();
+      find.unmount();
+      title.unmount();
       feedWatch.disconnect();
       clearTimeout(idleTimer);
       ring.hide();
@@ -3259,7 +3300,9 @@ function build(view, ctx) {
 
 export function mount(view, ctx) {
   screen = build(view, ctx);
-  screen.open(ctx.id);
+  const restore = !ctx.id && !ctx.query?.size && lastChat !== null;
+  if (restore) history.replaceState(history.state, '', `#/chat/${encodeURIComponent(lastChat)}`);
+  screen.open(restore ? lastChat : ctx.id, restore);
   screen.query(ctx.query);
 }
 

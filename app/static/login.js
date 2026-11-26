@@ -8,6 +8,7 @@
   try {
     sessionStorage.removeItem('studio-agent-drafts');
     sessionStorage.removeItem('studio-chat-drafts');
+    sessionStorage.removeItem('studio-owui-drafts');
   } catch (e) { /* хранилище закрыто — черновиков нет */ }
   try { localStorage.removeItem('studio-chat-tabs'); } catch (e) { /* хранилище закрыто — вкладок нет */ }
   // страница входа — только без сессии (с ней GET /login уводит в студию): вкладки студии этого браузера — на вход

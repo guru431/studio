@@ -57,8 +57,9 @@
   /* вырез iPhone в ландшафте; тест подставляет сюда числа — Playwright выреза не эмулирует */
   --safe-left: env(safe-area-inset-left, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --rail-w: calc(84px + var(--safe-left)); --tabs-h: 0px;
-  /* телефон: четыре значка справа сверху — от края экрана до левого края обновления */
-  --fixed-icons-w: calc(138px + var(--h-icon));
+  /* телефон: служебные значки справа сверху — от края экрана до левого края обновления */
+  --fixed-icon-step: 42px;
+  --fixed-icons-w: calc(12px + 4 * var(--fixed-icon-step) + var(--h-icon));
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
 
@@ -228,11 +229,11 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .view-loading { margin: auto; color: var(--text-2); }
 /* фокус переходов оболочки (app.js announce) — на заголовке раздела, без рамки: это не элемент управления */
 #view:focus, #view h1[tabindex="-1"]:focus { outline: none; }
-#avatar, .jobs-toggle, .search-toggle, .refresh-toggle { position: relative; width: var(--h-icon); height: var(--h-icon); border-radius: 50%; border: 1px solid var(--line); background: var(--surface-3);
+#avatar, .jobs-toggle, .search-toggle, .myfiles-toggle, .refresh-toggle { position: relative; width: var(--h-icon); height: var(--h-icon); border-radius: 50%; border: 1px solid var(--line); background: var(--surface-3);
   font-weight: 600; font-size:var(--fs-sm); display: grid; place-items: center; padding: 0; }
 #avatar[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* «В работе» (jobs.js): число идущих и точка готового, панель — выпадающая у полосы */
-.jobs-toggle, .search-toggle, .refresh-toggle { color: var(--text-2); }
+.jobs-toggle, .search-toggle, .myfiles-toggle, .refresh-toggle { color: var(--text-2); }
 @media (hover: hover) { .jobs-toggle:hover { color: var(--text-1); } }
 .jobs-toggle svg.ico { width: 18px; height: 18px; }
 .jobs-count { position: absolute; top: -5px; right: -7px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-control);
@@ -265,9 +266,9 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .jobs-empty { padding: var(--space-2) var(--space-4); }
 .jobs-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* лупа «Поиска» (search.js) — над «В работе» */
-.search-toggle[aria-current="page"] { color: var(--text-1); border-color: var(--accent); }
-@media (hover: hover) { .search-toggle:hover, .refresh-toggle:hover { color: var(--text-1); } }
-.search-toggle svg.ico, .refresh-toggle svg.ico { width: 18px; height: 18px; }
+:is(.search-toggle, .myfiles-toggle)[aria-current="page"] { color: var(--text-1); border-color: var(--accent); }
+@media (hover: hover) { :is(.search-toggle, .myfiles-toggle, .refresh-toggle):hover { color: var(--text-1); } }
+:is(.search-toggle, .myfiles-toggle, .refresh-toggle) svg.ico { width: 18px; height: 18px; }
 #view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; padding-bottom: var(--tabs-h);
   padding-right: var(--safe-right); }
 /* только экран: в печати (@media print) #view раскрывается во всю ленту */
@@ -384,9 +385,13 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
   #rail .tab.group-start::before { display: none; }
   #rail .tab[aria-current="page"], #rail .mobile-more[aria-current="page"] { background: none; box-shadow: none; color: var(--accent); }
   #avatar { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
-  .jobs-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
-  .search-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
-  .refresh-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 138px; }
+  :is(.jobs-toggle, .myfiles-toggle, .search-toggle, .refresh-toggle) {
+    position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px));
+  }
+  .jobs-toggle { right: calc(12px + var(--fixed-icon-step)); }
+  .myfiles-toggle { right: calc(12px + 2 * var(--fixed-icon-step)); }
+  .search-toggle { right: calc(12px + 3 * var(--fixed-icon-step)); }
+  .refresh-toggle { right: calc(12px + 4 * var(--fixed-icon-step)); }
   /* плашка — на верхней кромке нижних вкладок, между значками: поле ввода раздела не закрывает */
   #rail .rec-dot { position: fixed; z-index: var(--z-nav-icons); left: 50%; bottom: calc(var(--tabs-h) - 10px); transform: translateX(-50%);
     width: auto; flex-direction: row; gap: var(--space-2); padding: 1px var(--space-4); line-height: 1.4;
@@ -396,7 +401,7 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
     border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .jobs-panel::backdrop { background: var(--backdrop); }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
-  /* справа сверху четыре значка (обновление, поиск, «В работе», профиль) и зазор 12 */
+  /* справа сверху служебные значки и зазор */
   .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: calc(var(--fixed-icons-w) + var(--space-6)); }
   /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от значков — вторая строка */
   [data-selecting] .head { flex-wrap: wrap; row-gap: var(--space-3); }
@@ -404,6 +409,7 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
   :is(.photo, .video) .head h1 { flex-shrink: 0; }
   /* На самых узких экранах заголовок занимает первую строку, а кнопка вида идёт без стрелки. */
   @media (max-width: 360px) {
+    :root { --fixed-icon-step: 36px; }
     .head { gap: var(--space-3); padding-right: calc(var(--fixed-icons-w) + var(--space-4)); }
     .head .view-toggle { width: var(--h-icon); }
     .head .view-toggle svg.caret { display: none; }
@@ -456,6 +462,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .composer-bar { flex: none; display: flex; align-items: flex-end; gap: var(--space-3); }
 .composer-opts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
 .btn.composer-go { height: var(--h-icon); min-height: var(--h-icon); padding: 0 var(--space-7); }
+.dialog-send { flex: none; white-space: nowrap; }
 @media (max-width: 760px) {
   .composer { width: calc(100% - 2 * var(--space-6)); margin: 0 var(--space-6) var(--space-6); }
 }
@@ -608,6 +615,19 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tr-name { max-width: 100%; font-size:var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tr-state { color: var(--text-2); font-size:var(--fs-xs); }
 .tr-view { width: 100%; max-width: 820px; margin: 0 auto; padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-6); }
+@media screen {
+  .transcribe > .split-main { overflow: hidden; }
+  .tr-content { flex: 1; min-height: 0; overflow: auto; }
+  .transcribe > .split-main > .mcp-run { flex: 0 1 auto; }
+}
+@media (max-width: 760px) { :is(.transcribe, .ocr) .head { flex-wrap: wrap; } }
+@media (max-width: 400px) {
+  :is(.transcribe, .ocr) .head { margin-top: calc(var(--h-icon) + var(--space-3));
+    padding-right: var(--space-7); }
+}
+.tr-composer:not(:has(> :not([hidden]))) { display: none; }
+.tr-composer :is(.tr-rec, .tr-sending) { margin: 0; }
+.tr-composer .ctl-chip > svg.ico { width: 1lh; height: 1lh; }
 .tr-empty { font-size: var(--empty-font); }   /* пустой вид «Расшифровки», «Сканов», «Озвучки» */
 .tr-error { margin: var(--space-4) var(--space-7) 0; }
 .tr-error:empty { display: none; }
@@ -673,6 +693,11 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .sp-voice-field:focus-within { border-color: var(--focus); }
 .tr-text { overflow-wrap: anywhere; line-height: 1.5; }
 /* «Сканы» (ocr.js): листалка и две колонки — картинка страницы и её текст; на телефоне — одна */
+.ocr .split-main { overflow: hidden; }
+.ocr-documents { flex: 1; min-height: 0; overflow: auto; }
+.ocr .ocr-composer .split-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); padding: 0; border: 0; }
+.ocr-composer :is(#ocr-mcp-hint, #ocr-progress) { margin: 0; }
+#ocr-progress:empty { display: none; }
 .ocr-view { width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-6); }
 .ocr-meta { margin: 0; }
 .ocr-failed { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); margin: 0; color: var(--warn); }
@@ -971,6 +996,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 @media (hover: hover) { .chat-item:hover { background: var(--surface-2); } }
 .chat-link { flex: 1; min-width: 0; padding: 7px var(--space-2) 7px 9px; color: var(--text-1); text-decoration: none; font-size:var(--fs-md);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-link-title, .chat-updated { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-updated { color: var(--text-2); font-size: var(--fs-xs); font-weight: normal; }
 .chat-item:has(.chat-link[aria-current="page"]) { background: var(--surface-1); }
 .chat-more { opacity: 0; }
 .chat-item:focus-within .chat-more, .chat-item:has(.chat-menu:popover-open) .chat-more,
@@ -985,15 +1012,15 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .chat-mark[data-mark="unread"] { background: var(--accent); }
 .chat-mark[data-mark="draft"] { width: auto; height: auto; border-radius: 0; color: var(--accent); font-size: var(--fs-xs); line-height: 1; }
 .chat-mark[data-mark="draft"]::before { content: '✎'; }
-.chat-pin { opacity: 0; }
-.chat-pin[aria-pressed="true"] { opacity: 1; color: var(--accent); }
-.chat-pin[aria-pressed="true"] svg { fill: currentColor; }
-.chat-item:focus-within .chat-pin, .chat-item:has(.chat-menu:popover-open) .chat-pin,
-.chat-item:has([aria-current="page"]) .chat-pin { opacity: 1; }
-@media (hover: hover) { .chat-item:hover .chat-pin { opacity: 1; } }
+:is(.chat-pin, .chat-title-pin)[aria-pressed="true"] { color: var(--accent); }
+:is(.chat-pin, .chat-title-pin)[aria-pressed="true"] svg { fill: currentColor; }
 /* вкладки диалогов (chat-tabs.js) над лентой: вид — ряд «Агентов», листается внутри себя */
 .chat-tabs { flex: none; min-width: 0; }
-.chat-tabs .code-tabbar { border-top: 0; border-bottom: 1px solid var(--line); }
+.chat-tab-menu { width: min(360px, calc(100 * var(--vw) - 24px)); }
+.chat-tab-menu:popover-open { display: grid; gap: var(--space-3); }
+.chat-tab-menu .input { width: 100%; }
+.chat-tab-choices { display: grid; gap: var(--space-2); }
+.chat-tab-choices .code-chat-link { display: grid; gap: var(--space-1); }
 .chats-backdrop, .icon-btn.chats-toggle { display: none; }
 
 .icon-btn { position: relative; display: inline-grid; place-items: center; width: var(--h-icon); height: var(--h-icon); flex: none; padding: 0;
@@ -1003,6 +1030,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 
 .chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chat-head { gap: var(--space-4); }
+.chat-heading { flex: 1; min-width: 0; }
 .chat-head h1 { flex: 0 1 auto; min-width: 0; }
 .chat-title-actions[hidden], .chat-title-note[hidden] { display: none; }
 .chat-title-note { flex: none; white-space: nowrap; }
@@ -1248,7 +1276,6 @@ video.msg-file-media { max-height: 320px; }
   .chats-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .icon-btn.chats-toggle { display: inline-grid; margin-left: -6px; }
   .chat-more { opacity: 1; }
-  .chat-pin { opacity: 1; }
   .feed { padding: var(--space-7); }
   .msg.user { max-width: 92%; }
   .msg.assistant { gap: var(--space-5); }
@@ -1762,14 +1789,52 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .lock-pin-pad #lock-pin-back { background: none; border-color: transparent; font-size:var(--fs-3xl); }
 .lock-pin-pad #lock-pin-ok { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-size:var(--fs-xl);
   font-weight: 600; }
-/* «Справка» (help.js): выбор руководства, разделы руководства Studio кнопками, текст — .md */
-.help-page { gap: var(--space-5); }
+/* «Справка»: меню тем и одна статья. */
+.help-page { width: min(100%, 1140px); margin: 0 auto; padding: var(--space-7); display: grid;
+  grid-template-columns: minmax(190px, 245px) minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+.help-sidebar { position: sticky; top: var(--space-5); min-width: 0; }
+.help-menu { max-height: calc(100 * var(--dvh) - var(--head-h) - 2 * var(--space-7)); overflow: auto; }
+.help-toggle { display: none; }
+.help-group + .help-group, .help-sources { margin-top: var(--space-6); }
+.help-group-label { margin: 0 0 var(--space-2); padding: 0 var(--space-4); color: var(--text-2);
+  font-size: var(--fs-xs); font-weight: 600; }
+.help-topic { display: flex; gap: var(--space-4); align-items: center; min-height: var(--h-icon);
+  padding: var(--space-3) var(--space-4); border-radius: var(--r-control); color: var(--text-1); text-decoration: none; }
+.help-topic .ico { flex: none; width: 16px; height: 16px; color: var(--text-2); }
+.help-topic[aria-current="page"] { background: var(--accent-soft); font-weight: 600; }
+.help-topic[aria-current="page"] .ico { color: var(--accent); }
+@media (hover: hover) {
+  .help-topic:not([aria-current="page"]):hover, .help-card:hover { background: var(--surface-2); }
+}
+.help-sources { display: grid; gap: var(--space-2); }
+.help-sources .input { width: 100%; }
+.help-text { min-width: 0; padding: clamp(16px, 3vw, 36px); border-radius: var(--r-menu);
+  border: 1px solid var(--line); background: var(--surface-1); }
+.help-text > h2 { margin: 0 0 var(--space-7); font-size: var(--fs-2xl); line-height: 1.2; }
+.help-text > h2:focus { outline: none; }
+.help-prose { max-width: 69ch; line-height: 1.6; }
+.help-prose h3 { margin-top: var(--space-7); padding-top: var(--space-6); border-top: 1px solid var(--line); }
+.help-prose h3:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.help-prose li + li { margin-top: var(--space-3); }
+.help-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-4); margin-top: var(--space-7); }
+.help-card { min-width: 0; display: flex; align-items: center; gap: var(--space-4); padding: var(--space-6);
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-0);
+  color: var(--text-1); font-weight: 600; text-decoration: none; }
+.help-card .ico { flex: none; color: var(--accent); }
+.help-card .ico:last-child { margin-left: auto; color: var(--text-2); }
 .help-page #help-status:empty { display: none; }
-.help-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
-.help-chips .chip { white-space: normal; text-align: left; }
-.help-text h2 { scroll-margin-top: var(--space-5); }
+@media (max-width: 760px) {
+  .help-page { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); padding: var(--space-5) var(--space-6); }
+  .help-sidebar { position: static; }
+  .help-toggle { display: flex; width: 100%; justify-content: flex-start; }
+  .help-toggle .ico:last-child { margin-left: auto; }
+  .help-toggle[aria-expanded="false"] + .help-menu { display: none; }
+  .help-menu { max-height: 50dvh; padding: var(--space-4); margin-top: var(--space-3);
+    background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-menu); }
+}
 /* «Корзина» (trash.js): записи по разделам — строки списка компьютеров (.agents/.session) */
-.trash-page { gap: var(--space-5); }
+.trash-page { display: flex; flex-direction: column; gap: var(--space-5); }
 .trash-page #trash-status:empty { display: none; }
 .trash-group h2 { margin: var(--space-5) 0 var(--space-4); font-size: var(--fs-md); font-weight: 600; }
 /* «Хранилище» (settings.js): самые тяжёлые записи */
@@ -2008,9 +2073,19 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-pin .error { margin: 0; }
 .code-pin .error:empty { display: none; }
 /* «Скачать мост» (ui.js agentDownload): здесь — пустой раздел без компьютеров, в «Настройках» — блок «Компьютеры» */
-.agent-download { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); min-width: 0; }
+.agent-download { display: grid; gap: var(--space-5); min-width: 0; }
 .agent-download p { margin: 0; overflow-wrap: anywhere; }
-.empty .agent-download { align-items: center; }
+#code-empty { width: 100%; max-width: 500px; }
+#code-empty .agent-download { width: 100%; text-align: left; }
+.agent-install-platforms { display: grid; gap: var(--space-2); }
+.agent-install-platforms > .btn { justify-content: center; width: 100%; min-width: 0; white-space: normal; text-align: center; }
+.agent-install-origin-row, .agent-install-result { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3); align-items: center; padding: var(--space-3); border: 1px solid var(--line);
+  border-radius: var(--r-control); background: var(--surface-1); }
+.agent-install-origin-row code, .agent-install-result code { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .agent-install-origin-row, .agent-install-result { grid-template-columns: minmax(0, 1fr); }
+}
 /* верх правой части: плашка пути — одна строка (сжимается сначала имя компьютера), справа статус Git и «Git · Файлы · Доступ · Чат» */
 .code-top { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-0); border-bottom: 1px solid var(--line); }
 .code-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-6); min-width: 0; min-height: var(--head-h); padding: var(--space-4) var(--space-7); }
@@ -2133,7 +2208,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   .code-ws.panel-open .code-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
   .code-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .code-panel-toggle { display: inline-grid; margin-left: -6px; }
-  /* справа сверху четыре значка («Обновить», поиск, «В работе», профиль): плашка кончается там же, где .head (без своего отступа 16) */
+  /* плашка кончается слева от служебных значков, как .head */
   .code-head { flex-wrap: wrap; row-gap: var(--space-3); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: var(--space-7); }
   .code-location { display: flex; flex-basis: 100%; align-items: center; gap: var(--space-5); min-width: 0; padding-right: calc(var(--fixed-icons-w) - 4px); }
   .code-place { flex: 0 1 auto; max-width: 100%; }
@@ -2156,6 +2231,8 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-chat-scroll > * { flex: none; }
 /* поиск по открытому чату (code-find.js) */
 .code-find-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); min-width: 0; }
+.chat-find { flex: none; }
+.chat-find .code-find-bar { margin: 0 var(--space-7) var(--space-3); }
 .code-find-input { flex: 1 1 10em; min-width: 0; }
 .code-find-count { color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
 ::highlight(code-find) { background-color: light-dark(#fde68a, #5c4813); color: var(--text-1); }
@@ -2611,7 +2688,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
  * область касания расширяет прозрачный ::after; у .card-save его нет: в таблице она static и накрыла бы строку */
 @media (pointer: coarse) {
   :is(.btn-sm, .btn-link, .msg-actions .btn, .code-agent-update, .code-agent-info, .code-agent-desktop, .code-agent-terminal) { position: relative; }
-  :is(.icon-btn, .code-tab-close, .btn-sm, .btn-link, .msg-actions .btn, #avatar, .jobs-toggle, .search-toggle, .refresh-toggle, .copy,
+  :is(.icon-btn, .code-tab-close, .btn-sm, .btn-link, .msg-actions .btn, #avatar, .jobs-toggle, .search-toggle, .myfiles-toggle, .refresh-toggle, .copy,
       .code-agent-update, .code-agent-info, .code-agent-desktop, .code-agent-terminal)::after {
     content: ''; position: absolute; inset: min(0px, calc(50% - var(--h-touch) / 2 / var(--ui-scale, 1))); }
 }
@@ -2677,7 +2754,7 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .owui-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
 .owui-panel { width: calc(260px * var(--font-scale, 1)); flex: none; position: sticky; top: 0; height: calc(100 * var(--dvh)); align-self: flex-start;
   display: flex; flex-direction: column; background: var(--surface-side); border-right: 1px solid var(--line); }
-.owui-accounts { flex: none; max-height: 40%; overflow-y: auto; padding: var(--space-5) var(--space-4) var(--space-4); border-bottom: 1px solid var(--line); }
+.owui-accounts { flex: none; max-height: 40%; overflow-y: auto; padding: var(--space-5) var(--space-5) var(--space-4); border-bottom: 1px solid var(--line); }
 .owui-account-list, .owui-chats, .owui-folders, .owui-folder-body { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .owui-account-list { gap: var(--space-1); }
 .owui-account-row { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
@@ -2691,12 +2768,12 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .owui-account-label, .owui-account-host, .owui-chat-title, .owui-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .owui-account-host { color: var(--text-2); font-size: var(--fs-2xs); font-weight: 400; }
 .owui-account-more { flex: none; width: 30px; height: 30px; }
-.owui-connect { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.owui-connect { display: flex; justify-content: flex-start; gap: var(--space-3); width: 100%; margin-top: var(--space-3); }
 .owui-connect .ico, .owui-new-chat .ico, .owui-folder .ico { width: 16px; height: 16px; flex: none; }
-.owui-tree { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-3); }
-.owui-tree-tools { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); }
-.owui-search { flex: 1; min-width: 0; }
-.owui-new-chat { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); text-decoration: none; }
+.owui-tree { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-5); }
+.owui-tree-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin-bottom: var(--space-6); }
+.owui-search { width: 100%; min-width: 0; }
+.owui-new-chat { display: flex; justify-content: flex-start; gap: var(--space-3); width: 100%; text-decoration: none; }
 .owui-panel-status { margin: var(--space-2) var(--space-3); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .owui-panel-status:empty { display: none; }
 .owui-group { margin-bottom: var(--space-5); }
@@ -2705,7 +2782,10 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
   border: 0; border-radius: var(--r-control); background: none; color: var(--text-1); text-align: left; text-decoration: none;
   font-size: var(--fs-sm); line-height: 1.3; cursor: pointer; }
 .owui-chat[aria-current="page"] { background: var(--surface-1); font-weight: 600; }
-.owui-chat-title, .owui-folder-name { flex: 1; }
+.owui-chat-row > .owui-chat { flex: 1; width: auto; }
+.owui-chat-name { flex: 1; min-width: 0; }
+.owui-folder-name { flex: 1; }
+.owui-chat-title { display: block; }
 .owui-chat-active { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 /* «ждёт решения» — акцентом, как «ждёт ответа» у «Агентов»: ответ ждёт владельца */
 .owui-chat-pending { flex: none; padding: 0 var(--space-2); border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent);
@@ -2783,4 +2863,5 @@ details.owui-tool[open] { flex-basis: 100%; }
   .owui-feed-list { padding: var(--space-5) var(--space-6); }
   .owui-queued, .owui-chat-error, .owui-cleaner-note { margin: 0 var(--space-6); }
 }
+.chat-history .owui-feed-list { padding-right: calc(30px + var(--space-6)); }
 @media (prefers-reduced-motion: reduce) { .owui-panel { transition: none !important; } }

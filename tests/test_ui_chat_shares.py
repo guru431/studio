@@ -10,6 +10,7 @@ import db
 from fake_bridge import pid
 from test_ui_browser import CODE_CHAT_A, code_free_machine, code_online, code_session, live
 from test_ui_chat_focus import focus_browser
+from test_ui_owui import toolbar_button
 from test_ui_webkit import pw
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -62,7 +63,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             pw.expect(page.locator('#chat-share')).to_be_hidden()
             pending.pop().continue_()
             page.unroute(chat_url)
-            page.locator('#chat-share').click()
+            toolbar_button(page, '#chat-share', 'chat').click()
             pw.expect(page.locator('#chat-share-menu:popover-open')).to_be_visible()
             page.locator('#chat-share-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')
@@ -87,7 +88,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             page.locator('#chat-share-copy').click()
             assert page.evaluate('window.copiedShare') == url
             page.locator('#chat-share-dialog .dialog-close').click()
-            page.locator('#chat-share').click()
+            toolbar_button(page, '#chat-share', 'chat').click()
             page.locator('#chat-share-menu [data-action="link"]').click()
             pw.expect(link).to_have_value(url)
             pw.expect(page.locator('#chat-share-pin')).to_have_value('')
@@ -140,7 +141,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
                 pw.expect(reader.locator('#shared-chat')).to_be_visible()
                 # владелец видит открытия и неверные PIN
                 page.locator('#chat-share-dialog .dialog-close').click()
-                page.locator('#chat-share').click()
+                toolbar_button(page, '#chat-share', 'chat').click()
                 page.locator('#chat-share-menu [data-action="link"]').click()
                 facts = page.locator('#chat-share-facts')
                 pw.expect(facts).to_contain_text('открыта 3 раза, последний')
@@ -224,7 +225,7 @@ def test_protected_chat_share_and_export_are_disabled_with_the_reason(focus_brow
             page.set_default_timeout(10000)
             page.goto(live.url + '/#/chat/' + cid)
             pw.expect(page.get_by_text('Данные источника')).to_be_visible()
-            trigger = page.locator('#chat-share')
+            trigger = toolbar_button(page, '#chat-share', 'chat')
             pw.expect(trigger).to_be_visible()
             pw.expect(trigger).to_be_disabled()
             pw.expect(trigger).to_have_attribute('title', reason)
@@ -320,7 +321,7 @@ def test_chat_menu_downloads_zip_archive(focus_browser, live):
             page.add_init_script("HTMLAnchorElement.prototype.click = function () {"
                                  " (window.clicked ||= []).push([this.getAttribute('href'), this.hasAttribute('download')]); }")
             page.goto(live.url + '/#/chat/' + cid)
-            page.locator('#chat-share').click()
+            toolbar_button(page, '#chat-share', 'chat').click()
             menu = page.locator('#chat-share-menu')
             pw.expect(menu.locator('[data-action="zip"]')).to_be_visible()
             assert menu.locator('[role="menuitem"]').all_text_contents() == [

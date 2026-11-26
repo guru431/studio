@@ -48,7 +48,9 @@ const POLL_MS = 3000;
 const PAGE = 60;
 const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю загрузку
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
-const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const ACCEPT = ['application/pdf', '.pdf', ...IMAGE_TYPES].join(',');
+const MCP_PAGE = tr("Для MCP выберите изображение одной страницы");
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx'], ['pdf', tr("PDF со слоем")]];
 // таблицы документа (`tables` ответа) — книгой и CSV: одна таблица — файл, несколько — ZIP
@@ -116,31 +118,35 @@ function build(view, ctx) {
   const { select, refresh } = docs;
 
   const input = el('input', { type: 'file', id: 'ocr-file', class: 'sr', accept: ACCEPT, multiple: true });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"), input);
+  const add = el('div', { id: 'ocr-add', hidden: true }, input);
   const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Документы") });
-  const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
+  const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Документы"),
     'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Документы"));
-  const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'ocr-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"));
+  const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'ocr-upload' }, icon('plus'), tr("Загрузить скан"));
   upload.addEventListener('click', () => input.click());
   const mcp = sectionMcp('ocr', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
-  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.ocr);
   // движок загрузки — когда отмеченных пар раздела больше одной; иначе — умолчание раздела на сервере.
-  // Выбор «как у Агентов» (picker.js) — в ряду над видом, после выбора инструмента MCP
+  // Выбор «как у Агентов» (picker.js) — рядом с загрузкой, после выбора инструмента MCP.
   const engine = el('select', { id: 'ocr-model' });
-  const head = el('header', { class: 'head' }, title);
+  const head = el('header', { class: 'head' }, title, toggle);
+  const mcpHint = el('p', { class: 'muted small', id: 'ocr-mcp-hint', hidden: true }, MCP_PAGE);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, mcp.output, body);
+  const pane = el('div', { class: 'ocr-documents' }, nativeHint, mcp.output, body);
+  const controls = el('div', { class: 'split-toolbar' }, mcp.control, upload, add);
+  const composer = el('footer', { id: 'ocr-composer', class: 'composer ocr-composer', hidden: !!ctx.hint }, mcpHint, progress, controls);
+  const main = el('section', { class: 'split-main' }, head, pane, error, composer);
   const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
   view.append(root);
   const enginePick = picker(root, tr("Модель распознавания"), engine);
   enginePick.wrap.hidden = true;
   mcp.control.after(enginePick.wrap);
+  enginePick.wrap.after(mcp.fields);
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -646,24 +652,19 @@ function build(view, ctx) {
   function paintEngine() {
     enginePick.wrap.hidden = engines.length < 2 || !!mcp.tool;
     enginePick.sync();
-    // ряд с выбором виден и на компьютере: «Загрузить скан» тогда в нём, а не над списком
-    add.hidden = !mcp.control.hidden || !enginePick.wrap.hidden || !!ctx.hint;
   }
 
   /* загрузка */
   function paintMcp() {
     const active = !!mcp.tool;
     paintEngine();
-    upload.hidden = !!ctx.hint && !active;
-    if (nativeHint && active) {
-      nativeHint.hidden = true;
-      if (!upload.parentNode) {
-        aside.prepend(add, progress);
-        toolbar.append(upload);
-      }
-    }
+    composer.hidden = !!ctx.hint && !active;
+    if (nativeHint) nativeHint.hidden = active;
     input.multiple = !active;
-    input.accept = active ? 'image/png,image/jpeg,image/webp' : ACCEPT;
+    input.accept = active ? IMAGE_TYPES.join(',') : ACCEPT;
+    mcpHint.hidden = !active;
+    if (active) upload.setAttribute('aria-describedby', mcpHint.id);
+    else upload.removeAttribute('aria-describedby');
   }
 
   function paintBusy() {
@@ -777,8 +778,10 @@ function build(view, ctx) {
     if (!files.length || input.disabled) return;
     error.textContent = '';
     if (!mcp.tool) send(files);
-    else if (files.length === 1) mcp.run({}, { files: { artifact_id: files[0] } });
-    else error.textContent = tr("Для MCP выберите изображение одной страницы");
+    else if (files.length !== 1) error.textContent = MCP_PAGE;
+    else if (files[0].type ? !IMAGE_TYPES.includes(files[0].type) : !/\.(png|jpe?g|webp)$/i.test(files[0].name)) {
+      error.textContent = tr("Выберите фото PNG, JPEG или WebP");
+    } else mcp.run({}, { files: { artifact_id: files[0] } });
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));

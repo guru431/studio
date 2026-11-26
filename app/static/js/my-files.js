@@ -1,5 +1,5 @@
 import { tr } from './i18n.js';
-/* «Мои файлы» (#/myfiles, меню аватара; my_files.py): личная папка учётки на серверах MCP с контрактом `studio/files`.
+/* «Мои файлы» (#/myfiles, кнопка рельса; my_files.py): личная папка учётки на серверах MCP с контрактом `studio/files`.
  * Вкладка на сервер (GET /api/my-files/servers), папки и путь, загрузка кусками (PUT .../upload: кусок — `chunk` сервера,
  * не больше my_files.CHUNK; отказ связи — повтор куска, 409 `gap` — продолжить с принятого `size`), скачивание и ZIP
  * по адресу с ticket (докачка браузером — Range), удаление — в корзину сервера, «Корзина сервера» с «Вернуть».
@@ -9,6 +9,7 @@ import { api } from './api.js';
 import { sectionName } from './sections-meta.js';
 import { sizeText } from './settings.js';
 import { dateTime } from './time.js';
+import { renderTrash } from './trash.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const RETRIES = 3;                           // попыток одного куска при обрыве связи
@@ -27,11 +28,13 @@ function fetchFile(url, name) {
   link.remove();
 }
 
-export function mount(view) {
+export function mount(view, ctx) {
   controller = new AbortController();
   const { signal } = controller;
   const host = view;
-  const state = { servers: [], sid: null, path: '', trash: false };
+  const trash = ctx.query.has('trash');
+  const studio = { sid: 0, name: tr("Записи Studio"), local: true };
+  const state = { servers: trash ? [studio] : [], sid: trash ? 0 : null, path: '' };
   const note = el('p', { id: 'myfiles-status', class: 'status', role: 'status', 'aria-live': 'polite' });
   const tabs = el('div', { class: 'row myfiles-tabs', id: 'myfiles-tabs', role: 'tablist', 'aria-label': tr("Хранилища") });
   const crumbs = el('nav', { class: 'row myfiles-path', id: 'myfiles-path', 'aria-label': tr("Путь") });
@@ -39,22 +42,24 @@ export function mount(view) {
   const toolbar = el('div', { class: 'row myfiles-actions' },
     button(tr("Загрузить"), { class: 'btn btn-accent', id: 'myfiles-upload' }, () => picker.click()),
     button(tr("Новая папка"), { class: 'btn', id: 'myfiles-mkdir' }, () => mkdirDialog()),
-    button(tr("ZIP папки"), { class: 'btn', id: 'myfiles-zip' }, () => zip(state.path)),
-    button(tr("Корзина сервера"), { class: 'btn', id: 'myfiles-trash', 'aria-pressed': 'false' }, () => {
-      state.trash = !state.trash;
-      load();
-    }), picker);
+    button(tr("ZIP папки"), { class: 'btn', id: 'myfiles-zip' }, () => zip(state.path)), picker);
   const list = el('ul', { class: 'agents myfiles-list', id: 'myfiles-list' });
   const more = button(tr("Ещё"), { class: 'btn btn-sm', hidden: true });
   let loadVersion = 0;
   let next = null;
   const fresh = el('div', { class: 'myfiles-fresh', id: 'myfiles-link', hidden: true });
   const links = el('ul', { class: 'agents', id: 'myfiles-links' });
-  const browser = el('div', { id: 'myfiles-browser', hidden: true }, tabs, crumbs, toolbar, fresh, list, more,
+  const studioTrash = el('div', { id: 'myfiles-studio-trash', hidden: true });
+  let stopTrash = null;
+  signal.addEventListener('abort', () => stopTrash?.(), { once: true });
+  const linksBox = el('section', { hidden: trash },
     el('h2', {}, tr("Мои ссылки")),
     el('p', { class: 'muted small' }, tr("Ссылка открывает один файл без входа в Студию и действует сутки.")), links);
-  view.append(el('header', { class: 'head' }, el('h1', {}, sectionName('myfiles'))),
-    el('div', { class: 'page myfiles-page' }, note, browser));
+  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, tabs, crumbs, toolbar, fresh, studioTrash, list, more, linksBox);
+  const trashLink = el('a', { class: 'btn btn-sm', id: trash ? 'myfiles-back' : 'myfiles-trash',
+    href: trash ? '#/myfiles' : '#/myfiles?trash=1' }, trash ? tr("Вернуться к файлам") : tr("Корзина"));
+  view.append(el('header', { class: 'head' }, el('h1', {}, sectionName(trash ? 'trash' : 'myfiles'))),
+    el('div', { class: 'page myfiles-page' }, el('div', { class: 'row' }, trashLink), note, browser));
 
   const say = (text, kind) => {
     note.textContent = text;
@@ -80,12 +85,13 @@ export function mount(view) {
         'aria-selected': String(s.sid === state.sid), 'data-sid': String(s.sid) }, () => {
         state.sid = s.sid;
         state.path = '';
-        state.trash = false;
+        say('');
         load();
+        tabs.querySelector(`[data-sid="${s.sid}"]`)?.focus();
       });
       return tab;
     }));
-    tabs.hidden = state.servers.length < 2;
+    tabs.hidden = !trash && state.servers.length < 2;
   }
 
   function paintCrumbs() {
@@ -101,7 +107,6 @@ export function mount(view) {
 
   function open(path) {
     state.path = path;
-    state.trash = false;
     load();
   }
 
@@ -173,9 +178,11 @@ export function mount(view) {
           sizeText(item.size)].filter(Boolean).join(' · '))),
       el('div', { class: 'session-actions' }, button(tr("Вернуть"), { class: 'btn btn-sm', 'aria-label': tr("Вернуть: {0}", item.path) },
         () => act(async () => {
+          const sid = state.sid;
           const back = await api('POST', `${base()}/restore`, { id: item.id }, { signal });
+          if (sid !== state.sid) return;
           await load();
-          say(tr("Возвращено: {0}", back.path), 'ok');
+          if (sid === state.sid) say(tr("Возвращено: {0}", back.path), 'ok');
         }))));
   }
 
@@ -186,15 +193,21 @@ export function mount(view) {
       list.replaceChildren();
       more.hidden = true;
     }
-    toolbar.hidden = local;
+    stopTrash?.();
+    stopTrash = null;
+    toolbar.hidden = local || trash;
+    crumbs.hidden = trash;
+    studioTrash.hidden = !(trash && local);
+    list.hidden = trash && local;
     paintTabs();
     paintCrumbs();
-    const toggle = document.getElementById('myfiles-trash');
-    toggle.setAttribute('aria-pressed', String(state.trash));
-    toggle.classList.toggle('btn-accent', state.trash);
+    if (!studioTrash.hidden) {
+      stopTrash = renderTrash(studioTrash);
+      return;
+    }
     let result;
     try {
-      result = state.trash
+      result = trash
         ? { entries: await api('POST', `${base()}/trash`, {}, { signal }) }
         : await api('POST', `${base()}/list${after ? `?after=${encodeURIComponent(after)}` : ''}`, { path: state.path }, { signal });
     } catch (err) {
@@ -202,10 +215,10 @@ export function mount(view) {
       return;
     }
     if (signal.aborted || version !== loadVersion) return;
-    const rows = result.entries.map(local ? studioRow : state.trash ? trashRow : entryRow);
+    const rows = result.entries.map(local ? studioRow : trash ? trashRow : entryRow);
     if (after) list.append(...rows);
     else list.replaceChildren(...(rows.length ? rows
-      : [el('li', { class: 'muted', id: 'myfiles-none' }, state.trash ? tr("Корзина сервера пуста") : tr("Папка пуста"))]));
+      : [el('li', { class: 'muted', id: 'myfiles-none' }, trash ? tr("Корзина сервера пуста") : tr("Папка пуста"))]));
     next = result.next;
     more.hidden = !next;
   }
@@ -351,13 +364,19 @@ export function mount(view) {
   }
 
   (async () => {
+    if (trash) load();
     try {
-      state.servers = await api('GET', '/api/my-files/servers', undefined, { signal });
+      const available = await api('GET', '/api/my-files/servers', undefined, { signal, unlock: !trash });
+      if (signal.aborted) return;
+      state.servers = trash ? [studio, ...available.filter(server => !server.local)] : available;
     } catch (err) {
-      if (!signal.aborted) say(words(err), 'error');
+      if (!signal.aborted && (!trash || err.status !== 423)) say(words(err), 'error');
       return;
     }
-    if (signal.aborted) return;
+    if (trash) {
+      paintTabs();
+      return;
+    }
     if (!state.servers.length) {
       say(tr("Нет серверов MCP с «Моими файлами». Их подключают в «Настройки → Чат → MCP»."));
       return;

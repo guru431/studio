@@ -57,7 +57,7 @@ export function schemaLimits(prop) {
   return { type: typeof prop.type === 'string' ? prop.type : null, min, max, enum: choices, default: fits ? value : null };
 }
 
-function fileData(file, limit) {
+function fileData(file, limit = 12 * 1024 * 1024) {
   if (!(file instanceof File)) return { media_id: file.mediaId };
   if (!file.size || file.size > limit) {
     throw new Error(tr("Файл MCP должен быть непустым и не больше {0} МиБ", limit / (1024 * 1024)));
@@ -71,11 +71,12 @@ function fileData(file, limit) {
 }
 
 // подписи известных полей инструментов разделов (у остальных — `title` схемы или имя поля)
-const FIELD_NAMES = { protocol: tr("Протокол"), speakers: tr("Говорящих"), language: tr("Язык"),
-  diarize: tr("Разделить по говорящим") };
+const FIELD_NAMES = { model: tr("Модель"), engine: tr("Движок"), protocol: tr("Протокол"),
+  speakers: tr("Говорящих"), num_speakers: tr("Число говорящих"), language: tr("Язык"),
+  diarize: tr("Разделить по говорящим"), diarization: tr("Разделить по говорящим") };
 const UPSCALE_FIELDS = { mode: tr("Режим улучшения"), scale: tr("Масштаб от 1 до 4") };
 const UPSCALE_MODES = { restore: tr("Восстановление · SeedVR2"), fast: tr("Быстрое увеличение · RealESRGAN") };
-const LANGUAGE_NAMES = { ru: tr("Русский"), en: 'English' };
+const LANGUAGE_NAMES = { auto: tr("Авто"), ru: tr("Русский"), russian: tr("Русский"), en: 'English', english: 'English' };
 const TEXT_MAX = 200;
 
 /** Поля схемы инструмента, которых раздел сам не рисует (`shown`) и не файловые: `boolean` — переключатель
@@ -85,7 +86,7 @@ const TEXT_MAX = 200;
 export function extraFields(tool, shown, suffix = '') {
   const box = el('span', { class: 'mcp-fields' });
   const readers = [], picks = [], controls = [];
-  const skip = new Set([...shown, ...Object.keys(tool?.files || {})]);
+  const skip = new Set(['wait_seconds', ...shown, ...Object.keys(tool?.files || {})]);
   const required = new Set(tool?.schema.required || []);
   for (const [key, prop] of Object.entries(tool?.schema?.properties || {})) {
     if (skip.has(key) || !prop || typeof prop !== 'object') continue;
@@ -113,7 +114,7 @@ export function extraFields(tool, shown, suffix = '') {
       readers.push([key, () => (chip.getAttribute('aria-pressed') === 'true') === initial ? undefined : !initial]);
     } else if (limits?.enum) {
       const label = value => (tool.name === 'upscale_image' && key === 'mode' && Object.hasOwn(UPSCALE_MODES, value)
-        && UPSCALE_MODES[value]) || (/lang/i.test(key) && LANGUAGE_NAMES[value]) || String(value);
+        && UPSCALE_MODES[value]) || (/lang/i.test(key) && LANGUAGE_NAMES[String(value).toLowerCase()]) || String(value);
       const select = el('select', { id, 'data-field': key }, el('option', { value: '' }, name),
         ...limits.enum.map(value => el('option', { value: String(value) }, label(value))));
       select.value = limits.default === null ? '' : String(limits.default);
@@ -142,10 +143,11 @@ export function extraFields(tool, shown, suffix = '') {
           || (min !== null && value < min) || (max !== null && value > max)) throw new Error(range);
         return value === limits.default ? undefined : value;
       }]);
-    } else if (prop.type === 'string' && !prop.format && Number.isInteger(prop.maxLength) && prop.maxLength > 0
-      && prop.maxLength <= TEXT_MAX) {
+    } else if (prop.type === 'string' && !prop.format && (key === 'speakers' ||
+      (Number.isInteger(prop.maxLength) && prop.maxLength > 0 && prop.maxLength <= TEXT_MAX))) {
       const initial = typeof prop.default === 'string' ? prop.default : '';
-      const input = el('input', { id, 'data-field': key, maxlength: String(prop.maxLength), autocomplete: 'off',
+      const maxLength = Number.isInteger(prop.maxLength) && prop.maxLength > 0 ? prop.maxLength : 16;
+      const input = el('input', { id, 'data-field': key, maxlength: String(maxLength), autocomplete: 'off',
         'aria-label': name, value: initial });
       input.style.width = '10ch';
       box.append(el('label', { class: 'chip ctl-chip chip-num mcp-field-text', title: name }, el('span', {}, name), input));
@@ -196,7 +198,7 @@ function showResult(host, output, urls, render) {
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, onPhoto, onVideo,
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, onHistory, turns, onEmpty, onPhoto, onVideo,
   key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
   const suffix = place === section ? '' : `-${place.replace(/[^\w-]/g, '-')}`;
@@ -308,14 +310,17 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
 
   function galleryChanged(current, item) {
     current.inGallery = inGallery(item);
-    if (current.gallery && !controller.signal.aborted) (onVideo || onPhoto)(item);
+    if (controller.signal.aborted) return;
+    if (current.gallery) (onVideo || onPhoto)(item);
+    if (!item.active && item.result?.translation_id) onHistory?.(item);
   }
 
   function paint() {
     if (controller.signal.aborted) return;
     const current = record();
     const active = busy();
-    const content = current?.gallery && hasGalleryFile(current.output) ? null : current?.output;
+    const content = (current?.gallery && hasGalleryFile(current.output)) || (onHistory && current?.output?.translation_id)
+      ? null : current?.output;
     const inVideoFeed = onVideo && current?.inGallery && !current.retry;
     const visibleError = inVideoFeed ? '' : current?.error;
     const visibleActive = !inVideoFeed && active;
@@ -457,8 +462,11 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       names.set(option, server.id);
       return option;
     }));
-    const last = record()?.key;
-    select.value = options.has(last) ? last : native ? '' : options.keys().next().value;
+    const current = record();
+    const last = section === 'photo' && !native && !busy() ? null : current?.key;
+    const photoCreate = section === 'photo'
+      ? [...options].find(([, { tool }]) => tool.name === 'image_generate' || tool.name === 'generate_image')?.[0] : null;
+    select.value = options.has(last) ? last : native ? '' : photoCreate || options.keys().next().value;
     control.hidden = false;
     paintFields();
     onChange?.();
@@ -503,6 +511,11 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   });
   return { control, output, fields: extras, has, hasFile, run, clear,
     option(key) { return options.get(key)?.tool; },
+    fileInput(file) { return fileData(file, limit); },
+    fileSource(names, sid) {
+      return [...options].find(([, { server, tool }]) => (!sid || server.id === sid)
+        && names.includes(tool.name) && Object.hasOwn(tool.files, 'artifact_id'))?.[0];
+    },
     acceptsPhotoSource() {
       const name = picked()?.tool.name;
       return PHOTO_TOOLS.has(name) && name !== 'upscale_image' && has('prompt') && hasFile('artifact_id');

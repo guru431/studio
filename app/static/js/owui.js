@@ -23,6 +23,7 @@ import { tr } from './i18n.js';
 import { api } from './api.js';
 import { svg } from './icons.js';
 import { chatView } from './owui-chat.js';
+import { chatManagement } from './owui-chat-manage.js';
 import { panelView } from './owui-panel.js';
 import { sectionName } from './sections-meta.js';
 import { readSSE } from './sse.js';
@@ -132,7 +133,8 @@ function paintRight() {
   if (view) return;
   ui.body.replaceChildren();
   const aid = route.aid;
-  const chat = chatView(ui.body, { account: aid, chatId: route.chat, readOnly: ui.readOnly, created: (id) => created(aid, id) });
+  const chat = chatView(ui.body, { account: aid, chatId: route.chat, readOnly: ui.readOnly, manage: ui.manage,
+    created: (id) => created(aid, id) });
   const off = listen((type, data, from) => { if (from === aid) chat.event(type, data); });
   view = { chat, off };
   resync();
@@ -269,11 +271,11 @@ async function apply(next) {
   if (panel.shown() !== route.aid) panel.select(route.aid);
   panel.here(route.aid, route.chat);
   paintRight();
-  if (route.chat) panelOpen(false);
+  if (route.chat || view?.chat.hasDraft()) panelOpen(false);
   else if (phone()) panelOpen(true);
 }
 
-export function mount(view, ctx) {
+export function mount(host, ctx) {
   user = ctx.me.id;
   route = parseId(ctx.id);
   settled = false;
@@ -293,10 +295,26 @@ export function mount(view, ctx) {
   toggle.addEventListener('click', () => panelOpen(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panelOpen(false));
   document.addEventListener('keydown', onKey);
-  view.append(root);
+  host.append(root);
   ui = { root, toggle, body, backdrop, readOnly };
+  const mounted = ui;
+  ui.manage = chatManagement(root, {
+    changed(aid, item) {
+      if (ui !== mounted) return;
+      panel.changed(aid, item);
+      if (view?.chat.account === aid && view.chat.chat() === item.id) view.chat.metadata(item);
+    },
+    removed(aid, id) {
+      if (ui !== mounted) return;
+      panel.changed(aid, { id }, true);
+      if (route.aid !== aid || route.chat !== id) return;
+      replaceRoute({ aid, chat: null });
+      panel.here(aid, null);
+      paintRight();
+    },
+  });
   const place = route.aid === null ? readPlace() : null;
-  panel = panelView(side, { selected: route.aid ?? place?.aid ?? null, opened,
+  panel = panelView(side, { selected: route.aid ?? place?.aid ?? null, opened, manage: ui.manage,
     chose: () => panelOpen(false) });
   apply(route);
 }
