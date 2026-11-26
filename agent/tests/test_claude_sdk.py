@@ -9,7 +9,7 @@ from claude_agent_sdk import ClaudeAgentOptions, CLIConnectionError
 from claude_agent_sdk._internal.transport import subprocess_cli
 from claude_agent_sdk._internal import sessions as sdk_sessions
 
-from studio_agent import cli  # подключает адаптер также при чтении каталога моделей
+from studio_agent import cli, limits  # cli подключает адаптер также при чтении каталога моделей
 from studio_agent.turns import options_for
 
 
@@ -142,3 +142,27 @@ async def test_query_stamps_its_own_uuid_over_one_already_in_the_message():
     assert [m.get("uuid") for m in written] == ["mine", "text", None]
     assert written[1]["message"] == {"role": "user", "content": "Текст"}
     assert written[2]["message"]["content"] == "Без uuid"
+
+
+async def test_turn_transport_accepts_a_large_read_result(tmp_path):
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A" * 650_000}}
+    frame = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_read", "content": [image]}]},
+        "tool_use_result": {"file": {"base64": image["source"]["data"]}}}
+    wire = json.dumps(frame) + "\n"
+    assert len(wire) > limits.MIB
+
+    async def stdout():
+        for offset in range(0, len(wire), 65_536):
+            yield wire[offset:offset + 65_536]
+
+    class Process:
+        async def wait(self):
+            return 0
+
+    options = options_for(tmp_path, tmp_path / "claude.exe", "chat", True, None, None, None)
+    transport = subprocess_cli.SubprocessCLITransport(prompt="", options=options)
+    transport._stdout_stream = stdout()
+    transport._process = Process()
+    assert [message async for message in transport.read_messages()] == [frame]
+    assert options.max_buffer_size >= limits.FRAME_MAX

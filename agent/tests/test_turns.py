@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import pytest
-from claude_agent_sdk import (CLINotFoundError, PermissionResultAllow, PermissionResultDeny, PermissionUpdate,
+from claude_agent_sdk import (CLIJSONDecodeError, CLINotFoundError, PermissionResultAllow, PermissionResultDeny, PermissionUpdate,
                               ResultError)
 from claude_agent_sdk.types import PermissionRuleValue
 
@@ -239,8 +239,13 @@ async def test_failure_before_the_query_is_not_started_and_after_it_is_a_broken_
 
 
 async def test_other_failures_end_with_their_words(home, project):
+    buffer_error = CLIJSONDecodeError(
+        f"JSON message exceeded maximum buffer size of {limits.CLAUDE_SDK_MESSAGE_MAX} bytes", ValueError())
     cases = [
         ([RuntimeError("секрет")], "Claude Code прервал ход — повторите задание"),
+        ([CLIJSONDecodeError("секрет", ValueError())], "Claude Code прервал ход — повторите задание"),
+        ([buffer_error],
+         "Claude Code вернул слишком большое сообщение — уменьшите изображения или запросите вывод по частям"),
         ([ResultError("x", {"subtype": "error_max_turns", "errors": ["слишком много ходов"]})], "слишком много ходов"),
         ([result("success", is_error=True, result="API Error: 529")], "API Error: 529"),
         ([result("error_max_budget_usd", is_error=True)], "Claude Code: error_max_budget_usd"),

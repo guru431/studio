@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundError, HookMatcher,
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLIJSONDecodeError, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent,
                               SystemMessage, UserMessage)
 
@@ -40,6 +40,7 @@ NO_CLI = "Claude Code не найден на компьютере"
 NO_START = "Claude Code не запустился"
 # Сбой SDK после отправки запроса: ответ мог уже идти — это обрыв хода, а не установка.
 BROKEN = "Claude Code прервал ход — повторите задание"
+OVERSIZED = "Claude Code вернул слишком большое сообщение — уменьшите изображения или запросите вывод по частям"
 # CLI простаивает дольше `limits.IDLE_INPUT_SEC`, а ответа на ввод хода нет: ход закрыт, а не «Думает…» навсегда.
 STALLED = "Claude Code простаивает без ответа на уточнение — ход закрыт"
 # Чтение состояния — фоновое, без действия владельца в папке: хуки её `.claude/settings*.json` (SessionStart и др.)
@@ -60,7 +61,7 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
                 settings: str | None = None, strict_mcp: bool = False) -> ClaudeAgentOptions:
     """Опции клиента хода: новая сессия — `session_id=chat`, существующая — `resume=chat`. `strict_mcp` — только
     `mcp_servers` владельца, без `.mcp.json` папки (`--strict-mcp-config`)."""
-    limits = cli.subagent_limits(project)
+    subagent_limits = cli.subagent_limits(project)
     hooks = {"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]}
     if subagent_hook is not None:
         for name in ("SubagentStart", "SubagentStop"):
@@ -69,8 +70,9 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
         model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks=hooks, mcp_servers=mcp_servers or {}, strict_mcp_config=strict_mcp,
-        setting_sources=list(cli.SETTINGS), settings=settings, system_prompt=cli.coding_prompt(limits),
-        env={**limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
+        setting_sources=list(cli.SETTINGS), settings=settings, system_prompt=cli.coding_prompt(subagent_limits),
+        env={**subagent_limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
+        max_buffer_size=limits.CLAUDE_SDK_MESSAGE_MAX,
         stderr=cli._drop, extra_args={"chrome": None, "replay-user-messages": None})
 
 
@@ -667,6 +669,9 @@ class Runner:
         except Exception as e:
             log.warning("ход %s: %s", t.turn, type(e).__name__)
             failure = BROKEN if sent else NO_START
+            if isinstance(e, CLIJSONDecodeError) and e.line == (
+                    f"JSON message exceeded maximum buffer size of {limits.CLAUDE_SDK_MESSAGE_MAX} bytes"):
+                failure = OVERSIZED
         await self._finish(t, new and sent, failure, claude=sent)
         if cancelled:
             raise asyncio.CancelledError

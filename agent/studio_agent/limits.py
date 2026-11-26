@@ -5,6 +5,7 @@ import re
 MIB = 1024 * 1024
 
 FRAME_MAX = 48 * MIB  # кадр канала с base64 вложений до 30 МиБ
+CLAUDE_SDK_MESSAGE_MAX = 48 * MIB  # символы в строке SDK: повтор ввода с base64 и крупные результаты инструментов
 WELCOME_SEC = 10  # ждать welcome после hello
 PIN_TRIES = 5  # неверных PIN подряд до блока
 OPEN_IDLE_SEC = 3 * 60 * 60  # открытая сессия без просьб: 3 часа
