@@ -819,8 +819,7 @@ function build(view, ctx) {
     projects = projects.map((p) => p.id === saved.id ? saved : p);
     paintProjects();
   }));
-  const historyLink = el('a', { id: 'chat-project-history', class: 'chip', href: '#/chat' }, tr("Диалоги"));
-  const projectTools = el('div', { class: 'code-views project-actions' }, filesLink, memoryButton, settingsButton, historyLink);
+  const projectTools = el('div', { class: 'code-views project-actions' }, filesLink, memoryButton, settingsButton);
   const head = el('header', { class: 'code-head' },
     el('div', { class: 'code-location' }, toggle,
       el('div', { class: 'code-place' }, projectLabel, projectSep, title.label)), title.note,
@@ -1063,12 +1062,9 @@ function build(view, ctx) {
     projectAttach.hidden = !current;
     if (current) {
       filesLink.href = `#/myfiles?p=${current.id}`;
-      historyLink.href = `#/${projectRoute()}`;
       description.textContent = current.description;
     }
     description.hidden = !current?.description;
-    if (inHistory) historyLink.setAttribute('aria-current', 'page');
-    else historyLink.removeAttribute('aria-current');
     projectLabel.hidden = projectSep.hidden = !chatId || !current;
     projectLabel.textContent = current ? projectName(current) : '';
     if (!chatId) title.set(null, projectCaption());

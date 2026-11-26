@@ -33,11 +33,15 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
           const main = document.querySelector('.project-workspace .code-main');
           const tools = document.querySelector('.code-head .project-actions');
           const plus = document.querySelector('#chat-tab-add');
+          const create = footer.querySelector('.project-create');
           return {
             footer: Math.abs(footer.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom) < 2,
             left: !panel.querySelector('.chat-item') && !!main.querySelector('.project-history .code-chat-link'),
-            toolbar: [...tools.children].slice(0, 3).map(a => a.textContent),
+            toolbar: [...tools.children].map(a => a.textContent),
             plus: plus.parentElement.id === 'chat-tabbar' && !!main.querySelector('.project-history .code-new-chat'),
+            create_label: getComputedStyle(create.querySelector('.code-project-create-label')).display !== 'none',
+            create_icon: getComputedStyle(create.querySelector('.ico')).display !== 'none',
+            create_name: create.getAttribute('aria-label'),
           };
         })()"""),
         ("click", ".project-create"), ("type", "#chat-project-editor input[required]", "Каталог"),
@@ -48,7 +52,7 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
         ("wait", "location.hash.includes('history=1') && !document.querySelector('.project-history').hidden"),
         ("click", "#chat-new"),
         ("wait", "location.hash.includes('new=1') && !document.querySelector('.project-conversation').hidden"),
-        ("click", "#chat-project-history"),
+        ("click", "#chat-tab-add"),
         ("wait", "!document.querySelector('.project-history').hidden"),
         *drawer, ("click", ".project-list [data-inbox] > a"),
         ("wait", "document.querySelector('.project-list [data-inbox] [aria-current=page]')"
@@ -88,7 +92,9 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
     assert not result.get("failed"), (result.get("failed"), result.get("where"), result.get("log"))
     assert result["values"]["upload"] == 2 and result["values"]["fits"], result
     assert result["values"]["layout"] == {
-        "footer": True, "left": True, "toolbar": ["Файлы", "Память", "Настройки"], "plus": True}
+        "footer": True, "left": True, "toolbar": ["Файлы", "Память", "Настройки"], "plus": True,
+        "create_label": not mobile, "create_icon": mobile, "create_name": "Новый проект",
+    }
     assert result["values"]["sorted"] == ["Без проекта", "Зебра", "Каталог"]
     assert result["values"]["saved"] == "name"
     assert not problems(result), problems(result)

@@ -1340,7 +1340,7 @@ def test_chat_shows_turns_made_on_another_device(browser, live):
             ("eval", "focus", "window.dispatchEvent(new Event('focus'))"),
             ("wait", f"{count} === 4"),
             ("eval", "phone2", phone % "'Ещё с телефона'"),
-            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("click", "#chat-tab-add"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("click", ".project-history .chat-item a"),
             ("wait", f"{count} === 6"),
             ("type", "#chat-input", "А теперь?"),

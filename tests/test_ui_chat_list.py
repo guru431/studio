@@ -47,7 +47,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
               sessionStorage.setItem('test-chats', JSON.stringify([window.A, window.B]));   // переживут перезагрузку
               location.hash = '#/chat/' + window.A; return [window.A, window.B]; }})()"""),
             ("wait", f"{a}?.querySelector('[aria-current=page]') && {b}?.querySelector('.chat-mark[data-mark=busy]')"),
-            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("click", "#chat-tab-add"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "busy", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({b}.querySelector('.chat-mark'))"),
             ("eval", "badges", """(() => {const p = document.querySelector('.project-list li[data-inbox]');
               return [p.querySelector('.code-project-count')?.textContent, p.querySelector('.running')?.textContent]; })()"""),
@@ -66,7 +66,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("eval", "reload", "location.reload()"),
             ("wait", f"{READY} && {FIRST}[0] === 'Закреплённые'"),
             ("eval", "again", "[window.A, window.B] = JSON.parse(sessionStorage.getItem('test-chats'))"),
-            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("click", "#chat-tab-add"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "kept", f"JSON.stringify({FIRST}) === JSON.stringify(['Закреплённые', 'Отчёт за квартал', 'true'])"),
             ("eval", "spy", """(() => { window.asked = 0; const real = window.fetch;
               window.fetch = (...args) => { window.asked += 1; return real(...args); }; return true; })()"""),
@@ -183,7 +183,7 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
             ("wait", f"{READY} && {ACTIVE}?.dataset.chat === location.hash.split('/')[2] && document.querySelector('.chat-item')"),
             ("eval", "reload", f"{TABS}.length"),
             ("eval", "return_id", "window.toReturn = location.hash.split('/')[2]"),
-            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("click", "#chat-tab-add"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "mark", """(() => {
               window.toDelete = JSON.parse(localStorage.getItem('studio-chat-tabs')).ids[2];
               document.querySelector('.chat-item[data-id="' + window.toDelete + '"]').classList.add('under-test');
