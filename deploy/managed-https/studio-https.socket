@@ -4,8 +4,9 @@ Description=Studio HTTPS settings socket
 [Socket]
 ListenStream=/var/lib/studio-https/apply.sock
 Accept=yes
-SocketUser=10001
 SocketMode=0600
+# The container UID may have no matching passwd entry on the Docker host.
+ExecStartPost=/usr/bin/chown --no-dereference 10001:10001 /var/lib/studio-https/apply.sock
 RemoveOnStop=yes
 MaxConnections=2
 
