@@ -6,7 +6,7 @@
  *   («Закрепить» / «Открепить» → PATCH {pinned}) и метки span.chat-mark[data-mark=busy|unread|draft] без текста —
  *   слова в aria-label и title; «идёт ответ» важнее «не прочитано».
  *   Перерисовка — только когда ответ сервера изменился. Опрос — раз в
- *   LIST_POLL_MS, пока у диалога идёт ответ и страница видна. Удачный ответ — loaded(items); итог — items или null (отказ).
+ *   LIST_POLL_MS при активных диалогах и реже без них, пока страница видна. Удачный ответ — loaded(items); итог — items или null.
  *   Отказ при нарисованном списке (нет связи, выкладка) список не стирает — повтор через LIST_POLL_MS; без списка —
  *   слова отказа на его месте.
  * - search — input#chat-search: отбор по названиям на странице без учёта регистра, без запросов.
@@ -23,8 +23,9 @@ import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { el, words } from './ui.js';
 
 export const LIST_POLL_MS = 5000;
+const IDLE_POLL_MS = 30000;
 const SEEN_REPEAT_MS = 60000;     // как chat_pending.REMIND_TICK_SEC: проход напоминаний — раз в минуту
-const MARKS = { busy: tr("идёт ответ"), unread: tr("не прочитано"), draft: tr("есть черновик") };
+const MARKS = { busy: tr("идёт ответ"), asking: tr("ждёт ответа"), unread: tr("не прочитано"), draft: tr("есть черновик") };
 
 export function chatList(list, { row, pinItem, project = () => null, failed = () => {}, loaded = () => {} }) {
   const drafts = draftStore(CHAT_DRAFTS);
@@ -37,7 +38,6 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
   let alive = true;
   const looked = new Map();   // id → `updated`, отмеченный POST …/seen
   const rows = new Map();     // id → { item, box } нарисованной строки
-  let stale = false;         // последний опрос не удался при нарисованном списке — повтор
   let watching = null;        // { id, timer } открытого диалога с ждущей карточкой
 
   function watch(id) {
@@ -52,11 +52,16 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
     return item.unread && !(looked.get(item.id) >= item.updated);
   }
 
+  function activity(item) {
+    return item.asking ? 'asking' : item.busy ? 'running' : unread(item) ? 'unread' : null;
+  }
+
   function paintMarks(id) {
     const shown = rows.get(id);
     if (!shown) return;
     const { item, box } = shown;
-    const kinds = [item.busy ? 'busy' : unread(item) ? 'unread' : null, drafts.has(id) ? 'draft' : null].filter(Boolean);
+    const state = activity(item);
+    const kinds = [state === 'running' ? 'busy' : state, drafts.has(id) ? 'draft' : null].filter(Boolean);
     box.replaceChildren(...kinds.map((kind) => el('span', { class: 'chat-mark', 'data-mark': kind, role: 'img',
       'aria-label': MARKS[kind], title: MARKS[kind] })));
   }
@@ -105,20 +110,20 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
   function schedule(retry = false) {
     clearTimeout(timer);
     timer = null;
-    if (alive && document.visibilityState === 'visible' && (retry || items.some((item) => item.busy))) {
-      timer = setTimeout(reload, LIST_POLL_MS);
+    if (alive && document.visibilityState === 'visible' && !document.documentElement.classList.contains('shrouded')) {
+      const delay = retry || items.some((item) => item.busy || item.asking) ? LIST_POLL_MS : IDLE_POLL_MS;
+      timer = setTimeout(() => reload(true), delay);
     }
   }
 
-  async function reload() {
+  async function reload(passive = false) {
     const mine = ++reading;
     let got;
     try {
-      got = (await api('GET', '/api/chats')).items;
+      got = (await api('GET', '/api/chats', undefined, { unlock: !passive })).items;
     } catch (err) {
       if (!alive || mine !== reading) return null;
       if (answer !== null) {                         // нарисованный список остаётся — повтор
-        stale = true;
         schedule(true);
         return null;
       }
@@ -128,7 +133,6 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
       return null;
     }
     if (!alive || mine !== reading) return got;
-    stale = false;
     const text = JSON.stringify(got);
     if (text !== answer) {
       answer = text;
@@ -144,7 +148,9 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
     if (event.detail?.store === CHAT_DRAFTS) paintMarks(event.detail.id);
   };
   const onVisible = () => {
-    if (document.visibilityState === 'visible' && !timer && (stale || items.some((item) => item.busy))) reload();
+    clearTimeout(timer);
+    timer = null;
+    if (document.visibilityState === 'visible' && !document.documentElement.classList.contains('shrouded')) reload(true);
   };
   document.addEventListener('studio-dialog-draft', onDraft);
   document.addEventListener('visibilitychange', onVisible);
@@ -154,6 +160,7 @@ export function chatList(list, { row, pinItem, project = () => null, failed = ()
     search,
     reload,
     paint,
+    activity,
     seen(chat, waiting = false) {
       watch(chat && waiting ? chat.id : null);
       if (!chat || document.visibilityState !== 'visible' || looked.get(chat.id) === chat.updated) return;

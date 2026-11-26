@@ -49,6 +49,8 @@ def test_list_marks_pin_and_title_search(browser, live, width):
             ("wait", f"{a}?.querySelector('[aria-current=page]') && {b}?.querySelector('.chat-mark[data-mark=busy]')"),
             ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
             ("eval", "busy", f"(m => [m.dataset.mark, m.getAttribute('aria-label')])({b}.querySelector('.chat-mark'))"),
+            ("eval", "badges", """(() => {const p = document.querySelector('.project-list li[data-inbox]');
+              return [p.querySelector('.code-project-count')?.textContent, p.querySelector('.running')?.textContent]; })()"""),
             ("eval", "pin", f"{a}.querySelector('.chat-pin').click()"),
             ("wait", f"{FIRST}[0] === 'Закреплённые' && {FIRST}[2] === 'true'"),
             ("eval", "pinned", FIRST),
@@ -93,6 +95,7 @@ def test_list_marks_pin_and_title_search(browser, live, width):
     v = r["values"]
     chat_a, chat_b = v["made"]
     assert v["busy"] == ["busy", "идёт ответ"]              # .chat-mark[data-mark] строки Б и его aria-label
+    assert v["badges"] == ["1", "1"]                        # открыта A, B работает отдельно
     assert v["pinned"] == ["Закреплённые", "Отчёт за квартал", "true"] and v["kept"] is True
     assert v["unread"] == ["unread", "не прочитано"]       # шлюз отпущен, Б не открывали
     assert v["text"] == "План отпуска"
@@ -159,8 +162,7 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
             *open_chat(0),
             ("eval", "one", "document.querySelector('#chat-tabs').hidden"),
             ("click", "#chat-tab-add"),
-            ("wait", "location.hash.includes('new=1') && !document.querySelector('.project-conversation').hidden"),
-            ("click", "#chat-project-history"), ("wait", "document.querySelector('.project-history:not([hidden])')"),
+            ("wait", "location.hash.includes('history=1') && !document.querySelector('.project-history').hidden"),
             set_value("#chat-search", "Диалог 2"),
             ("wait", "document.querySelectorAll('.chat-list .code-chat-link').length === 1"),
             ("click", ".chat-list .code-chat-link"),
@@ -219,7 +221,7 @@ def test_dialog_tabs_open_close_limit_and_device_storage(browser, live, width, l
     ids = v["ids"]
     assert v["one"] is False and v["three"] == ["Диалог 1", "Диалог 2", "Диалог 3"] and v["active"] == "Диалог 3"
     assert v["limit"] == [12, "Диалог 2"]                  # тринадцатый вытеснил самую левую не текущую вкладку
-    assert v["stored"] == {"user": uid, "ids": ids[1:]}    # только id
+    assert v["stored"] == {"user": uid, "ids": ids[1:], "active": {f"inbox-{uid}": ids[-1]}}
     assert v["closed"] == [11, f"#/chat/{ids[11]}"]        # крестик текущей: вкладок 11, открыта соседняя
     assert v["marks"] == [True, True]                      # идёт ответ у диалога 6, ✎ у черновика диалога 7
     assert v["reload"] == 11 and v["gone"] == 10           # ряд пережил перезагрузку; удалённый диалог ушёл из ряда

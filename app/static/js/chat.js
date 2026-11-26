@@ -16,7 +16,8 @@ import { placeSummary } from './chat-summary.js';
 import { chatSkills, humanText, skillMessage } from './chat-skills.js';
 import { noteParts, partNode, partsButton } from './chat-parts.js';
 import { mcpStateWords } from './mcp-sections.js';
-/* Раздел «Проекты» (#/chat?p=<проект> — история, &new=1 — новый диалог, #/chat/<id> — диалог): чип модели,
+/* Раздел «Проекты» (#/chat?p=<проект> — последнее открытое, &history=1 — список, &new=1 — новый диалог,
+ * #/chat/<id> — диалог): чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
  * Чип модели — отмеченные модели раздела «Чат» по подключениям (GET /api/sections), новый диалог —
@@ -780,7 +781,11 @@ function build(view, ctx) {
   const list = el('ul', { class: 'chat-list code-chats', 'aria-label': tr("Диалоги") });
   const projectsUI = projectsPanel({
     user: ctx.me.id,
-    select: (id) => ctx.navigate(`chat?p=${id}`),
+    select: (id) => {
+      const route = `chat?p=${id}`;
+      if (location.hash === `#/${route}`) open(null, false, new URLSearchParams({ p: id }));
+      else ctx.navigate(route);
+    },
     create: () => projectEditor(root, null, (item) => {
       if (!alive) return;
       projects = [...projects.slice(0, 1), item, ...projects.slice(1)];
@@ -823,8 +828,11 @@ function build(view, ctx) {
   const tabsHost = el('div', { class: 'code-tabs-host' });
   const top = el('div', { class: 'code-top' }, head, tabsHost);
   const description = el('p', { class: 'muted small project-description', hidden: true });
+  const newChatButton = button(tr("Создать новый чат"), {
+    id: 'chat-new', class: 'code-chat-link code-new-chat',
+  }, newChat);
   const projectHistory = el('section', { class: 'code-body project-history', 'aria-label': tr("Диалоги"), hidden: true },
-    description, list);
+    description, el('div', { class: 'code-chat-starters' }, newChatButton), list);
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -993,7 +1001,8 @@ function build(view, ctx) {
       export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive`,
       blocked: current.protected ? PROTECTED_SHARE : null } : null);
     listing.seen(current, !!current && chat.messages.some((m) => m.pending && m.status !== 'streaming'));
-    tabs.show(current);
+    tabs.show(current?.project_id || currentProject()?.id || projectId, current, inHistory);
+    paintSidebar();
   }
 
   function showFiles() {
@@ -1016,13 +1025,13 @@ function build(view, ctx) {
 
   // список (chat-list.js): метки, звезда, поиск по названиям; вкладки диалогов над лентой (chat-tabs.js)
   const tabs = chatTabs({ open: (id) => (id ? ctx.navigate(`chat/${id}`) : ctx.navigate(projectRoute())),
-    create: newChat, info: tabInfo });
+    history: () => ctx.navigate(projectRoute()), info: tabInfo, changed: paintSidebar });
   const listing = chatList(list, { row: listItem, pinItem, project: () => currentProject()?.id,
     failed: (err) => { notice.textContent = words(err); },
     loaded: (items) => {
       listed = items;
-      tabs.sync(items.map((c) => c.id));
-      projectsUI.paint(projects, currentProject(), listed);
+      tabs.sync(items);
+      paintSidebar();
     } });
   list.before(el('div', { class: 'code-session-search' }, listing.search));
   tabsHost.append(tabs.node);
@@ -1037,13 +1046,19 @@ function build(view, ctx) {
   }
 
   function projectRoute() {
-    const project = currentProject();
-    return project && !project.inbox ? `chat?p=${project.id}` : 'chat?history=1';
+    const pid = currentProject()?.id || projectId;
+    return pid && !pid.startsWith('inbox-') ? `chat?p=${pid}&history=1` : 'chat?history=1';
+  }
+
+  function paintSidebar() {
+    projectsUI.paint(projects, currentProject(), listed, tabs.counts(),
+      (item) => listing.activity(jobs.has(item.id) ? { ...item, busy: true, asking: false } : item));
   }
 
   function paintProjects() {
     const current = currentProject();
-    projectsUI.paint(projects, current, listed);
+    if (chatId === null) tabs.show(current?.id || projectId, null, inHistory);
+    paintSidebar();
     projectTools.parentElement.hidden = !current;
     projectAttach.hidden = !current;
     if (current) {
@@ -1080,6 +1095,7 @@ function build(view, ctx) {
         chat.chat = out;
         projectId = pid;
         paintProjects();
+        shareContext();
       }
       await loadList();
     });
@@ -1087,7 +1103,9 @@ function build(view, ctx) {
 
   function tabInfo(id) {
     const item = listed.find((c) => c.id === id);
-    return { title: chat?.chat.id === id ? chat.chat.title : item?.title, busy: !!item?.busy || jobs.has(id) };
+    const running = jobs.has(id);
+    return { title: chat?.chat.id === id ? chat.chat.title : item?.title, busy: !!item?.busy || running,
+      asking: !!item?.asking && !running };
   }
 
   /* список диалогов */
@@ -1187,9 +1205,11 @@ function build(view, ctx) {
   }
 
   function newChat() {
+    // Кнопка скрывается вместе с историей. Освободить фокус до проверки focusDesktop.
+    if (document.activeElement === newChatButton) newChatButton.blur();
     panel(false);
-    const project = currentProject();
-    const route = newDialogRoute(project && !project.inbox ? project.id : null);
+    const pid = currentProject()?.id || projectId;
+    const route = newDialogRoute(pid && !pid.startsWith('inbox-') ? pid : null);
     if (location.hash === `#/${route}`) focusDesktop(input);
     else ctx.navigate(route);
   }
@@ -2653,6 +2673,16 @@ function build(view, ctx) {
     roles.close();
     const requested = query?.get('p') || null;
     const historyView = id === null && !['new', 'transcript', 'ocr'].some((key) => query?.has(key));
+    if (historyView && requested && !query.has('history')) {
+      const route = location.hash;
+      await firstList;
+      if (!alive || location.hash !== route) return;
+      const remembered = tabs.resume(requested);
+      if (remembered) {
+        history.replaceState(history.state, '', `#/chat/${encodeURIComponent(remembered)}`);
+        return open(remembered, true);
+      }
+    }
     if (id === chatId && (id === null ? historyView === inHistory && requested === projectId : chat)) return;
     find.reset();
     dropPreviews(root);
@@ -3214,6 +3244,7 @@ function build(view, ctx) {
     renderFeed();
     syncBusy();
     kick();
+    loadList();
     readServer(job, reply);
   }
 

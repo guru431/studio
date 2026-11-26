@@ -1,4 +1,6 @@
 """Project navigation, chat transfer and upload in the actual Studio browser shell."""
+import json
+
 import pytest
 
 from live_app import start_live_app
@@ -35,7 +37,7 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
             footer: Math.abs(footer.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom) < 2,
             left: !panel.querySelector('.chat-item') && !!main.querySelector('.project-history .code-chat-link'),
             toolbar: [...tools.children].slice(0, 3).map(a => a.textContent),
-            plus: plus.parentElement.id === 'chat-tabbar' && !document.querySelector('#chat-new'),
+            plus: plus.parentElement.id === 'chat-tabbar' && !!main.querySelector('.project-history .code-new-chat'),
           };
         })()"""),
         ("click", ".project-create"), ("type", "#chat-project-editor input[required]", "Каталог"),
@@ -43,6 +45,8 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
         ("wait", "document.querySelector('#chat-title')?.textContent === 'Каталог'"),
         ("wait", "document.querySelector('.project-history:not([hidden]) .chat-list-note')?.textContent === 'Диалогов пока нет'"),
         ("click", "#chat-tab-add"),
+        ("wait", "location.hash.includes('history=1') && !document.querySelector('.project-history').hidden"),
+        ("click", "#chat-new"),
         ("wait", "location.hash.includes('new=1') && !document.querySelector('.project-conversation').hidden"),
         ("click", "#chat-project-history"),
         ("wait", "!document.querySelector('.project-history').hidden"),
@@ -87,4 +91,54 @@ def test_create_a_project_move_a_chat_and_upload_multiple_files(browser, live, w
         "footer": True, "left": True, "toolbar": ["Файлы", "Память", "Настройки"], "plus": True}
     assert result["values"]["sorted"] == ["Без проекта", "Зебра", "Каталог"]
     assert result["values"]["saved"] == "name"
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_each_project_restores_its_own_tabs_and_last_selection(browser, live, width):
+    mobile = width == 320
+    login = f"project-tabs-{width}"
+    uid = live.add_user(login)
+    inbox, other = f"inbox-{uid}", f"other-{uid}"
+    live_sql(live, "INSERT INTO chat_projects(id, user_id, name, created) VALUES (?, ?, 'Другой проект', 1)", (other, uid))
+    for cid, project in [("a1", inbox), ("a2", inbox), ("a3", inbox), ("b1", other)]:
+        live_sql(live, "INSERT INTO chats(id, user_id, title, created, updated, project_id) VALUES (?, ?, ?, 1, 1, ?)",
+                 (f"{cid}-{uid}", uid, cid, project))
+    a1, a2, b1 = (f"{cid}-{uid}" for cid in ("a1", "a2", "b1"))
+    old = json.dumps({"user": uid, "ids": [a1, b1, a2]})
+    init = f"""if (location.pathname === '/' && !sessionStorage.getItem('legacy-tabs-seeded')) {{
+      sessionStorage.setItem('legacy-tabs-seeded', '1');
+      localStorage.setItem('studio-chat-tabs', {json.dumps(old)});
+    }}"""
+    drawer = [("click", "#chats-toggle")] if mobile else []
+    tab = "#chat-tabbar .code-tab"
+    active = f"document.querySelector('{tab}[aria-selected=true]')?.dataset.chat"
+    restored = f"[...document.querySelectorAll('{tab}')].map(node => node.dataset.chat)"
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("wait", f"JSON.stringify({restored}) === JSON.stringify({json.dumps([a1, a2])})"),
+        ("eval", "open_counts", """[...document.querySelectorAll('.project-list .code-project-count')].map(el => el.textContent)"""),
+        ("click", f"{tab}[data-chat='{a1}']"), ("wait", f"{active} === '{a1}'"),
+        ("click", "#chat-tab-add"),
+        ("wait", "document.querySelector('.project-history:not([hidden]) .chat-item')"
+         " && document.querySelector('#chat-tab-add[aria-pressed=true]')"),
+        ("eval", "picker", "document.querySelector('.project-history #chat-new').textContent"),
+        *drawer, ("click", f".project-list li[data-pid='{other}'] a"), ("wait", f"{active} === '{b1}'"),
+        ("eval", "other_tabs", restored),
+        *drawer, ("click", f".project-list li[data-pid='{inbox}'] a"), ("wait", f"{active} === '{a1}'"),
+        ("eval", "inbox_tabs", restored),
+        ("eval", "reload_project", f"history.replaceState(history.state, '', '#/chat?p={inbox}'); location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"
+         f" && location.hash === '#/chat/{a1}' && {active} === '{a1}'"),
+        *drawer, ("click", f".project-list li[data-pid='{other}'] a"), ("wait", f"{active} === '{b1}'"),
+        ("click", f"{tab}[data-chat='{b1}'] .code-tab-close"),
+        ("wait", "document.querySelector('.project-history:not([hidden]) .chat-item')"
+         f" && !document.querySelector(\".project-list li[data-pid='{other}'] .code-project-count\")"),
+        ("eval", "after_close", restored),
+    ], width=width, mobile=mobile, init=init)
+    assert not result.get("failed"), (result.get("failed"), result.get("where"), result.get("log"))
+    assert result["values"]["open_counts"] == ["2", "1"]
+    assert result["values"]["picker"] == "Создать новый чат"
+    assert result["values"]["other_tabs"] == [b1]
+    assert result["values"]["inbox_tabs"] == [a1, a2]
+    assert result["values"]["after_close"] == []
     assert not problems(result), problems(result)

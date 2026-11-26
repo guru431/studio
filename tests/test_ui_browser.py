@@ -1195,9 +1195,9 @@ SAVED = f"""(async () => {{ const m = {API};
 
 
 def open_new_chat(mobile=False):
-    """Плюс после вкладок открывает новый диалог и на телефоне, и на компьютере."""
+    """Плюс открывает список диалогов с кнопкой создания."""
     return [*go("chat"), ("wait", "document.querySelector('#chat-tab-add')"),
-            ("click", "#chat-tab-add"), ("wait", "location.hash.includes('new=1')"
+            ("click", "#chat-tab-add"), ("click", "#chat-new"), ("wait", "location.hash.includes('new=1')"
              " && !document.querySelector('.project-conversation').hidden && !document.querySelector('#messages .msg')")]
 
 

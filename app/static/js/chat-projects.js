@@ -145,8 +145,13 @@ export function projectsPanel({ user, select, create }) {
   const rows = el('ul', { class: 'code-projects project-list' });
   const orderKey = `studio-chat-project-sort:${user}`;
   const options = new Map([
-    ['modified', tr("По дате изменения")], ['name', tr("По имени")], ['count', tr("По числу диалогов")],
+    ['modified', tr("По дате изменения")], ['name', tr("По имени")], ['count', tr("По числу открытых вкладок")],
   ]);
+  const activityLabels = {
+    running: (n) => tr("В работе: {0}", n),
+    asking: (n) => tr("Требуют вашего ответа: {0}", n),
+    unread: (n) => tr("Завершены, не прочитаны: {0}", n),
+  };
   let order = 'modified';
   try {
     const saved = localStorage.getItem(orderKey);
@@ -175,25 +180,34 @@ export function projectsPanel({ user, select, create }) {
   add.append(icon('plus'), el('span', { class: 'code-project-create-label' }, tr("Новый проект")));
   const node = el('aside', { id: 'chats', class: 'code-panel', 'aria-label': tr("Проекты") },
     el('div', { class: 'code-panel-body' }, rows), el('div', { class: 'code-panel-footer' }, add, sort, sortMenu));
-  let projects = [], current = null, activity = new Map(), drawn = null;
+  let projects = [], current = null, activity = new Map(), tabs = new Map(), drawn = null;
 
   function render() {
-    const stats = (item) => activity.get(item.id) || { count: 0, updated: item.created || 0 };
+    const updatedOf = (item) => activity.get(item.id)?.updated || item.created || 0;
+    const countOf = (item) => tabs.get(item.id) || 0;
     const byName = (a, b) => projectName(a).localeCompare(projectName(b), undefined, { numeric: true });
     const sorted = [...projects].sort((a, b) => Number(b.inbox) - Number(a.inbox)
-      || (order === 'count' ? stats(b).count - stats(a).count : 0)
-      || (order === 'modified' ? stats(b).updated - stats(a).updated : 0) || byName(a, b));
-    const signature = JSON.stringify(sorted.map((item) => [item.id, item.name, item.id === current?.id, stats(item)]));
+      || (order === 'count' ? countOf(b) - countOf(a) : 0)
+      || (order === 'modified' ? updatedOf(b) - updatedOf(a) : 0) || byName(a, b));
+    const signature = JSON.stringify(sorted.map((item) =>
+      [item.id, item.name, item.id === current?.id, activity.get(item.id), countOf(item)]));
     if (signature === drawn) return;
     drawn = signature;
     rows.replaceChildren(...sorted.map((item) => {
       const name = projectName(item);
-      const { count, updated } = stats(item);
+      const count = countOf(item);
+      const updated = updatedOf(item);
+      const details = activity.get(item.id);
+      const badges = Object.entries(activityLabels).map(([kind, label]) => {
+        const total = details?.[kind] || 0;
+        return total ? el('span', { class: `code-project-state ${kind}`, title: label(total),
+          'aria-label': label(total) }, String(total)) : null;
+      });
       const link = el('a', { href: `#/chat?p=${item.id}`, class: 'code-project project-link',
         'aria-current': item.id === current?.id ? 'page' : null, title: name },
       el('span', { class: 'code-project-heading' },
         el('span', { class: 'code-project-title' }, el('span', { class: 'code-project-name' }, name)),
-        count ? el('span', { class: 'code-project-count' }, String(count)) : null,
+        ...badges, count ? el('span', { class: 'code-project-count', title: tr("Открыто вкладок: {0}", count) }, String(count)) : null,
         item.inbox ? el('span', { class: 'code-project-pin project-inbox-pin', 'aria-hidden': 'true' }, icon('star')) : null),
       updated ? el('span', { class: 'code-project-summary code-project-modified' }, dialogDateTime(updated)) : null);
       link.addEventListener('click', (event) => {
@@ -205,13 +219,17 @@ export function projectsPanel({ user, select, create }) {
     }));
   }
 
-  return { node, paint(items, selected, chats) {
+  return { node, paint(items, selected, chats, openCounts, stateOf) {
     projects = items;
     current = selected;
+    tabs = openCounts;
     activity = new Map();
     for (const chat of chats) {
-      const old = activity.get(chat.project_id);
-      activity.set(chat.project_id, { count: (old?.count || 0) + 1, updated: Math.max(old?.updated || 0, chat.updated) });
+      const stats = activity.get(chat.project_id) || { updated: 0, running: 0, asking: 0, unread: 0 };
+      stats.updated = Math.max(stats.updated, chat.updated);
+      const state = stateOf(chat);
+      if (state) stats[state]++;
+      activity.set(chat.project_id, stats);
     }
     render();
   }, close: () => popup.close() };

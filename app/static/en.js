@@ -1,7 +1,8 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
   "Проекты": "Projects",
-  "По числу диалогов": "By number of conversations",
+  "По числу открытых вкладок": "By number of open tabs",
+  "Создать новый чат": "Create a new chat",
   "Без проекта": "No project",
   "Настройки проекта": "Project settings",
   "Инструкции для диалогов": "Conversation instructions",

@@ -4,9 +4,11 @@ import pathlib
 import re
 
 import chat
+import chat_pending
 import state
 from conftest import add_connection, add_gateway, make_user, signin
-from test_chat import chat_streams, events_of, new_chat, turn, wait
+from test_chat import chat_streams, events_of, new_chat, sse, turn, wait
+from test_chat_pending import answer, pause_on
 
 
 def test_list_marks_busy_unread_and_pinned(studio, no_pings):
@@ -55,6 +57,28 @@ def test_seen_of_a_trashed_chat_is_gone(studio):
     assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
     r = studio.c.post(f"/api/chats/{cid}/seen")
     assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_waiting_badge_remains_after_reading_and_clears_after_answer(studio):
+    add_gateway(studio)
+    cid = new_chat(studio)
+    studio.clock[0] += 1
+    shown = pause_on(studio, cid, "ask_user", question="Какой вариант выбрать?", options=["Первый", "Второй"])
+
+    def flags():
+        item = studio.c.get("/api/chats").json()["items"][0]
+        return item["asking"], item["busy"], item["unread"]
+
+    assert flags() == (True, False, False)
+    assert studio.c.post(f"/api/chats/{cid}/seen").status_code == 204
+    assert flags() == (True, False, False)
+    studio.clock[0] += 1
+    sse(answer(studio, cid, shown["id"], "answer", "Первый"))
+    assert flags() == (False, False, True)
+
+    pause_on(studio, cid, "ask_user", question="Продолжить?", options=["Да", "Нет"])
+    studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
+    assert flags()[0] is False
 
 
 def test_every_chat_insert_names_the_seen_column():

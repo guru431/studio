@@ -93,6 +93,7 @@ def test_opening_chat_focuses_composer_only_on_desktop(focus_browser, live, sect
             page.goto(live.url + "/#/" + route)
             if section == "chat":
                 page.locator('#chat-tab-add').click()
+                page.locator('#chat-new').click()
             check_focus()
             if section == "code":
                 page.locator('.code-tab[aria-selected="true"] .code-tab-title').click()
@@ -108,6 +109,7 @@ def test_opening_chat_focuses_composer_only_on_desktop(focus_browser, live, sect
                     check_focus()
             if section == "chat":
                 page.locator('#chat-tab-add').click()
+                page.locator('#chat-new').click()
                 check_focus()
                 chat_id = page.evaluate("""async () => {
                     const {api} = await import('/static/js/api.js');
