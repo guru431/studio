@@ -91,6 +91,8 @@ def test_opening_chat_focuses_composer_only_on_desktop(focus_browser, live, sect
                     page.keyboard.press("Backspace")
 
             page.goto(live.url + "/#/" + route)
+            if section == "chat":
+                page.locator('#chat-tab-add').click()
             check_focus()
             if section == "code":
                 page.locator('.code-tab[aria-selected="true"] .code-tab-title').click()

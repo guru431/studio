@@ -169,7 +169,7 @@ def add_cloud(page, live):
         sections: ['chat'] });
       await m.api('PUT', '/api/sections/chat/links/' + c.id, { models: ['cloud-chat'] }); }""",
                   [live.cloud.base_url, live.cloud.TOKEN])
-    page.goto(live.url + "/#/chat")
+    page.goto(live.url + "/#/chat?new=1")
     page.reload()
     page.locator("#model-chip").click()
     page.locator('.model-option[data-model="cloud-chat"]').click()
@@ -441,12 +441,12 @@ def test_section_drafts_survive_switching_and_go_on_send_and_lock(chromium, live
         page.locator(chat).fill("Длинное сообщение")
         visit(page, "translate", translate)
         page.locator(translate).fill("Текст на потом")
-        visit(page, "chat", chat)
+        visit(page, "chat?new=1", chat)
         pw.expect(page.locator(chat)).to_have_value("Длинное сообщение")
         visit(page, "translate", translate)
         pw.expect(page.locator(translate)).to_have_value("Текст на потом")
 
-        visit(page, "chat", chat)
+        visit(page, "chat?new=1", chat)
         page.locator("#send").click()
         pw.expect(page.locator("#messages .msg.assistant .md")).to_have_text("Облако на связи.")
         visit(page, "translate", translate)
