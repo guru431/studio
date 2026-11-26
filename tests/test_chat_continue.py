@@ -105,9 +105,9 @@ def test_protection_set_while_the_summary_was_written_reaches_the_heir(studio, m
     add_gateway(studio); cid = three_turns(studio)
     real = chat.StreamTask._summarize
 
-    async def summarize(self, turns, seed):
+    async def summarize(self, transcript, batch, seed):
         state.DB.execute("UPDATE chats SET protected_used = 1, web = 0 WHERE id = ?", (cid,))
-        return await real(self, turns, seed)
+        return await real(self, transcript, batch, seed)
 
     monkeypatch.setattr(chat.StreamTask, "_summarize", summarize)
     studio.gw.chat_script = [["Итог"]]

@@ -97,6 +97,30 @@ def test_every_gesture_wakes_a_suspended_context(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_delayed_poll_does_not_play_a_voice_answers_signal(browser, live):
+    login = "sound-voice"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"),
+        ("wait", "document.querySelector('#sound-on')"),
+        ("eval", "words", "document.querySelector('#sound-settings').textContent"),
+        ("eval", "fit", "document.querySelector('#sound-settings').getBoundingClientRect().right <= innerWidth"),
+        ("click", "#sound-on"), ("wait", "window.tones.length >= 2"), CLEAR,
+        ("eval", "signals", """(async () => { const s = await import('/static/js/sound.js');
+          const now = performance.now.bind(performance);
+          try {
+            s.answerSignal({ id: 'voice', status: 'done' }, { quiet: true });
+            performance.now = () => now() + 2 * s.REPEAT_MS;
+            const voice = s.jobSignal([{ id: 'voice', state: 'done' }]);
+            const regular = s.jobSignal([{ id: 'voice', state: 'done' }, { id: 'normal', state: 'error' }]);
+            return [voice, regular, window.tones];
+          } finally { delete performance.now; }
+        })()""")], width=320, mobile=True, init=FAKE_AUDIO + "localStorage.setItem('studio-language', 'en');")
+    assert not r.get("failed"), r
+    assert r["values"]["signals"] == [False, True, [330, 220]]
+    assert "Sound on this device" in r["values"]["words"] and r["values"]["fit"]
+    assert not problems(r), problems(r)
+
+
 def test_agents_signal_through_the_snapshot_event(browser, live):
     """Снимки «Агентов» — событием `studio-code-snapshot`: первый снимок компьютера молчит, «ждёт ответа» — `ask`,
     конец хода — `done`."""

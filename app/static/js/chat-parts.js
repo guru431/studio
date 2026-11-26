@@ -1,4 +1,4 @@
-import { message, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 /* Части ответа (инструмент `run_part`, спека 2026-11-25-studio-skills-status-local-models, п. 7): шаг под ответом и
  * кнопка `#chat-parts` в строке состояния «Чата».
  *
@@ -12,7 +12,7 @@ import { message, tr } from './i18n.js';
 import { icon } from './icons.js';
 import { el, openDialog } from './ui.js';
 
-const STATES = { running: () => tr("идёт"), done: () => tr("готово"), error: () => tr("ошибка") };
+const STATES = { running: () => tr("идёт"), done: () => tr("Готово").toLocaleLowerCase(locale()), error: () => tr("ошибка") };
 
 function clock(ms) {
   const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
@@ -31,7 +31,7 @@ export function partNode(step, { ended = false } = {}) {
     Number.isFinite(step.ms) ? ` · ${clock(step.ms)}` : null,
   ];
   const error = step.error ? el('span', { class: 'error' }, ` — ${message(step.error)}`) : null;
-  const li = el('li', { class: 'web-step web-part', 'data-state': state });
+  const li = el('li', { class: 'web-step web-part', 'data-state': state, 'data-part': step.n ?? null });
   if (step.text) li.append(el('details', { class: 'part-result' }, el('summary', {}, ...head, error),
     el('div', { class: 'part-text' }, step.text)));
   else li.append(...head, error);
@@ -60,19 +60,37 @@ export function partsButton({ root }) {
   const node = el('button', { type: 'button', id: 'chat-parts', class: 'icon-btn', 'aria-haspopup': 'dialog', hidden: true },
     icon('subagents'), count);
   let shown = null;            // ответ, чьи части считает кнопка
+  let dialog = null;
+  let drawn = '';
+  const body = el('ul', { class: 'web-list chat-parts-list' });
+
+  function paintDialog(parts, ended) {
+    const value = JSON.stringify([parts, ended]);
+    if (drawn === value) return;
+    drawn = value;
+    const expanded = new Set([...body.querySelectorAll('li:has(details[open])')].map((li) => Number(li.dataset.part)));
+    body.replaceChildren(...parts.map((s) => {
+      const item = partNode(s, { ended });
+      const detail = item.querySelector('details');
+      if (detail && expanded.has(s.n)) detail.open = true;
+      return item;
+    }));
+  }
 
   node.addEventListener('click', () => {
-    const m = shown;
-    if (!m) return;
-    const ended = m.status !== 'streaming';
-    openDialog(root, { id: 'chat-parts-dialog', title: tr("Части ответа"), cancelText: tr("Закрыть"),
-      body: [el('ul', { class: 'web-list chat-parts-list' }, ...partsOf(m).map((s) => partNode(s, { ended })))] });
+    if (!shown || dialog?.open) return;
+    drawn = '';
+    body.replaceChildren();
+    paintDialog(partsOf(shown), shown.status !== 'streaming');
+    dialog = openDialog(root, { id: 'chat-parts-dialog', title: tr("Части ответа"), cancelText: tr("Закрыть"), body: [body] });
   });
 
   return {
     node,
     paint(m) {
       const list = partsOf(m);
+      if (dialog?.open && (!list.length || shown?.id !== m?.id)) dialog.close();
+      if (dialog?.open) paintDialog(list, m.status !== 'streaming');
       shown = list.length ? m : null;
       node.hidden = !list.length;
       if (!list.length) return;

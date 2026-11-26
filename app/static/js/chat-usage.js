@@ -4,8 +4,9 @@ import { locale, tr } from './i18n.js';
  * параметр потока — запрос повторяется без него, подключение запоминается в памяти вкладки (до перезагрузки). */
 
 const USAGE_MAX = 100000000;          // как chat.USAGE_MAX: больше PUT ответа не примет (422)
-const MARKERS = ['unknown', 'unsupported', 'unrecognized', 'not supported', 'extra fields not permitted',
-  'extra inputs are not permitted', 'unexpected keyword'];   // как profiles.REJECTED и REJECTED в chat.js
+export const MS_MAX = 86400000;       // как chat.MS_MAX: предел gen_ms и total_ms того же PUT
+export const REJECTED = ['unknown', 'unsupported', 'unrecognized', 'not supported', 'extra fields not permitted',
+  'extra inputs are not permitted', 'unexpected keyword'];   // как profiles.REJECTED
 const refused = new Set();            // id подключений, что не принимают `stream_options`
 
 /** Добавка к телу запроса прямого подключения: `stream_options`, пока подключение его не отвергло. */
@@ -18,7 +19,7 @@ export function usageBody(connId) {
 export function usageRefused(connId, status, text) {
   if (status !== 400 || refused.has(connId)) return false;
   const lowered = String(text || '').toLowerCase();
-  if (!MARKERS.some((marker) => lowered.includes(marker))) return false;
+  if (!REJECTED.some((marker) => lowered.includes(marker))) return false;
   if (!lowered.includes('stream_options') && !lowered.includes('include_usage')) return false;
   refused.add(connId);
   return true;

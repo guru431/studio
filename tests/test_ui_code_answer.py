@@ -3,7 +3,7 @@
 import pytest
 
 from test_ui_browser import (CODE_CHAT_A, CODE_IDLE_AFTER, COPY_SPY, NO_OVERFLOW, READY, browser, code_chat,
-                             code_free_machine, code_online, code_send, code_session, live, problems, signin)
+                             code_free_machine, code_online, code_send, code_session, go, live, problems, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -28,7 +28,9 @@ def test_copy_and_model_under_the_answer(browser, live, width):
                {"id": "m-2", "role": "user", "text": "А ещё?", "steps": [], "time": T0 + 2},
                {"id": "m-3", "role": "assistant", "text": "Без модели", "steps": [], "time": T0 + 3}]
     machine = code_free_machine({CODE_CHAT_A: code_session("Ответы", messages=history)})
-    machine.script = [{"k": "settings", "model": "sonnet"}, {"k": "text", "text": "Сделано"}, {"k": "done", "status": "done"}]
+    actual = "claude-sonnet-5-5"
+    machine.script = [{"k": "settings", "model": "sonnet"}, {"k": "text", "text": "Сделано"},
+                      {"k": "done", "status": "done", "model": actual}]
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
@@ -37,14 +39,16 @@ def test_copy_and_model_under_the_answer(browser, live, width):
             ("wait", CODE_IDLE_AFTER.format(n=3) + " && document.querySelector('#code-feed .code-msg.assistant:last-child .msg-copy')"),
             ("eval", "live", MODELS), ("eval", "last", copy_answer(-1)),
             ("eval", "read", "document.querySelectorAll('#code-feed .msg-read').length"),
-            ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 320)
+            ("eval", "fits", NO_OVERFLOW),
+            *go("settings"), ("wait", "!document.querySelector('#code-chat')"),
+            *code_chat(aid, CODE_CHAT_A), ("eval", "reopened", MODELS)], width=width, mobile=width == 320)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     values = r["values"]
     assert values["models"] == ["claude-opus-5-5"], values               # у m-3 модели нет — и строки нет
     assert values["first"] == ["**Готово**", "Скопировано"], values
-    assert values["live"] == ["claude-opus-5-5", "sonnet"], values
+    assert values["live"] == values["reopened"] == ["claude-opus-5-5", actual], values
     assert values["last"] == ["Сделано", "Скопировано"], values
     assert values["read"] == 0 and values["fits"], values
     assert not [p for p in r["sent"] if "/api/speeches" in p]

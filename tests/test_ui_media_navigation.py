@@ -133,9 +133,24 @@ def test_buttons_keyboard_touch_and_actions_follow_the_current_file(media_page, 
     page.on('pageerror', lambda error: errors.append(str(error)))
     opener = open_first(page, live, section)
     current(page, rows[0])
+    stage = page.locator('.viewer-stage')
+    details = page.locator('.viewer-bar')
+    if width == 320:
+        pw.expect(details).to_be_hidden()
+    else:
+        pw.expect(details).to_be_visible()
+        page.get_by_role('button', name='На весь экран').click()
+    pw.expect(page.get_by_role('button', name='Показать сведения')).to_have_attribute('aria-expanded', 'false')
+    pw.expect(details).to_be_hidden()
+    assert stage.evaluate("node => Math.abs(node.clientHeight - node.parentElement.clientHeight) <= 1")
+    if section == 'photo':
+        page.wait_for_function("() => document.querySelector('.viewer-stage img')?.naturalWidth > 0")
+        assert stage.locator('img').evaluate("""img => img.clientWidth === img.parentElement.clientWidth
+            && img.clientHeight === img.parentElement.clientHeight && getComputedStyle(img).objectFit === 'contain'""")
     pw.expect(page.locator('.viewer-prev')).to_be_disabled()
     page.locator('.viewer-next').click()
     current(page, rows[2])  # failed row is skipped
+    pw.expect(details).to_be_hidden()
     if section == 'video':
         page.locator('video.viewer-video').evaluate("p => {window.oldPlayer=p; window.pauses=0; p.pause=()=>window.pauses++;}")
         page.locator('video.viewer-video').focus()
@@ -182,6 +197,12 @@ def test_buttons_keyboard_touch_and_actions_follow_the_current_file(media_page, 
     opener.click()
     page.locator('.viewer-next').click()
     current(page, rows[2])
+    if width == 320:
+        page.get_by_role('button', name='Показать сведения').tap()
+        pw.expect(details).to_be_visible()
+        page.get_by_role('button', name='На весь экран').tap()
+        assert stage.evaluate("node => Math.abs(node.clientHeight - node.parentElement.clientHeight) <= 1")
+        page.get_by_role('button', name='Показать сведения').tap()
     page.locator('.viewer .act-delete').click()
     page.keyboard.press('ArrowRight')
     current(page, rows[2])  # confirmation above the viewer owns keyboard input
@@ -225,6 +246,7 @@ def test_pagination_retries_and_late_page_cannot_reopen_closed_viewer(media_page
     calls['fail'] = True
     page.locator('.viewer-next').click()
     pw.expect(page.locator('.viewer-navigation-error')).to_have_text('Проверка связи')
+    pw.expect(page.locator('.viewer-navigation-error')).to_be_visible()
     current(page, rows[last_at])
     calls['fail'] = False
     page.locator('.viewer-next').click()

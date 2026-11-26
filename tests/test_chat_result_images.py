@@ -7,6 +7,7 @@ import logging
 import random
 from types import SimpleNamespace
 
+import httpx
 from PIL import Image
 
 import capabilities
@@ -15,7 +16,7 @@ import mcp_client
 import mcp_files
 import state
 from conftest import add_gateway, set_passport
-from test_chat import messages, new_chat, png, sse, turn
+from test_chat import messages, new_chat, png, sse, turn, window
 from test_chat_pending import answer, pending_of
 from test_chat_web import call, steps_of
 from test_cleaner_route_chat import MCP_KEY, MCP_URL, cleaner_gw, routed_chat  # noqa: F401 (фикстура)
@@ -125,6 +126,34 @@ def test_pictures_wait_for_the_pause_and_follow_both_tool_messages(studio):
     assert [m["role"] for m in tail] == ["tool", "tool", "user"]
     assert [p["type"] for p in tail[-1]["content"]] == ["text", "image_url"]
     assert tail[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_compaction_after_resuming_keeps_the_current_question_and_result_image(studio):
+    sid, _, _ = setup(studio, results={"lookup": RESULT})
+    vision()
+    cid = new_chat(studio)
+    window(studio, 65536, model=MODEL)
+    studio.gw.chat_script = [["Старый ответ"], {"tool_calls": [call(name_of(sid), q="1")]},
+                             {"tool_calls": [call("ask_user", question="Продолжить?")]}]
+    sse(turn(studio, cid, "Старый вопрос"))
+    paused = pending_of(sse(turn(studio, cid, "Новый запрос")))
+    sent = []
+
+    async def refuse_once(request):
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            return httpx.Response(400, json={"error": {"message": "This model's maximum context length is 8192 tokens."}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/chat/completions"] = refuse_once
+    studio.gw.chat_script = [["Пересказ старого"], ["Готово"]]
+    assert sse(answer(studio, cid, paused["id"], "answer", "Да"))[-1] == ("done", {"status": "done"})
+    refused, summary, resumed = (body["messages"] for body in sent)
+    assert "Старый вопрос" in summary[-1]["content"] and "Новый запрос" not in summary[-1]["content"]
+    assert next(i for i, m in enumerate(resumed) if "Новый запрос" in str(m["content"])) == 1
+    assert any(parts[0].get("text") == chat.RESULT_IMAGES_NOTE and parts[1]["type"] == "image_url"
+               for m in resumed if isinstance(parts := m["content"], list) and len(parts) >= 2)
+    assert resumed[-1] == refused[-1]
 
 
 def test_a_big_picture_result_keeps_its_text_and_picture(studio):

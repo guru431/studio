@@ -11,14 +11,15 @@ const stepOf = new WeakMap();          // кнопка куска → её ша�
 /** Строка шага знаний в `li`; `buttons` — куски кнопками (под ответом; в меню строки состояния — именами). */
 export function knowledgeStep(li, s, { buttons = false } = {}) {
   li.append(s.auto ? tr("Знания диалога") : s.query ? tr("Знания: «{0}»", s.query) : tr("Знания"));
-  const hits = Array.isArray(s.hits) ? s.hits.filter((h) => h && typeof h.doc === 'string') : [];
-  if (buttons && hits.length) {
-    li.append(el('ul', { class: 'kb-sources' }, ...hits.map((h, k) => {
-      const open = el('button', { type: 'button', class: 'btn-link kb-source', 'data-k': String(k) },
-        tr("{0} · кусок {1}", h.doc, h.n));
-      stepOf.set(open, s);
-      return el('li', {}, open);
-    })));
+  const hits = buttons && Array.isArray(s.hits) ? s.hits.flatMap((h, k) => {
+    if (!h || typeof h.doc !== 'string') return [];
+    const open = el('button', { type: 'button', class: 'btn-link kb-source', 'data-k': String(k) },
+      tr("{0} · кусок {1}", h.doc, h.n));
+    stepOf.set(open, s);
+    return [el('li', {}, open)];
+  }) : [];
+  if (hits.length) {
+    li.append(el('ul', { class: 'kb-sources' }, ...hits));
   } else if (Array.isArray(s.sources) && s.sources.length) {
     li.append(el('span', { class: 'muted' }, ` · ${s.sources.join(', ')}`));
   }
@@ -43,6 +44,6 @@ export function sourceClicks(list, { chatId, message, host }) {
     } finally {
       open.disabled = false;
     }
-    openDialog(host, { id: 'kb-source-dialog', title: open.textContent, cancelText: tr("Закрыть"), body });
+    if (open.isConnected) openDialog(host, { id: 'kb-source-dialog', title: open.textContent, cancelText: tr("Закрыть"), body });
   });
 }

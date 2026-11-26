@@ -47,7 +47,21 @@ def test_find_counts_steps_through_and_loads_earlier_pages(browser, live, width)
             ("eval", "again", "(() => { document.querySelector('#code-find-input').focus(); return %s; })()" % CTRL_F),
             query("жираф"), ("wait", COUNT + " === '0 из 0'"),
             ("eval", "earlier", "!document.querySelector('#code-find-earlier').hidden"),
-            ("click", "#code-find-earlier"),
+            ("eval", "sharedEarlier", """(() => {
+              const original = window.fetch;
+              const pending = [];
+              window.fetch = async (resource, options) => {
+                if (new URL(resource, location.href).searchParams.has('before')) {
+                  await new Promise(resolve => pending.push(resolve));
+                }
+                return original(resource, options);
+              };
+              document.querySelector('#code-more').click();
+              document.querySelector('#code-find-earlier').click();
+              window.fetch = original;
+              pending.forEach(resolve => resolve());
+              return pending.length;
+            })()"""),
             ("wait", COUNT + " === '1 из 1' && document.querySelector('#code-find-earlier').hidden"),
             ("eval", "found", "[...CSS.highlights.get('code-find-current')].map((r) => r.toString())"),
             ("eval", "focus", "document.querySelector('#code-find-input').focus() ?? true"), ("press", "Escape"),
@@ -64,6 +78,7 @@ def test_find_counts_steps_through_and_loads_earlier_pages(browser, live, width)
     assert values["marks"] == 3, values                   # шаг с «зеброй» не ищется
     assert values["again"] == [False, "code-find-input"], values   # второе Ctrl+F — поиск браузера
     assert values["earlier"] is True and values["found"] == ["Жираф"], values
+    assert values["sharedEarlier"] == 1, values
     assert values["cleared"] is True and values["fits"], values
     assert not [p for p in r["sent"] if p.endswith("/search")]          # текст на сервер не уходит
     assert not [q for q in machine.requests if "search" in q["op"]]

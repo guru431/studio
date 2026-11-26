@@ -111,7 +111,7 @@ async def _rounds(task) -> "tuple[str | None, str]":
                 return error, text
             continue
         if ending is chat.TOO_LONG:                    # отказ по длине — словами хода, без сжатия
-            return chat.TOO_LONG_WORDS, text
+            return (chat.PARAM_TOO_BIG if task._answer_limit_too_big() else chat.TOO_LONG_WORDS), text
         # структурный вызов — при любом признаке конца, кроме обрыва; вызов текстом в части не разбирается.
         # Паузы внутри части нет: вопрос и подтверждение отказаны словами (chat_tools.call, NEEDS_CONFIRM)
         if specs and calls and ending not in (None, "length"):

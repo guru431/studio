@@ -146,10 +146,17 @@ export function setupMobileNavigation(me) {
   };
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
+    if (dialog.open) return;
     more.setAttribute('aria-expanded', 'false');
     (mode === 'all' && returnFocus === more ? document.getElementById('avatar') : returnFocus).focus();
   });
-  links.addEventListener('click', event => { if (event.target.closest('a')) dialog.close(); });
+  links.addEventListener('click', (event) => {
+    const link = event.target.closest('a');
+    if (!link || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    location.hash = link.hash;
+    dialog.close();
+  });
   // окно вне раздела: жест «назад» (iPhone) меняет раздел — лист не остаётся поверх нового
   window.addEventListener('hashchange', () => { if (dialog.open) dialog.close(); });
   edit.addEventListener('click', () => showEditor(true));

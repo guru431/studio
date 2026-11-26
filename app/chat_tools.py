@@ -169,11 +169,7 @@ def part_refusal(call, words: str) -> dict:
 
 
 def _args(arguments: str) -> "dict | None":
-    try:
-        args = json.loads(arguments) if arguments.strip() else {}
-    except ValueError:
-        return None
-    return args if isinstance(args, dict) else None
+    return web.args_of(arguments) if arguments.strip() else {}
 
 
 def todo_items(arguments: str) -> "list[dict] | None":
@@ -245,12 +241,8 @@ def _knowledge_spec(task) -> dict:
 
 
 async def _knowledge(task, call) -> dict:
-    try:
-        args = json.loads(call.arguments) if call.arguments.strip() else {}
-    except ValueError:
-        args = None
-    query = args.get("query") if isinstance(args, dict) else None
-    ids = args.get("kb_ids") if isinstance(args, dict) else None
+    args = _args(call.arguments) or {}
+    query, ids = args.get("query"), args.get("kb_ids")
     if (not isinstance(query, str) or not query.strip() or len(query) > knowledge.QUERY_MAX
             or (ids is not None and (not isinstance(ids, list) or len(ids) > 16
                                      or any(not isinstance(i, str) for i in ids)))):
@@ -270,12 +262,7 @@ async def _knowledge(task, call) -> dict:
 
 def _ask_view(arguments: str) -> "dict | None":
     """Вид карточки вопроса из аргументов модели или None — аргументы неверные."""
-    try:
-        args = json.loads(arguments) if arguments.strip() else {}
-    except ValueError:
-        return None
-    if not isinstance(args, dict):
-        return None
+    args = _args(arguments) or {}
     question, options, allow = args.get("question"), args.get("options", []), args.get("allow_text", True)
     if (not isinstance(question, str) or not question.strip() or len(question) > QUESTION_MAX
             or not isinstance(options, list) or len(options) > OPTIONS_MAX

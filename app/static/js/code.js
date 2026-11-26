@@ -700,9 +700,11 @@ async function separateCopy(p, engine, text) {
 
 /** «Проверить другим помощником»: новый чат помощника `engine` в том же проекте, в поле — `text` и навык `skill`
  * (`copyStart`, только память страницы); отправляет человек. */
-async function verifyWith(p, engine, text, skill) {
+async function verifyWith(p, engine, text, skill, current) {
+  if (!current() || !p.canStart) return;
   const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine === 'claude' ? '' : `?engine=${engine}`}`);
   p.listing = null;
+  if (!current() || !p.canStart) return;
   copyStart = { aid: p.aid, pid: p.pid, chat, text, skill };
   created(p, chat, engine);
 }
@@ -741,7 +743,8 @@ async function chat(mine, p, id, agent, section, status) {
     project: name ? { pid: p.pid, name, ...(p.dir ? { dir: p.dir } : {}) } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title, readonly: !!p.readonly,
     git: p.repo, gitAction, startText, startSkill,
-    verifyWith: p.readonly ? null : (engine, text, skill) => verifyWith(p, engine, text, skill),
+    verifyWith: p.readonly ? null : (engine, text, skill) =>
+      verifyWith(p, engine, text, skill, () => proj === p && mine === gen),
     separateCopy: p.worktrees && !p.readonly ? (text) => separateCopy(p, row?.engine || 'claude', text) : null,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
     verify: cached ? listing.then(() => {

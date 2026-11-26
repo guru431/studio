@@ -4,7 +4,7 @@ import { locale, tr } from './i18n.js';
  * строки состояния «Чата» и из «Настроек → Чат». Чисел нет ни у одного ответа группы — «—». */
 import { api } from './api.js';
 import { button, el, openDialog, plural, words } from './ui.js';
-import { duration } from './code-context.js';
+import { duration } from './time.js';
 
 const DAYS = 31;                 // как chat_info.STATS_DAYS
 

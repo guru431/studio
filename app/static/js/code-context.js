@@ -2,22 +2,10 @@ import { locale, tr } from './i18n.js';
 /* Подробности сессии: числа CLI и параметры чата, только память страницы. */
 import { el } from './ui.js';
 import { accessLabel, effortLabel, ENGINE_NAMES } from './code-options.js';
+import { duration } from './time.js';
 
 const number = (value) => Number.isFinite(value) ? value.toLocaleString(locale()) : tr("Не сообщается");
 const NO_DATA = () => tr("нет данных");
-
-/** Длительность по миллисекундам моста: «{0} с» (меньше 10 с — до десятой), «{0} мин {1} с», «{0} ч {1} мин». */
-export function duration(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return NO_DATA();
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    const value = seconds < 10 ? Math.floor(seconds * 10) / 10 : Math.floor(seconds);
-    return tr("{0} с", value.toLocaleString(locale(), { maximumFractionDigits: 1 }));
-  }
-  const whole = Math.floor(seconds);
-  if (whole < 3600) return tr("{0} мин {1} с", Math.floor(whole / 60), whole % 60);
-  return tr("{0} ч {1} мин", Math.floor(whole / 3600), Math.floor(whole % 3600 / 60));
-}
 
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;

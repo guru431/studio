@@ -2,7 +2,7 @@
 import pytest
 
 from fake_bridge import T0, pid
-from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, TURN_DONE, browser, code_chat, code_free_machine,
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, DONE_TEXT, READY, TURN_DONE, browser, code_chat, code_free_machine,
                              code_online, code_files_machine, code_item, code_requests, code_session, code_tab_click,
                              go, known_refusals, live, problems, set_value, signin)
 
@@ -15,7 +15,7 @@ def test_git_action_creates_chat_once_without_an_active_tab(browser, live, actio
     login = f"git-new-{action}-{width}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_B: code_session('Прошлый чат')})
-    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
     aid, server = code_online(live, login, machine)
     gate = """(() => { const real = fetch; window.newChats = 0;
       window.fetch = async (url, options) => {
@@ -63,7 +63,7 @@ def test_git_chat_creation_handles_failure_and_leaving_the_project(browser, live
     live.add_user(login)
     machine = code_free_machine()
     machine.projects['beta'] = {}
-    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
     aid, server = code_online(live, login, machine)
     gate = """(() => { const real = fetch; window.newChats = 0;
       window.fetch = async (url, options) => {
@@ -132,7 +132,7 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
     original = machine._op_turn
 
     def turn(req, events):
-        machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+        machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
         project = machine.projects["alpha"]
         project["git"]["files"] = []
         project["git"]["ahead"] = 2 if machine.turns == 0 else 0
@@ -183,7 +183,7 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
                 # ответ машины на этот ход, а не только своё сообщение: оно рисуется ещё до POST хода
                 ("wait", f"document.querySelectorAll('#code-feed .code-msg.user').length === {count}"
                          f" && document.querySelectorAll('#code-feed .code-msg.assistant').length === {count}"
-                         " && [...document.querySelectorAll('#code-feed .code-msg.assistant')].at(-1).textContent.includes('Готово')"
+                         f" && [...document.querySelectorAll('#code-feed .code-msg.assistant .md')].at(-1)?.textContent.trim() === {DONE_TEXT!r}"
                          " && !document.querySelector('#code-send').disabled && document.querySelector('#code-chat').dataset.running === '0'")]
         actions += [("wait", "document.querySelector('#code-repo-status').dataset.gitLevel === 'green'"),
             ("eval", "draft", "document.querySelector('#code-text').value"),
@@ -220,7 +220,7 @@ def test_git_popup_keeps_unsaved_file_and_requires_leaving_before_start(browser,
     login = 'git-unsaved'
     live.add_user(login)
     machine = code_files_machine()
-    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),

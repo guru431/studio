@@ -57,6 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import access
 import card
 import capabilities
+import chat_info
 import chat_list
 import chat_parts
 import chat_pending
@@ -144,10 +145,11 @@ USER_STREAMS = 3
 MODELS_TIMEOUT_SEC = 10
 # пределы контекста из списка моделей подключения (_listed): список почти не меняется, а у OpenRouter он —
 # сотни КБ JSON, до MODELS_TIMEOUT_SEC перед каждым ходом. Удачный список живёт CONTEXT_TTL_SEC, записей —
-# не больше CONTEXT_KEEP; неудача не запоминается
+# не больше CONTEXT_KEEP. При известном резервном окне неудача кешируется ненадолго.
 CONTEXT_TTL_SEC = 600
+CONTEXT_RETRY_SEC = 30
 CONTEXT_KEEP = 256
-LIMITS: dict[tuple, tuple[float, dict[str, int]]] = {}
+LIMITS: dict[tuple, tuple[float, "dict[str, int] | None"]] = {}
 SAVE_SEC = 5                     # идущий ответ — в базу не чаще (перезапуск оставит прочитанное)
 # признак жизни ответа из браузера: вкладка шлёт его раз в ~15 с, а фоновой вкладке браузер
 # разрешает таймер раз в минуту
@@ -203,9 +205,13 @@ NO_MCP = "эта модель не поддерживает инструмент
 # метка на пару (id подключения, модель): NO_TOOLS_SEC её ходы идут без встроенных инструментов. Только память процесса
 NO_TOOLS: dict[tuple[int, str], float] = {}
 NO_TOOLS_SEC = 3600
-# `usage` потока: id подключений, отказавших `stream_options` (400/422 со словом из USAGE_MARKS); только память процесса
-NO_USAGE: set[int] = set()
+# `usage` потока: получатели, явно отказавшие `stream_options`; только память процесса
+NO_USAGE: dict[int, tuple] = {}
 USAGE_MARKS = ("stream_options", "include_usage")
+_USAGE_FIELD = "(?:" + "|".join(map(re.escape, USAGE_MARKS)) + ")"
+_REJECTED_PARAM = "(?:" + "|".join(map(re.escape, profiles.REJECTED)) + ")"
+USAGE_REFUSAL = re.compile(rf"\b{_REJECTED_PARAM}\b[^\r\n{{}}]{{0,48}}\b{_USAGE_FIELD}\b"
+                           rf"|\b{_USAGE_FIELD}\b[^\r\n{{}}]{{0,48}}\b{_REJECTED_PARAM}\b", re.I)
 # знаков на токен по `usage` (model_facts.ratio): ответ меньше RATIO_MIN_TOKENS не учит, вне RATIO_RANGE — выброс,
 # прежнее значение сдвигается на RATIO_BLEND к новому
 RATIO_MIN_TOKENS = 500
@@ -294,7 +300,7 @@ class ChatPatch(BaseModel):
     model: str | None = Field(None, max_length=MODEL_MAX)
     web: bool | None = None              # кнопка «Интернет»; null — не трогать
     thinking: bool | None = None         # кнопка «Рассуждение»; null — не трогать
-    effort: Literal["low", "medium", "high"] | None = None   # уровень рассуждения (profiles.EFFORTS); null — «как у модели»
+    effort: profiles.Effort | None = None   # уровень рассуждения (profiles.EFFORTS); null — «как у модели»
     role_id: str | None = Field(None, max_length=64)   # роль диалога (roles.py); null — без роли
 
 
@@ -497,12 +503,14 @@ def _chat_pair(user_id: int, conn_id: "int | None", model: "str | None") -> tupl
     return sections.resolve(user_id, "chat", conn_id, (model or "").strip() or None)
 
 
-def _admit(user_id: int, conn: Connection, model: str) -> None:
+def _admit(user_id: int, conn: Connection, model: str, mcp_ids: "str | None" = None) -> None:
     """Допуски подключения до вызова модели — общие для хода и «Сжать сейчас» (история уходит модели в обоих):
     адрес убран из списка — 409 `server`; облачная роль srvllm при принудительном Cleaner — 409 `cleaner_forced`
     (`cleaner_route.refuse_forced`); общее подключение — модель отмечена для учётки (`_chat_pair`, иначе 422)."""
     if connections.dropped(conn):                    # ни сервер, ни браузер туда не пойдут
         raise HTTPException(409, {"code": "server", "message": sections.unlisted(conn)})
+    if mcp_ids is not None and (not conn.proxied or conn.cleaner) and mcp_client.present(user_id, mcp_ids):
+        raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     cleaner_route.refuse_forced(conn, "chat", model)
     if conn.shared:
         _chat_pair(user_id, conn.id, model)
@@ -833,11 +841,11 @@ def _without(content, text: str):
     return content
 
 
-def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None", *,
+def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: list, *,
                  keep_skill: bool = False) -> tuple[list[dict], str, "str | None"]:
     """Сообщения запроса до `upto` для пересказа: без шапки действующего пересказа и без текста последнего навыка
-    внутри новой границы (решение 14). `ids` — id строк на каждое сообщение `turns` (None — не известны: граница —
-    `upto`, навык ищется текстом). Итог — (сообщения, прежний пересказ или "", текст навыка для новой шапки или None).
+    внутри новой границы (решение 14). `ids` — id строк на каждое сообщение `turns`. Итог — (сообщения, прежний
+    пересказ или "", текст навыка для новой шапки или None).
     Навык прежней шапки остаётся в новой, пока он последний внутри границы; иначе его текст идёт в расшифровку
     первым сообщением — его пересказывают, как другие ранние навыки. `keep_skill` — последний навык тоже
     пересказывается («Новый диалог с итогом»: у наследника шапки нет, навык живёт только в итоге)."""
@@ -854,7 +862,7 @@ def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None",
     out = False
     if skill is not None:
         for j, t in enumerate(turns):
-            if ids is not None and (j >= len(ids) or skill[0] not in ids[j]):
+            if skill[0] not in ids[j]:
                 continue
             stripped = _without(t["content"], skill[1])
             if stripped != t["content"]:
@@ -1038,6 +1046,8 @@ async def model_window(conn: Connection, model: str) -> int | None:
     if manual is not None:
         return manual
     read, listed = await _listed(conn, model)
+    if not connections.current_model_endpoint(conn):
+        return CONTEXT.get(model)
     if listed is not None:
         known = state.DB.execute("SELECT window FROM model_facts WHERE connection_id = ? AND model = ?",
                                  (conn.id, model)).fetchone()
@@ -1057,39 +1067,46 @@ async def model_window(conn: Connection, model: str) -> int | None:
 async def _listed(conn: Connection, model: str) -> "tuple[bool, int | None]":
     """Окно модели из списка моделей подключения через сервер (`connections.context_size`, список запомнен в LIMITS
     на CONTEXT_TTL_SEC): (список прочитан, окно или None). Прямое подключение сервер не опрашивает — (False, None);
-    неудача не запоминается."""
+    при известном резервном окне повтор после неудачи — через CONTEXT_RETRY_SEC."""
     if not conn.proxied:
         return False, None
     now = clock.NOW()
-    for key in [k for k, (at, _) in LIMITS.items() if not 0 <= now - at < CONTEXT_TTL_SEC]:
+    for key in [k for k, (at, lengths) in LIMITS.items()
+                if not 0 <= now - at < (CONTEXT_RETRY_SEC if lengths is None else CONTEXT_TTL_SEC)]:
         del LIMITS[key]
-    key = (conn.user_id, conn.id, conn.kind, conn.base_url)
+    key = (conn.user_id, *connections.model_endpoint(conn))
     if key in LIMITS:
-        return True, LIMITS[key][1].get(model)
+        lengths = LIMITS[key][1]
+        return (False, None) if lengths is None else (True, lengths.get(model))
+    lengths = await _list_windows(conn)
+    if lengths is not None or model in CONTEXT:
+        while len(LIMITS) >= CONTEXT_KEEP:
+            del LIMITS[next(iter(LIMITS))]
+        LIMITS[key] = (clock.NOW(), lengths)
+    return (False, None) if lengths is None else (True, lengths.get(model))
+
+
+async def _list_windows(conn: Connection) -> "dict[str, int] | None":
     if conn.routed:                                  # список — только через Cleaner (`cleaner_route.models`)
         try:
             items = await cleaner_route.models(conn)
         except HTTPException:
-            return False, None
-        lengths = {m["id"]: m["context_length"] for m in reversed(items) if "context_length" in m}
-    else:
-        try:
-            r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
-        except (httpx.HTTPError, upstream.UpstreamRefused):
-            return False, None
-        data = upstream.json_body(r).get("data") if r.is_success else None
-        if not isinstance(data, list):
-            return False, None
-        lengths = {}
-        for m in data:
-            if isinstance(m, dict) and isinstance(m.get("id"), str):
-                length = connections.context_size(m)
-                if length is not None:
-                    lengths.setdefault(m["id"], length)
-    while len(LIMITS) >= CONTEXT_KEEP:
-        del LIMITS[next(iter(LIMITS))]
-    LIMITS[key] = (now, lengths)
-    return True, lengths.get(model)
+            return None
+        return {m["id"]: m["context_length"] for m in reversed(items) if "context_length" in m}
+    try:
+        r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
+    except (httpx.HTTPError, upstream.UpstreamRefused):
+        return None
+    data = upstream.json_body(r).get("data") if r.is_success else None
+    if not isinstance(data, list):
+        return None
+    lengths = {}
+    for m in data:
+        if isinstance(m, dict) and isinstance(m.get("id"), str):
+            length = connections.context_size(m)
+            if length is not None:
+                lengths.setdefault(m["id"], length)
+    return lengths
 
 
 def _too_big(tokens: int, limit: int) -> HTTPException:
@@ -1125,6 +1142,11 @@ def _summary_turns(messages):
             content = "\n".join(p["text"] if p["type"] == "text" else "[image]" for p in content)
         yield f'{item["role"]}: {content}'
 
+
+def _summary_plan(turns: list[dict], limit: int, rate: float) -> "tuple[str, int] | None":
+    transcript = "\n\n".join(_summary_turns(turns))
+    batch = _summary_batch(limit, rate)
+    return (transcript, batch) if batch > 0 and len(transcript) <= batch * SUMMARY_ROUNDS else None
 
 # ---- поток через сервер --------------------------------------------------------
 
@@ -1185,7 +1207,7 @@ def _text_calls(text: str) -> "tuple[str, list[ToolCall]]":
         body = found.group(1).strip()
         try:
             data = json.loads(body)
-        except ValueError:
+        except (ValueError, RecursionError):
             named = TOOL_CALL_NAME_RE.search(body)
             if named is None:
                 return found.group(0)
@@ -1196,7 +1218,10 @@ def _text_calls(text: str) -> "tuple[str, list[ToolCall]]":
             return found.group(0)
         args = data.get("arguments", "{}")
         if not isinstance(args, str):                 # словарь и прочее — в JSON
-            args = json.dumps(args, ensure_ascii=False)
+            try:
+                args = json.dumps(args, ensure_ascii=False)
+            except RecursionError:
+                args = body
         calls.append(ToolCall("", name, args))
         return ""
 
@@ -1489,8 +1514,8 @@ class StreamTask:
         шлюза. Подключение через Cleaner (`conn.routed`) — тот же запрос в шлюз Cleaner (`cleaner_route.stream`):
         контекст диалога, веб-инструменты без восстановления (`_held`), id запроса Cleaner — в
         `messages.cleaner_request`; отказ самого Cleaner — его словами (`cleaner_route.words`), обхода нет.
-        Запрос просит `usage` потока (`stream_options`), пока подключение его не отвергло: 400/422 со словом из
-        USAGE_MARKS — подключение в NO_USAGE и тот же запрос один раз без параметра. `usage` круга (последний непустой
+        Запрос просит `usage` потока (`stream_options`), пока шлюз явно его не отверг: получатель в NO_USAGE и тот же
+        запрос один раз без параметра. `usage` круга (последний непустой
         кусок) и время генерации — в ответ (`usage`, `gen_sec`; служебный круг `silent` — нет), знаки на токен —
         `note_usage`. Круг части (`part`, chat_parts) — как `silent`: текст, рассуждение и `messages.cleaner_request`
         ответа не пишутся, но предел текста — ANSWER_MAX, а `usage` и время входят в ответ; срок части — `part_deadline`;
@@ -1500,12 +1525,15 @@ class StreamTask:
         usage, started = {}, None
         thought_chars = 0                            # знаки рассуждения круга части (`part`)
         routed = self.conn.routed
-        sent = payload if self.conn.id in NO_USAGE else {**payload, "stream_options": {"include_usage": True}}
+        recipient = connections.model_endpoint(self.conn)
+        send_usage = NO_USAGE.get(self.conn.id) != recipient
+        sent = {**payload, "stream_options": {"include_usage": True}} if send_usage else payload
         timeout = httpx.Timeout(STREAM_READ_SEC, connect=30)
         try:
             if routed:
                 if self.cleaner_chat is None:
                     self.cleaner_chat = await cleaner_route.context(self.conn, "chat", self.chat_id)
+                _mark_routed(self.conn, self.chat_id)    # подготовка завершена, далее отправка истории в Cleaner
                 opened = cleaner_route.stream(self.conn, "/chat/completions", remote=self.cleaner_chat,
                                               hold=self._held(), json=sent, timeout=timeout)
             else:
@@ -1530,9 +1558,10 @@ class StreamTask:
                             self.cleaner_chat = None
                         return cleaner_route.words(r), None, [], text
                     lowered = r.text.lower()
-                    if (sent is not payload and r.status_code in (400, 422)
-                            and any(mark in lowered for mark in USAGE_MARKS)):
-                        NO_USAGE.add(self.conn.id)              # до перезапуска службы — без параметра
+                    if send_usage and _usage_refused(r):
+                        if self.conn.id not in NO_USAGE and len(NO_USAGE) >= CONTEXT_KEEP:
+                            del NO_USAGE[next(iter(NO_USAGE))]
+                        NO_USAGE[self.conn.id] = recipient     # до перезапуска службы — без параметра
                         log.info("чат %s: ответ %s — подключение %d не приняло stream_options", self.chat_id[:8],
                                  self.message_id[:8], self.conn.id)
                         return await self._round(payload, offer, builtin_only, silent=silent, part=part)
@@ -1646,7 +1675,7 @@ class StreamTask:
                 for key, value in usage.items():
                     self.usage[key] = self.usage.get(key, 0) + value
             if (chars := request_chars(sent)) is not None:
-                note_usage(self.conn.id, self.model, chars, usage)
+                note_usage(self.conn, self.model, chars, usage)
         return None, ending, [calls[i] for i in sorted(calls)], text
 
     def _short_reasoning(self, payload):
@@ -1659,13 +1688,17 @@ class StreamTask:
             self.recovery = stage
             self.put("recovery", {"stage": stage})
 
+    def _answer_limit_too_big(self) -> bool:
+        limit = max(self.params.get("max_tokens", 0), self.params.get("max_completion_tokens", 0))
+        return self.limit is not None and limit >= self.limit - RESERVE_TOKENS
+
     async def _compact(self, specs, force: bool = False):
         """Сжать только завершённые старые ходы, оставив запрос и вызовы текущего хода целиком. `force` — шлюз
         отказал по длине (`TOO_LONG`): сжать всё до сообщения хода (`history_end`) без проверки «и так помещается»;
         сжимать нечего — TOO_LONG_WORDS."""
         if force and (self.limit is None or self.compacted or self.history_end < 2):
             return TOO_LONG_WORDS
-        if self.limit is None or self.compacted:
+        if self.limit is None or self.compacted or self.history_end < 2:
             return None
         request = self._request(bool(specs))
         budget = self.limit - max(RESERVE_TOKENS, self.params.get("max_tokens", 0),
@@ -1675,29 +1708,30 @@ class StreamTask:
         used = estimate_tokens(request[1:], self.ratio) + overhead
         if used <= target and not force:
             return None
-        skill = _last_skill(self.chat_id, self.user_message_id) if self.user_message_id else None
-        if skill is not None and skill[0] != self.user_message_id:     # его текст останется в шапке пересказа
-            overhead += estimate_tokens([{"role": "user", "content": skill[1]}], self.ratio)
+        ids = []
+        if self.user_message_id is not None:
+            compose(self.chat_id, self.user_message_id, self.model, ids=ids)
+        if len(ids) != self.history_end:       # история уже изменилась: границу в базе установить нельзя
+            return TOO_LONG_WORDS if force else None
         boundary = self.history_end if force else None     # принудительно — всё до сообщения хода
         remaining = estimate_tokens(request[self.history_end:], self.ratio)
         for i in range(self.history_end, 1, -1) if not force else ():
-            if remaining + overhead + SUMMARY_TOKENS > target:
+            cost = remaining + overhead + SUMMARY_TOKENS
+            if cost > target:
                 break
             if request[i]["role"] == "user":
-                boundary = i
+                skill = _last_skill(self.chat_id, ids[i - 2][-1])
+                skill_cost = estimate_tokens([{"content": skill[1]}], self.ratio) if skill is not None else 0
+                if cost + skill_cost <= target:
+                    boundary = i
             remaining += estimate_tokens([request[i - 1]], self.ratio)
         if boundary is None:
             return None
         self.compacted = True
-        # сообщение запроса j ↔ ids[j - 1], если запрос собран из той же истории (не продолжение после паузы с иным
-        # составом): тогда пересказ — в базу (`chats.summary`), иначе, как прежде, только в self.messages
-        ids = []
-        if self.user_message_id is not None:
-            compose(self.chat_id, self.user_message_id, self.model, ids=ids)
-        known = len(ids) == self.history_end
-        turns, seed, kept = _for_summary(self.chat_id, self.user_message_id or "", request[1:boundary],
-                                         ids[:boundary - 1] if known else None)
-        summary, words = await self._summarize(turns, seed)
+        # Сообщение запроса j ↔ ids[j - 1] (нулевое сообщение системное).
+        turns, seed, kept = _for_summary(self.chat_id, self.user_message_id, request[1:boundary], ids[:boundary - 1])
+        plan = _summary_plan(turns, self.limit, self.ratio)
+        summary, words = await self._summarize(*plan, seed) if plan is not None else (None, None)
         if summary is None:
             self._recovery(None)
             if force:
@@ -1706,24 +1740,19 @@ class StreamTask:
         rest = self.messages[boundary:]
         head = _summary_head(summary, kept)
         self.messages = [self.messages[0], {**rest[0], "content": _prefix(head, rest[0]["content"])}, *rest[1:]]
-        if known:
-            upto = ids[boundary - 2][-1]
-            state.DB.execute("UPDATE chats SET summary = ?, summary_upto = ?, summary_at = ? WHERE id = ?",
-                             (summary, upto, clock.NOW(), self.chat_id))
-            log.info("чат %s: ответ %s — пересказ сохранён до %s", self.chat_id[:8], self.message_id[:8], upto[:8])
+        self.history_end -= boundary - 1
+        upto = ids[boundary - 2][-1]
+        state.DB.execute("UPDATE chats SET summary = ?, summary_upto = ?, summary_at = ? WHERE id = ?",
+                         (summary, upto, clock.NOW(), self.chat_id))
+        log.info("чат %s: ответ %s — пересказ сохранён до %s", self.chat_id[:8], self.message_id[:8], upto[:8])
         self._recovery(None)
         return None
 
-    async def _summarize(self, turns: list[dict], seed: str) -> "tuple[str | None, str | None]":
-        """Пересказ сообщений `turns` партиями: первая получает прежний пересказ `seed`, каждая следующая — итог
+    async def _summarize(self, transcript: str, batch: int, seed: str) -> "tuple[str | None, str | None]":
+        """Пересказ расшифровки партиями: первая получает прежний пересказ `seed`, каждая следующая — итог
         прежней. Годен ответ с `ending` `stop` или `length` (оборванный по длине пересказ лучше никакого) и
         непустым текстом. Итог — (пересказ, None) или (None, слова): 503 шлюза — SUMMARY_BUSY, отказ модели — его
-        слова, расшифровка длиннее SUMMARY_ROUNDS партий, пустой или оборванный ответ — None. Партия — знаки окна
-        по отношению хода (`ratio`)."""
-        batch = _summary_batch(self.limit, self.ratio)
-        transcript = "\n\n".join(_summary_turns(turns))
-        if batch <= 0 or len(transcript) > batch * SUMMARY_ROUNDS:
-            return None, None
+        слова, пустой или оборванный ответ — None. Партия — знаки окна по отношению хода (`ratio`, `_summary_plan`)."""
         self._recovery("summary")
         summary = seed
         for offset in range(0, len(transcript), batch):
@@ -1737,7 +1766,7 @@ class StreamTask:
                 return None, SUMMARY_BUSY
             if error or ending not in ("stop", "length") or not text.strip():
                 return None, error
-            summary = text.strip()[:SUMMARY_TOKENS * 3]
+            summary = text.strip()[:int(SUMMARY_TOKENS * self.ratio)]
         return summary, None
 
     def _continue(self, partial):
@@ -1967,8 +1996,11 @@ class StreamTask:
             session, tool, _, _ = self.mcp.calls[c.name]
             name = f"mcp:{session.sid}:{tool}"
         args = web.args_of(c.arguments or "{}")
-        text = json.dumps(c.arguments if args is None else args, sort_keys=True, ensure_ascii=False,
-                          separators=(",", ":"))
+        try:
+            text = json.dumps(c.arguments if args is None else args, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":"))
+        except RecursionError:
+            text = c.arguments
         return hashlib.sha256(f"{name}\0{text}".encode()).hexdigest()
 
     async def _resume(self) -> "str | object | None":
@@ -2110,8 +2142,11 @@ class StreamTask:
             self.builtin_off = True
         retried, max_rounds = False, tool_rounds()
         retries = 0
-        self.history_end = _history_end(self.messages)
-        if self.resume is not None:
+        if self.resume is None:
+            self.history_end = _history_end(self.messages)
+        else:
+            self.history_end = self.resume.get("history_end", 0)   # старая пауза: граница не сохранена, сжатие небезопасно
+            self.compacted = self.resume.get("compacted", False)
             error = await self._resume()
             if error is PAUSED:
                 return None
@@ -2147,8 +2182,7 @@ class StreamTask:
                 self.builtin_off = retried = True
                 continue
             if ending is TOO_LONG:                       # отказ по длине: один повтор со сжатием, второй — слова
-                if self.limit is not None and max(self.params.get("max_tokens", 0),
-                                                  self.params.get("max_completion_tokens", 0)) >= self.limit - RESERVE_TOKENS:
+                if self._answer_limit_too_big():
                     return PARAM_TOO_BIG                 # предел ответа профиля занял окно — сжатие не поможет
                 if self.forced or self.limit is None:
                     return TOO_LONG_WORDS
@@ -2576,6 +2610,7 @@ async def get_chat(chat_id: str, request: Request):
         return mcp_files.chat_result(uid, row, step, servers=servers)
 
     return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
+            "file_count": len(chat_info.file_items(uid, row, servers=servers)),
             "knowledge": knowledge.chat_kbs(uid, chat_id),        # базы знаний диалога (чип «Знания»)
             # хранимый пересказ (отметка в ленте после сообщения `upto`); текст — GET …/summary
             "summary": {"upto": row["summary_upto"], "at": row["summary_at"]} if row["summary"] is not None else None,
@@ -2990,6 +3025,7 @@ def _new_variant(chat_id: str) -> str:
     if user is None:
         raise HTTPException(409, {"code": "nothing", "message": "нечего переспрашивать"})
     after = (chat_id, user["created"], user["rowid"])
+    _touch_summary(*after)
     state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND role = 'assistant' AND content = ''"
                      " AND (created, rowid) > (?, ?)", after)
     state.DB.execute("UPDATE messages SET unchosen = 1 WHERE chat_id = ? AND role = 'assistant'"
@@ -3381,19 +3417,27 @@ async def summarize_dialog(uid: int, row, upto: str, *, keep_skill: bool = False
     fresh = _chat_row(uid, chat_id)
     if fresh["connection_id"] != conn.id or fresh["model"] != row["model"]:
         raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
+    current = _chat_connection(uid, fresh["connection_id"])
+    if current is None or connections.model_endpoint(current) != connections.model_endpoint(conn):
+        raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
+    conn = current
     _admit(uid, conn, model)                         # снятие модели или принудительный режим — тем временем
+    if not _consent_free(conn, model) and _needs_consent(chat_id, model, "server"):
+        raise _external(conn)
     ids = []
     composed = compose(chat_id, upto, model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)), ids=ids)
     turns, seed, _ = _for_summary(chat_id, upto, composed, ids, keep_skill=keep_skill)
     if not turns:
         raise HTTPException(409, {"code": "nothing", "message": NOTHING_TO_COMPACT})
     rate = ratio(conn, model)
+    plan = _summary_plan(turns, limit, rate)
+    if plan is None:
+        raise _too_big(estimate_tokens(turns, rate), limit)
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id="", conn=conn, model=model, messages=[], limit=limit,
                     ratio=rate, thinking=False if sections.is_local(conn, model) else None, listening=False)
-    _mark_routed(conn, chat_id)                      # до отправки — как у хода
     COMPACTING.add(chat_id)
     try:
-        summary, words = await st._summarize(turns, seed)
+        summary, words = await st._summarize(*plan, seed)
     finally:
         COMPACTING.discard(chat_id)
     if summary is None:
@@ -3402,9 +3446,6 @@ async def summarize_dialog(uid: int, row, upto: str, *, keep_skill: bool = False
             raise HTTPException(503, {"code": "card", "message": SUMMARY_BUSY})
         if words:
             raise HTTPException(502, {"code": "upstream", "message": words})
-        batch = _summary_batch(limit, rate)
-        if batch <= 0 or len("\n\n".join(_summary_turns(turns))) > batch * SUMMARY_ROUNDS:
-            raise _too_big(estimate_tokens(turns, rate), limit)
         raise HTTPException(502, {"code": "upstream", "message": SUMMARY_FAILED})
     return summary
 
@@ -3448,6 +3489,21 @@ def spec_tokens(specs: list[dict], ratio: float = DEFAULT_RATIO) -> int:
     return math.ceil(len(json.dumps(specs, ensure_ascii=False)) / ratio) if specs else 0
 
 
+def _usage_refused(response: httpx.Response) -> bool:
+    """Отказ только о параметре метрик, без полей `input` и прочего эха запроса."""
+    if response.status_code not in (400, 422):
+        return False
+    body = upstream.json_body(response)
+    detail = body.get("detail")
+    if isinstance(detail, list):
+        return bool(detail) and all(
+            isinstance(item, dict) and item.get("type") in ("extra_forbidden", "value_error.extra")
+            and isinstance(item.get("loc"), list) and any(mark in item["loc"] for mark in USAGE_MARKS)
+            for item in detail)
+    words = upstream.message(response, body=body) if body else response.text[:300]
+    return bool(words and USAGE_REFUSAL.search(words))
+
+
 def _usage_of(raw: dict) -> dict:
     """`usage` шлюза → `{in, out, cached, reasoning}`: только целые >= 0 (не bool); чего нет — ключа нет."""
     def number(value):
@@ -3480,7 +3536,7 @@ def request_chars(payload: dict) -> "int | None":
     return chars
 
 
-def note_usage(conn_id: int, model: str, chars: int, usage: dict) -> None:
+def note_usage(conn: Connection, model: str, chars: int, usage: dict) -> None:
     """Знаков на токен пары «подключение, модель» (`model_facts.ratio`) по `usage` ответа: запрос меньше
     RATIO_MIN_TOKENS и отношение вне RATIO_RANGE не учат; прежнее значение сдвигается на RATIO_BLEND к новому.
     Пишет только свой столбец: окно (`window`) — другого писателя."""
@@ -3490,13 +3546,15 @@ def note_usage(conn_id: int, model: str, chars: int, usage: dict) -> None:
     ratio = chars / tokens
     if not RATIO_RANGE[0] <= ratio <= RATIO_RANGE[1]:
         return
+    if not connections.current_model_endpoint(conn):
+        return
     row = state.DB.execute("SELECT ratio FROM model_facts WHERE connection_id = ? AND model = ?",
-                           (conn_id, model)).fetchone()
+                           (conn.id, model)).fetchone()
     if row is not None and row[0] is not None:
         ratio = row[0] + RATIO_BLEND * (ratio - row[0])
     state.DB.execute("INSERT INTO model_facts(connection_id, model, ratio, updated) VALUES (?, ?, ?, ?)"
                      " ON CONFLICT(connection_id, model) DO UPDATE SET ratio = excluded.ratio,"
-                     " updated = excluded.updated", (conn_id, model, ratio, clock.NOW()))
+                     " updated = excluded.updated", (conn.id, model, ratio, clock.NOW()))
 
 
 async def _turn_specs(uid: int, row, conn: Connection, model: str) -> list[dict]:
@@ -3597,9 +3655,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if conn is None:                                 # не выбрано, удалено или закрыто группами доступа
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
     model = row["model"] or manage.DEFAULT_MODEL
-    _admit(uid, conn, model)                         # те же допуски у «Сжать сейчас» — до записи хода
-    if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
-        raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
+    _admit(uid, conn, model, row["mcp_ids"])          # те же допуски у «Сжать сейчас» — до записи хода
     edit = _edit_target(chat_id, body)
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
@@ -3699,7 +3755,6 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                                     (user_mid, a["id"])).rowcount != 1:
                     raise _gone("вложения нет или оно уже отправлено")
             ask = not free and _needs_consent(chat_id, model, via)
-        _mark_routed(conn, chat_id)
         if ask:
             raise _external(conn)
         # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —

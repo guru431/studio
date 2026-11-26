@@ -140,6 +140,7 @@ def test_text_tool_call_is_never_parsed_through_cleaner(cleaner_gw, monkeypatch)
     gw.script = [[TEXT_CALL]]
     assert sse(turn(s, chat_id, "Найди"))[-1] == ("done", {"status": "done"})
     assert len(gw.turns) == 1 and s.gw.exa_requests == []
+    assert "web_search" in tool_names(gw.bodies[0])
     answer = messages(s, chat_id)[-1]
     assert answer["content"] == TEXT_CALL and answer["tools"] == []
 

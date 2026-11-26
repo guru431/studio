@@ -6,19 +6,6 @@ import { api } from './api.js';
 import { el, openDialog, words } from './ui.js';
 import { byteSize } from './chat-files.js';
 
-/** Число файлов открытого диалога по ответу GET /api/chats/{id}: вложения выбранных сообщений, медиа диалога и
- * файлы шагов ответов — то же, что перечислит `chat_info.files`. */
-export function fileCount(chat) {
-  let n = Array.isArray(chat?.media) ? chat.media.length : 0;
-  for (const m of chat?.messages || []) {
-    if (Array.isArray(m.attachments)) n += m.attachments.length;
-    for (const step of Array.isArray(m.tools) ? m.tools : []) {
-      if (step && Array.isArray(step.files)) n += step.files.filter((f) => f && typeof f === 'object').length;
-    }
-  }
-  return n;
-}
-
 const KINDS = { attachment: () => tr("вложение"), media: () => tr("медиа диалога"), result: () => tr("результат MCP") };
 
 function viewer(host, item, name) {
@@ -27,7 +14,7 @@ function viewer(host, item, name) {
 }
 
 /** Окно со списком файлов диалога `chatId`. */
-export async function filesDialog(host, chatId) {
+export async function filesDialog(host, chatId, counted) {
   const title = el('span', {}, tr("Файлы диалога"));
   const list = el('ul', { class: 'chat-file-list' });
   const note = el('p', { class: 'muted small', role: 'status' }, tr("Загружаю…"));
@@ -40,6 +27,7 @@ export async function filesDialog(host, chatId) {
     note.classList.add('error');
     return dialog;
   }
+  counted(items.length);
   title.textContent = tr("Файлы диалога ({0})", items.length);
   note.textContent = items.length ? '' : tr("В диалоге нет файлов");
   note.hidden = !!items.length;

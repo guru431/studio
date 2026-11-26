@@ -19,7 +19,7 @@ import web
 from conftest import APP, add_gateway
 from test_chat import events_of, messages, new_chat, sse, turn, window
 from test_chat_pending import answer as answer_card, pending_of
-from test_chat_web import EXA_KEY, call
+from test_chat_web import EXA_KEY, call, chat_of
 from test_cleaner_route_chat import cleaner_gw, routed_chat  # noqa: F401 (фикстура)
 from test_mcp_dialog import methods, name_of, offered, setup, tool
 from test_protected_source import ALL, flags, names, protect, web_dialog
@@ -107,15 +107,37 @@ def test_part_request_has_clean_context_and_its_result_returns_to_the_turn(studi
     assert answer["usage"] == {"in": 300, "out": 30}                       # запрос части — в расходе ответа
 
 
+def test_part_context_refusal_names_an_oversized_profile_answer_limit(studio):
+    cid, sid = parts_chat(studio)
+    gw = chat_of(studio, cid)["connection_id"]
+    big = chat.CONTEXT["local-gemma-abl"] - chat.RESERVE_TOKENS
+    assert studio.c.put(f"/api/connections/{gw}/profile", json={"params": {"max_tokens": big}}).status_code == 200
+
+    async def completion(request):
+        body = json.loads(request.content)
+        if '<part title="Часть 1">' in body["messages"][-1]["content"]:
+            assert body["max_tokens"] == big
+            return httpx.Response(400, json={"error": {"message": "This model's maximum context length is 131072 tokens."}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/chat/completions"] = completion
+    studio.gw.chat_script = [{"tool_calls": [part()]}, ["Общий ответ"]]
+    assert sse(turn(studio, cid, "Задача", skill_id=sid))[-1] == ("done", {"status": "done"})
+    assert parts_of(messages(studio, cid)[-1])[0]["error"] == chat.PARAM_TOO_BIG
+
+
 def test_second_part_request_carries_the_result_of_the_first(studio):
     cid, sid = parts_chat(studio)
+    studio.gw.chat_usage = {"prompt_tokens": 100, "completion_tokens": 10}
     studio.gw.chat_script = [{"tool_calls": [part()]}, ["Итог первой части"],
                              {"tool_calls": [part("Часть 2", "Сделай второе")]}, ["Итог второй"], ["Готово"]]
     sse(turn(studio, cid, "Задача", skill_id=sid))
     second = json.dumps(studio.gw.chat_requests[3]["messages"], ensure_ascii=False)
     assert "Итог первой части" in second and '<done-part n=\\"1\\" title=\\"Часть 1\\">' in second
     assert "Сделай второе" in second and "Сделай первое" not in second
-    assert [s["state"] for s in parts_of(messages(studio, cid)[-1])] == ["done", "done"]
+    reply = messages(studio, cid)[-1]
+    assert [s["state"] for s in parts_of(reply)] == ["done", "done"]
+    assert reply["usage"] == {"in": 500, "out": 50}
 
 
 def test_earlier_part_results_are_excerpted_in_the_next_part(studio):

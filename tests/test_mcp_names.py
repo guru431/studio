@@ -15,6 +15,7 @@ def mcp_tools(request):
 def test_tool_name_is_built_from_the_server_and_the_tool():
     assert mcp_client.tool_name("Shared tools", "lookup") == "mcp_shared_tools__lookup"
     assert mcp_client.tool_name("Почта отдела", "mail.send:v2") == "mcp_pochta_otdela__mail_send_v2"
+    assert mcp_client.tool_name("Почта отдела", "Скачать.файл") == "mcp_pochta_otdela__Skachat_fayl"
     assert mcp_client.tool_name("🙂", "getItem") == "mcp_server__getItem"
     long = mcp_client.tool_name("S" * 80, "t" * 128)
     assert len(long) == mcp_client.CALL_MAX == 64 and long.startswith("mcp_" + "s" * 24 + "__t")

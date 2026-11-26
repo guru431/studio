@@ -163,7 +163,9 @@ def test_viewer_role_and_term(desktop_browser, live, width):
     owner, viewer = f'view-owner-{engine}-{width}', f'view-viewer-{engine}-{width}'
     live.add_user(owner)
     live.add_user(viewer)
-    machine = FakeMachine({'alpha': {'files': {'a.txt': b'hello'}, 'chats': {CODE_CHAT_A: code_session('Отчёт')}}})
+    history = [{"id": "m-1", "role": "assistant", "text": "Отчёт готов.", "steps": [], "time": 0}]
+    machine = FakeMachine({'alpha': {'files': {'a.txt': b'hello'},
+                                     'chats': {CODE_CHAT_A: code_session('Отчёт', messages=history)}}})
     machine.file_operations = machine.file_upload = machine.file_search = True
     aid, channel = code_online(live, owner, machine)
     owner_cookie, viewer_cookie = signed(live, owner), signed(live, viewer)
@@ -200,6 +202,16 @@ def test_viewer_role_and_term(desktop_browser, live, width):
                 member.locator('#code-chat[data-loaded="1"]').wait_for()
                 expect(member.locator('#code-readonly-note')).to_be_visible()
                 expect(member.locator('#code-composer')).to_be_hidden()
+                answer = member.locator('#code-feed .code-msg.assistant .md')
+                expect(answer).to_have_text('Отчёт готов.')
+                answer.evaluate("""node => {
+                  document.getSelection().selectAllChildren(node);
+                  document.dispatchEvent(new Event('selectionchange'));
+                  node.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}));
+                }""")
+                expect(member.locator('#quote-float')).to_have_count(0)
+                expect(member.get_by_role('menuitem', name='Копировать')).to_be_visible()
+                expect(member.get_by_role('menuitem', name='Цитировать')).to_have_count(0)
                 member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}?tab=files')
                 member.locator('#code-files').get_by_text('a.txt').click()
                 editor = member.locator('#code-editor')

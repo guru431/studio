@@ -74,6 +74,44 @@ def test_status_bar_shows_stages_and_fits(browser, live, width, lang):
     assert not problems(r) and not problems(r2), (r.get("log"), r2.get("log"))
 
 
+def test_full_english_status_at_320_keeps_parts_live_in_overflow(browser, live):
+    login = "status-overflow-en"
+    live.add_user(login)
+    setup = """(async () => {
+      const { chatStatus } = await import('/static/js/chat-status.js');
+      const { partsButton, partNode } = await import('/static/js/chat-parts.js');
+      const { contextRing } = await import('/static/js/chat-context.js');
+      const host = document.querySelector('#view').appendChild(document.createElement('div'));
+      const part = { kind: 'part', n: 1, title: 'Report', state: 'running' };
+      const answer = { id: 'answer', status: 'streaming', via: 'server', tools: [part] };
+      const ring = contextRing(async () => ({ tokens: 2000, limit: 8000 }));
+      const status = chatStatus(host, { ring: ring.node, job: () => null, last: () => answer, local: () => true,
+        stepNode: partNode, stats: () => {}, files: () => {}, parts: partsButton({ root: host }) });
+      host.append(status.bar); status.dialog({ file_count: 2 }); status.paint(); ring.schedule(true);
+      window.finishPart = () => { Object.assign(part, {state: 'done', text: 'Here is the result'}); status.paint(); };
+      return true;
+    })()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings"),
+        ("wait", "document.querySelector('.settings-nav')"), ("eval", "setup", setup),
+        ("wait", "!document.querySelector('#chat-status-more').hidden && !document.querySelector('#ctx-meter').hidden"),
+        ("eval", "fit", FITS), ("click", "#chat-status-more"),
+        ("wait", "document.querySelector('#chat-status-menu:popover-open #chat-parts')"),
+        ("eval", "labels", "[...document.querySelectorAll('.chat-status-bar button, #chat-status-menu button')]"
+                           ".filter(b => !b.hidden).map(b => b.getAttribute('aria-label'))"),
+        ("click", "#chat-status-menu #chat-parts"),
+        ("wait", "document.querySelector('#chat-parts-dialog .part-state')?.textContent === 'running'"),
+        ("eval", "finish", "window.finishPart(); true"),
+        ("wait", "document.querySelector('#chat-parts-dialog .part-state')?.textContent === 'done'"),
+        ("eval", "result", "document.querySelector('#chat-parts-dialog .part-text').textContent")],
+        init=EN, width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert {"Parts: 0 of 1", "Conversation files: 2", "Statistics", "Tool calls: 1"} <= set(v["labels"])
+    assert any(label and label.startswith("Context ~25%") for label in v["labels"])
+    assert v["fit"] and v["result"] == "Here is the result"
+    assert not problems(r), problems(r)
+
+
 STAGES = """(async () => {
   const s = await import('/static/js/chat-status.js');
   const now = 1000000;

@@ -5,7 +5,7 @@ from fake_bridge import pid
 from test_codex import CATALOG as CODEX
 from test_ui_opencode import CATALOG as OPENCODE
 from test_deepseek import CATALOG as DEEPSEEK
-from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, TURN_DONE, browser, code_free_machine, code_online,
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, DONE_TEXT, READY, TURN_DONE, browser, code_free_machine, code_online,
                              code_requests, code_session, go, live, live_sql, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -17,7 +17,7 @@ def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browse
     live.add_user(login)
     machine = code_free_machine()
     machine.codex, machine.opencode, machine.deepseek = CODEX, OPENCODE, DEEPSEEK
-    machine.script = [{'k': 'text', 'text': 'Готово'}, {'k': 'done', 'status': 'done'}]
+    machine.script = [{'k': 'text', 'text': DONE_TEXT}, {'k': 'done', 'status': 'done'}]
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/code'),
@@ -67,7 +67,7 @@ def test_auto_chat_skips_agents_missing_from_the_computer(browser, live, availab
     machine = code_free_machine()
     if available:
         machine.opencode = OPENCODE
-    machine.script = [{'k': 'text', 'text': 'Готово'}, {'k': 'done', 'status': 'done'}]
+    machine.script = [{'k': 'text', 'text': DONE_TEXT}, {'k': 'done', 'status': 'done'}]
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),

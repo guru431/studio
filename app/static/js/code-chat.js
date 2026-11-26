@@ -67,12 +67,13 @@ import { WINDOW } from './code-window.js';
 import { cancelRefresh, refreshAfterFailure } from './refresh.js';
 import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { codeActivity } from './code-activity.js';
-import { attachCounts, countRefusal } from './code-attach-limits.js';
+import { attachCounts, countRefusal, IMAGE_TYPES } from './code-attach-limits.js';
 import { findView } from './code-find.js';
 import { answerTools } from './code-answer-tools.js';
 import { quoteChip, selectionQuote } from './quote.js';
 import { messageMenu } from './message-menu.js';
 import { agentSkills } from './code-skills.js';
+import { fileDrop } from './chat-drop.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -89,7 +90,6 @@ const PAINT_MS = 80;             // текст хода перерисовыва
 const STICK_PX = 80;             // лента у низа — новое её прокручивает
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
-const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 // Пределы вложений, МиБ: мост с hello.large_attachments (0.22.1+) — 10 на файл и 30 на сообщение, старый — 5 и 8
 // (сервер, claude_code.py, отказал бы уже после загрузки всего сообщения).
 const attachLimits = (agent) => agent?.large_attachments ? { file: 10, total: 30 } : { file: 5, total: 8 };
@@ -121,6 +121,7 @@ function announceDraft(key, had) {
 const agentDrafts = draftStore(AGENT_DRAFTS);
 const drafts = new class extends Drafts {
   set(key, value) {
+    if (document.documentElement.classList.contains('shrouded')) return this;
     const receipt = sendIds.get(key);
     agentDrafts.save(key, value, receipt?.value === value.trim() && !receipt.images.length ? receipt.id : null);
     return super.set(key, value);
@@ -249,6 +250,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     placeholder: tr("Задание…"), maxlength: '100000' });
   const catalog = engine === 'claude' ? agent : agent?.[engine];
   const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  const displayModel = (id) => (engine === 'deepseek' && models.find((item) => String(item.id) === id)?.label) || id;
   const efforts = Array.isArray(catalog?.efforts) ? catalog.efforts : [];
   const model = el('select', { id: 'code-model', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...models.map((m) => el('option', { value: String(m.id) }, String(m.label || m.id))));
@@ -348,8 +350,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   actions.append(reloadButton);
   const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);
   const statusBar = el('div', { class: 'code-status-bar' });
-  const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
-    'aria-label': tr("Быстрые действия") }, el('h2', {}, tr("Быстрые действия")));
   const field = fieldBox(text, { fold: true });
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input',
@@ -389,15 +389,20 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Задание копии — как при отправке здесь: цитата в начале поля, текст навыка (из этого проекта) перед ним; лента
    * копии узнаёт навык по `skills.label` (тексты навыков — на модуль) и показывает «Навык: имя». */
   async function runInCopy() {
-    if (!text.value.trim() || images.length || busyCopy.disabled) return;
+    if (!canCopy()) return;
     quote.fold();
     const typed = text.value;
+    const selected = skills.selected();
     copying = true;
     updateControls();
     showStatus(tr("Создаю отдельную копию…"), false);
     try {
       const lead = await skills.lead();
-      if (!alive || text.value !== typed) { if (alive) showStatus(''); return; }   // поле успели изменить
+      if (!alive) return;
+      if (text.value !== typed || skills.selected() !== selected || quote.value()) {
+        showStatus(tr("Задание изменилось — проверьте текст и отправьте снова"));
+        return;
+      }
       const value = lead ? [lead.text, typed].filter((s) => s.trim()).join('\n\n') : typed;
       if (value.length > 100000) {
         showStatus(tr("Навык вместе с уточнением длиннее 100 000 знаков"));
@@ -427,7 +432,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         pick(tr("Модель"), model), pick(tr("Усилие"), effort), pick(tr("Права"), access)),
       stop, send));
   // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
-  const quote = quoteChip(form, text, { id: 'code-quote' });
+  const quote = quoteChip(form, text, { id: 'code-quote', changed: paintCopy });
   const quoteText = (node) => (node.matches('.user') ? node.querySelector('.code-user-text')?.textContent || ''
     : [...node.querySelectorAll('.code-timeline-text')].map((n) => n.textContent.trim()).filter(Boolean).join('\n\n'));
   const selQuote = readonly ? null   // только чтение: поля нет — и кнопки у выделения
@@ -435,34 +440,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const msgMenu = messageMenu(scroller, { message: '.code-msg', text: quoteText, quote: readonly ? null : quote.set });
   // Навыки: меню «/», чип над полем, кнопки пустого чата, набор в проект, проверка другим помощником (code-skills.js).
   // Создаются раньше enterSends и statusActions: меню «/» ловит Enter первым, пункты попадают в меню веток.
-  const skills = agentSkills(host, { aid, pid, key: draftKey, agent, engine, text, chipHost: form, readonly, failed: (err) => {
+  const skills = agentSkills(host, { aid, pid, key: draftKey, agent, engine, text, chipHost: form, readonly, changed: paintCopy, failed: (err) => {
     if (!alive) return;
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  skills.quick().then((rows) => {
-    for (const row of rows) {
-      const button = el('button', { type: 'button', class: 'btn code-quick-action', title: row.name }, row.name);
-      button.addEventListener('click', async () => {
-        if (quickActions.hidden || send.disabled || composing) return;
-        composing = true;
-        updateControls();
-        let value;
-        try {
-          value = await skills.libraryText(row.id);
-        } catch (err) {
-          if (alive) showStatus(words(err));
-          return;
-        } finally {
-          composing = false;
-          if (alive) updateControls();
-        }
-        if (alive) submit(value, false);     // как действие Git: набранный текст и вложения остаются в поле
-      });
-      quickActions.append(button);
-    }
-    if (alive) paintQuickActions();
-  }, () => {});
+  const quickActions = skills.quickActions({
+    available: () => alive && !send.disabled && !composing,
+    busy: (value) => { composing = value; if (alive) updateControls(); },
+    submit: (value) => { if (alive) submit(value, false); },
+    paint: () => { if (alive) paintQuickActions(); },
+  });
   const skillItems = skills.menuItems({ verify: verifyWith,
     changed: () => messageViews.get([...feed.children].findLast((node) => node.classList.contains('assistant')))
       ?.progress.changes().files || [] });
@@ -528,7 +516,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   actions.append(find.button);
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
-  const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
+  const queue = queueView(queueHost, { endpoint, request: api, preview: (item) => {
+    const skill = skills.label(item.text);
+    return skill ? [tr("Навык: {0}", skill.name), skill.rest].filter(Boolean).join(' · ') : item.text;
+  }, failed: (err) => {
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
@@ -585,7 +576,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (USAGE_BY_MODEL.has(engine) && previousModel !== effectiveModel) usage.refresh();
     context.settings(data);
     // id модели DeepSeek Harness — JSON-массив «провайдер, модель»: на кнопке — подпись каталога.
-    const modelText = engine === 'deepseek' && models.find((m) => String(m.id) === data.model)?.label || data.model;
+    const modelText = displayModel(data.model);
     model.options[0].textContent = typeof data.model === 'string' && data.model ? modelText : tr("Не получено");
     model.title = typeof data.model === 'string' ? data.model : '';
     effort.options[0].textContent = effortLabel(data.effort);
@@ -714,21 +705,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     addImages([...picker.files]);
     picker.value = '';
   });
-  form.addEventListener('paste', (event) => {
-    const files = [...(event.clipboardData?.files || [])];
-    if (!files.length) return;
-    event.preventDefault();
-    addImages(files);
-  });
-  form.addEventListener('dragover', (event) => {
-    if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault();
-  });
-  form.addEventListener('drop', (event) => {
-    const files = [...(event.dataTransfer?.files || [])];
-    if (!files.length) return;
-    event.preventDefault();
-    addImages(files);
-  });
+  fileDrop(form, addImages);
 
   /* ---- лента -------------------------------------------------------------------- */
 
@@ -941,7 +918,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const view = { body, progress, ...renderTimeline(body, m) };
     const node = el('div', { class: 'code-msg assistant' }, progress.root, body);
     messageViews.set(node, view);
-    if (!m.live) answerTools(node, { text: m.text, model: m.model });
+    if (!m.live) answerTools(node, { text: m.text, model: displayModel(m.model) });
     return node;
   }
 
@@ -1010,8 +987,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     paintSessionNotice();
   }
 
+  function canCopy() {
+    return !send.disabled && !running && !images.length && !!(text.value.trim() || quote.value() || skills.selected());
+  }
+
   function paintCopy() {
-    if (busyCopy) busyCopy.disabled = send.disabled || running || !text.value.trim() || images.length > 0;
+    if (busyCopy) busyCopy.disabled = !canCopy();
   }
 
   /** Плашка чужого окна. Ход, ждущий ответа на карточку, сам не завершится: «Дождаться» тогда не предлагается. */
@@ -1359,11 +1340,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
       }
-      // модель DeepSeek Harness — JSON «провайдер, модель»: под ответом — подпись каталога, как на кнопке
-      const answerModel = engine === 'deepseek' && models.find((m) => String(m.id) === effectiveModel)?.label || effectiveModel;
       const node = turn.node;
       const answer = turn.view.segments.map((segment) => segment.text).join('');
-      grow(() => answerTools(node, { text: answer, model: answerModel }));
+      grow(() => answerTools(node, { text: answer, model: displayModel(data.model) }));
     } else {
       loadHistory(false);        // ход кончился раньше снимка: его ответ — уже в истории
     }
@@ -1833,6 +1812,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (copying || sending || adding || resolving || foreign || external) return;
     let lead = null;
     if (!quick) {
+      const selected = skills.selected();
       composing = true;
       updateControls();
       try {
@@ -1847,7 +1827,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         composing = false;
         if (alive) updateControls();
       }
-      if (!alive || text.value !== typed) return;     // поле успели изменить — отправит следующее нажатие
+      if (!alive) return;
+      if (text.value !== typed || skills.selected() !== selected || quote.value()) {
+        showStatus(tr("Задание изменилось — проверьте текст и отправьте снова"));
+        return;
+      }
       if (lead) {
         value = [lead.text, typed].filter((s) => s.trim()).join('\n\n');
         if (value.length > 100000) {
@@ -1985,8 +1969,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     await follow(response, own);
   }
 
-  async function loadEarlier({ showStart = false } = {}) {
-    if (more.disabled || start <= 0) return false;
+  let loadingEarlier = null;
+  function loadEarlier(options) {
+    if (!loadingEarlier) {
+      loadingEarlier = fetchEarlier(options).finally(() => { loadingEarlier = null; });
+    }
+    return loadingEarlier;
+  }
+
+  async function fetchEarlier({ showStart = false } = {}) {
+    if (start <= 0) return false;
     more.disabled = true;
     const revision = historyRevision;
     nav.paint();

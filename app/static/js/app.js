@@ -372,7 +372,11 @@ function setupMenu() {
     if (next && !menu.contains(next) && next !== avatar) openMenu(false);
   });
   menu.addEventListener('click', (event) => {   // выбор темы меню не закрывает: видно, что тема сменилась
-    if (event.target.closest('a.menu-item')) openMenu(false);
+    const link = event.target.closest('a.menu-item');
+    if (!link || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(link.hash);
+    openMenu(false);
   });
   const themes = [...menu.querySelectorAll('input[name="menu-theme"]')];
   for (const input of themes) input.addEventListener('change', () => { if (input.checked) choose('theme', input.value); });

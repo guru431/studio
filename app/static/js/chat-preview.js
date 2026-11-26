@@ -10,7 +10,7 @@ import { el, openDialog } from './ui.js';
 export const PREVIEW_MAX = 2 * 1024 * 1024;     // как chat_preview.PREVIEW_MAX: байты UTF-8 блока
 
 /** Ссылки фрагмента ответа (`links` — прежние, например resultPathLinks, или null) с кнопками «Открыть».
- * `allowed()` — окно разрешено (ответ перечитан с сервера, диалог без защищённого источника); `chatId()` — диалог;
+ * `allowed()` — исходный диалог открыт, ответ перечитан с сервера, защищённого источника нет; `chatId` — его id;
  * `failed(err)` — отказ сервера. */
 export function previewLinks(links, { host, chatId, allowed, failed }) {
   return { ...(links || {}), decorate(fragment) {
@@ -21,7 +21,7 @@ export function previewLinks(links, { host, chatId, allowed, failed }) {
       if (new Blob([text]).size > PREVIEW_MAX) continue;
       const kind = code.classList.contains('language-svg') ? 'svg' : 'html';
       const open = el('button', { type: 'button', class: 'preview-open', 'data-kind': kind }, tr("Открыть"));
-      open.addEventListener('click', () => show(host, chatId(), kind, text, open, failed));
+      open.addEventListener('click', () => show(host, chatId, kind, text, open, allowed, failed));
       const pre = code.parentElement;
       const copy = pre.querySelector(':scope > .copy');
       const tools = el('span', { class: 'pre-tools' }, open);
@@ -34,19 +34,23 @@ export function previewLinks(links, { host, chatId, allowed, failed }) {
 /** Кнопки «Открыть» ленты — прочь (сработал защищённый источник). */
 export function dropPreviews(root) {
   for (const open of root.querySelectorAll('.preview-open')) open.remove();
+  for (const dialog of root.querySelectorAll('#chat-preview-dialog[open]')) dialog.close();
 }
 
-async function show(host, chatId, kind, text, open, failed) {
+async function show(host, chatId, kind, text, open, allowed, failed) {
+  const current = () => open.isConnected && allowed();
+  if (!current()) return;
   open.disabled = true;
   let token;
   try {
     ({ token } = await api('POST', `/api/chats/${encodeURIComponent(chatId)}/preview`, { kind, text }));
   } catch (err) {
-    failed(err);
+    if (current()) failed(err);
     return;
   } finally {
     open.disabled = false;
   }
+  if (!current()) return;
   const frame = el('iframe', { class: 'chat-preview-frame', title: kind === 'svg' ? 'SVG' : 'HTML',
     sandbox: 'allow-scripts', referrerpolicy: 'no-referrer' });
   const dialog = openDialog(host, { id: 'chat-preview-dialog', title: kind === 'svg' ? tr("Окно SVG") : tr("Окно HTML"),

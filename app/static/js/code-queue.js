@@ -4,7 +4,7 @@ import { api } from './api.js';
 import { el } from './ui.js';
 
 /* `labels` — подписи вида (у «Чата» свои); по умолчанию — «Агентов» */
-export function queueView(host, { endpoint, failed, request = api, labels = {} }) {
+export function queueView(host, { endpoint, failed, request = api, labels = {}, preview = (item) => item.text }) {
   const words = { region: tr("Очередь заданий"), waiting: tr("После текущей задачи"), field: tr("Задание из очереди"),
     edit: tr("Изменить ожидающее задание"), remove: tr("Удалить ожидающее задание"), ...labels };
   const box = el('section', { id: 'code-queue', class: 'code-queue', 'aria-label': words.region, hidden: true });
@@ -98,7 +98,7 @@ export function queueView(host, { endpoint, failed, request = api, labels = {} }
         const remove = el('button', { type: 'button', class: 'btn btn-sm', disabled: pending || foreign || !!editing,
           'aria-label': words.remove }, tr("Удалить"));
         remove.addEventListener('click', () => change(item, null));
-        row.append(el('div', { class: 'code-queue-preview' }, item.text),
+        row.append(el('div', { class: 'code-queue-preview' }, preview(item)),
           el('div', { class: 'code-queue-actions' }, editButton, remove));
       }
       box.append(row);

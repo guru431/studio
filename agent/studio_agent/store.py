@@ -181,14 +181,17 @@ class Choices:
             item = self._load().get(chat)
         return dict(item) if isinstance(item, dict) else {}
 
+    def _update(self, data: dict, chat: str, values: dict) -> None:
+        """Обновление уже прочитанного файла под замком."""
+        item = data.pop(chat, {})  # свежий — в конец
+        data[chat] = {**(item if isinstance(item, dict) else {}), **values}
+        for old in list(data)[:max(0, len(data) - CHOICES_MAX)]:
+            del data[old]
+        write_atomic(self.path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
     def update(self, chat: str, **values) -> None:
         with self._lock:
-            data = self._load()
-            item = data.pop(chat, {})  # свежий — в конец
-            data[chat] = {**(item if isinstance(item, dict) else {}), **values}
-            for old in list(data)[:max(0, len(data) - CHOICES_MAX)]:
-                del data[old]
-            write_atomic(self.path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+            self._update(self._load(), chat, values)
 
     def put(self, chat: str, model: str | None, effort: str | None) -> None:
         self.update(chat, model=model, effort=effort)
@@ -197,14 +200,10 @@ class Choices:
         """Время хода: `turn_ms` — последний ход, `session_ms` — сумма ходов чата через Studio; возвращает сумму."""
         with self._lock:
             data = self._load()
-            item = data.pop(chat, {})
-            item = item if isinstance(item, dict) else {}
-            before = item.get("session_ms")
+            item = data.get(chat)
+            before = item.get("session_ms") if isinstance(item, dict) else None
             session_ms = (before if type(before) is int and before >= 0 else 0) + turn_ms
-            data[chat] = {**item, "turn_ms": turn_ms, "session_ms": session_ms}
-            for old in list(data)[:max(0, len(data) - CHOICES_MAX)]:
-                del data[old]
-            write_atomic(self.path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+            self._update(data, chat, {"turn_ms": turn_ms, "session_ms": session_ms})
         return session_ms
 
 

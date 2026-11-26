@@ -17,9 +17,11 @@ export function effortChooser({ current, offered, choose, failed = () => {} }) {
   const chip = el('button', { type: 'button', id: 'effort-chip', class: 'chip ctl-chip effort-chip', 'aria-haspopup': 'menu',
     title: tr("Уровень рассуждения"), hidden: true }, icon('bulb'), el('span', { class: 'toggle-word' }, tr("Рассуждение")), level);
   const menu = el('div', { id: 'effort-menu', class: 'effort-menu', role: 'menu', 'aria-label': tr("Уровень рассуждения") });
+  const selection = (levels) => levels.find(([value]) => value === current()) || levels[0];
   const popup = popupMenu(chip, menu, { side: 'above', fill: (close) => {
-    const chosen = current() || null;
-    const items = LEVELS().map(([value, name]) => menuItem(name, { radio: true, checked: chosen === value,
+    const levels = LEVELS();
+    const [chosen] = selection(levels);
+    const items = levels.map(([value, name]) => menuItem(name, { radio: true, checked: chosen === value,
       attrs: { class: 'effort-option', 'data-effort': value || 'default' }, onSelect: async () => {
         close(true);
         try {
@@ -34,8 +36,7 @@ export function effortChooser({ current, offered, choose, failed = () => {} }) {
 
   function paint() {
     chip.hidden = !offered();
-    const now = current() || null;
-    const name = LEVELS().find(([value]) => value === now)[1];
+    const [now, name] = selection(LEVELS());
     level.textContent = name;
     chip.setAttribute('aria-label', tr("Уровень рассуждения: {0}", name));
     chip.setAttribute('aria-pressed', String(!!now));

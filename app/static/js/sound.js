@@ -16,10 +16,12 @@ const TONE_MS = 120;
 const PAUSE_MS = 60;
 const PEAK = 0.08;
 const RAMP_S = 0.01;
+const QUIET_JOB_MS = 24 * 60 * 60 * 1000;  // «В работе» может вернуть готовое за сутки (jobs.JOBS_VISIT_MAX_SEC)
 
 let context = null;
 let lastAt = -Infinity;
 const keys = new Map();          // ключ сигнала → когда звучал
+const quietJobs = new Map();     // id голосового ответа → до какого времени его опрос не должен озвучивать
 
 export function soundOn() {
   try { return localStorage.getItem(SOUND_KEY) === '1'; } catch { return false; }
@@ -83,15 +85,16 @@ export function signal(kind, key = null) {
 }
 
 /** Конец ответа «Чата»: пауза хода — `ask`, ошибка — `error`, готово — `done`; ключ — id ответа (он же id строки
- * «В работе»). `quiet` — ход «Разговора», что отвечает голосом: без звука, но ключ помечен прозвучавшим, и опрос
- * «В работе» того же ответа тоже молчит. */
+ * «В работе»). `quiet` — ход «Разговора»: итог в «В работе» молчит, даже если опрос надолго приостановился. */
 export function answerSignal(message, { quiet = false } = {}) {
   if (!message) return false;
   const key = message.id ?? null;
   const kind = message.pending ? 'ask' : message.status === 'error' ? 'error' : message.status === 'done' ? 'done' : null;
   if (!kind) return false;
   if (quiet) {
-    if (key !== null) keys.set(`${kind}:${key}`, performance.now());
+    const now = performance.now();
+    for (const [id, until] of quietJobs) if (until <= now) quietJobs.delete(id);
+    if (key !== null && kind !== 'ask') quietJobs.set(key, now + QUIET_JOB_MS);
     return false;
   }
   return signal(kind, key);
@@ -100,7 +103,8 @@ export function answerSignal(message, { quiet = false } = {}) {
 /** Новое готовое опроса «В работе»: отменённое человеком — без сигнала; хоть один итог не `done` — `error`, иначе
  * `done`; ключ — id первого. */
 export function jobSignal(fresh) {
-  const ended = (fresh || []).filter((f) => f.state !== 'cancelled');
+  const now = performance.now();
+  const ended = (fresh || []).filter((f) => f.state !== 'cancelled' && (quietJobs.get(f.id) ?? 0) <= now);
   if (!ended.length) return false;
   return signal(ended.some((f) => f.state !== 'done') ? 'error' : 'done', ended[0].id);
 }

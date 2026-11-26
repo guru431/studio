@@ -14,12 +14,14 @@ new MutationObserver(() => {
   if (!document.documentElement.classList.contains('shrouded')) locked = false;
 }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
-export function chatDrafts(input, { autosize }) {
+export function chatDrafts(input, { autosize, skills }) {
   const save = (id) => {
     if (locked) return;
     const text = input.value.trim() ? input.value : '';
     const old = store.saved()[keyOf(id)];
-    store.save(keyOf(id), text, old?.receipt && old.text === text ? old.receipt : undefined);
+    const chosen = skills.chosen();
+    const skill = chosen?.id ? { id: chosen.id, name: chosen.name, parts: !!chosen.parts } : null;
+    store.save(keyOf(id), text, old?.text === text ? old.receipt : undefined, skill);
   };
   return {
     /** Черновик диалога `id` (или ''). */
@@ -28,7 +30,10 @@ export function chatDrafts(input, { autosize }) {
     },
     /** Открыт диалог `id`: в поле — его черновик (или пусто). */
     enter(id) {
-      input.value = store.saved()[keyOf(id)]?.text || '';
+      const draft = store.saved()[keyOf(id)];
+      input.value = draft?.text || '';
+      const skill = draft?.skill;
+      skills.restore(typeof skill?.id === 'string' && typeof skill.name === 'string' ? skill : null);
       autosize();
     },
     /** Уходим из диалога `id`: текст поля — его черновик; пустое поле черновик удаляет. */
@@ -41,15 +46,16 @@ export function chatDrafts(input, { autosize }) {
       return saved?.receipt && saved.text === text ? saved.receipt : null;
     },
     /** Текст `text` ушёл в диалог `id`: черновик с тем же текстом больше не нужен (набранное заново — остаётся). */
-    sent(id, text) {
-      if (store.saved()[keyOf(id)]?.text === text) store.save(keyOf(id), '');
+    sent(id, text, skill) {
+      const draft = store.saved()[keyOf(id)];
+      if (draft?.text === text && draft.skill?.id === skill?.id) store.save(keyOf(id), '');
     },
     /** Диалог сменил id (`null` ↔ созданный): черновик переходит к нему. */
     rename(from, to) {
-      const text = store.saved()[keyOf(from)]?.text;
-      if (!text) return;
+      const draft = store.saved()[keyOf(from)];
+      if (!draft) return;
       store.save(keyOf(from), '');
-      store.save(keyOf(to), text);
+      store.save(keyOf(to), draft.text, draft.receipt, draft.skill);
     },
   };
 }

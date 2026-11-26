@@ -1,4 +1,4 @@
-/* Черновики диалогов «Агентов» и «Чата» в sessionStorage вкладки: `{scope: me.csrf, items: {id: {text, receipt?}}}`.
+/* Черновики диалогов «Агентов» и «Чата» в sessionStorage: `{scope: me.csrf, items: {id: {text, receipt?, skill?}}}`.
  * Запись чужой сессии (другой `scope`) не читается и удаляется. Смена «есть / нет» — событие
  * `studio-dialog-draft` { store, id, draft } на document. Блокировка, выход и аварийный выход стирают оба ключа. */
 import { me } from './api.js';
@@ -45,10 +45,10 @@ export function draftStore(key) {
   const store = {
     saved() { return current(); },
     has(id) { return Object.hasOwn(current(), id); },
-    save(id, text, receipt) {
+    save(id, text, receipt, skill) {
       const active = current();
       const had = Object.hasOwn(active, id);
-      if (text) active[id] = { text, ...(receipt ? { receipt } : {}) };
+      if (text || skill) active[id] = { text, ...(receipt ? { receipt } : {}), ...(skill ? { skill } : {}) };
       else delete active[id];
       persist();
       announce(id, had);

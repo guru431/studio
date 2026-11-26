@@ -79,6 +79,27 @@ def test_rejected_stream_options_retries_once_and_is_remembered_until_restart(st
     assert ["stream_options" in b for b in seen[3:]] == [True, False]
 
 
+def test_usage_does_not_retry_when_an_unrelated_error_echoes_the_request(studio):
+    add_gateway(studio); cid = new_chat(studio); seen = []
+
+    async def reply(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if len(seen) == 1:
+            return httpx.Response(422, json={"detail": [
+                {"type": "extra_forbidden", "loc": ["body", "model"], "input": body}]})
+        if len(seen) == 2:
+            return httpx.Response(422, json={"detail": [
+                {"type": "extra_forbidden", "loc": ["body", "stream_options"], "input": body["stream_options"]}]})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/chat/completions"] = reply
+    assert sse(turn(studio, cid))[-1][0] == "error"
+    assert len(seen) == 1 and not chat.NO_USAGE
+    assert sse(turn(studio, cid, "Ещё"))[-1][0] == "done"
+    assert ["stream_options" in body for body in seen] == [True, True, False]
+
+
 def test_usage_sums_the_rounds_of_one_answer(studio):
     cid = web_chat(studio); studio.gw.chat_usage = {"prompt_tokens": 100, "completion_tokens": 10}
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["Готово."]]

@@ -7,7 +7,7 @@ import pytest
 
 from studio_agent import opencode, opencode_rpc, projects
 from studio_agent.errors import Refused
-from turn_events import asking, bare
+from turn_events import asking
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 SESSION = "ses_test123"
@@ -209,6 +209,8 @@ async def test_external_sessions_map_to_uuid_keep_project_and_history(runner, ho
 
 
 async def test_turn_mapping_resume_permissions_snapshot_and_usage(runner, home):
+    now = 100.0
+    runner.monotonic = lambda: now
     runner.start(runner.project, runner.pid, CHAT, "Привет", "gateway/gpt", "xhigh")
     task = runner._turns[CHAT].task
     rid = await asking(runner)
@@ -217,19 +219,23 @@ async def test_turn_mapping_resume_permissions_snapshot_and_usage(runner, home):
     assert snapshots[0]["e"]["asks"][0]["always"]
     with pytest.raises(Refused):
         runner.answer("other", CHAT, rid, "allow", None, None)
+    now = 101.5
     runner.answer(runner.pid, CHAT, rid, "always", None, None)
     await task
     assert runner.fake.replies[0] == {"id": 91, "result": {"outcome": {"outcome": "selected", "optionId": "always"}}}
-    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done", "turn_ms": 1500, "session_ms": 1500}
     assert not runner.live() and runner.fake.clients[0].closed
     assert runner.aliases.target(runner.project, CHAT) == SESSION
     assert runner.choices.details(CHAT)["context"] == {"used": 100, "limit": 1000, "percent": 10}
     assert "Привет" not in (home / "opencode-chats.json").read_text("utf-8")
+    now = 200.0
     runner.start(runner.project, runner.pid, CHAT, "Дальше", None, None)
     task = runner._turns[CHAT].task
     rid = await asking(runner)
+    now = 200.25
     runner.answer(runner.pid, CHAT, rid, "deny", "не надо", None)
     await task
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done", "turn_ms": 250, "session_ms": 1750}
     assert len([1 for m, _ in runner.fake.calls if m == "session/new"]) == 1
     assert any(m == "session/load" for m, _ in runner.fake.calls)
     assert runner.fake.replies[-1]["result"]["outcome"]["optionId"] == "reject"

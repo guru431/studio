@@ -45,6 +45,11 @@ def chats(project: Path, live: dict[str, bool]) -> list[dict]:
     return items
 
 
+def answer_model(value) -> str | None:
+    """Модель из фактического ответа Claude Code."""
+    return value if isinstance(value, str) and limits.MODEL_ID.fullmatch(value) else None
+
+
 def normalize(messages: list, *, include_subagents=False) -> list[dict]:
     """Записи сессии → сообщения `{"id", "role", "text", "steps", "time"}` главного агента.
 
@@ -76,8 +81,8 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
             if answer is None:
                 answer, steps = {"id": m.uuid, "role": "assistant", "text": "", "steps": [], "time": None}, {}
                 items.append(answer)
-            model = m.message.get("model") if isinstance(m.message, dict) else None
-            if isinstance(model, str) and model != "<synthetic>" and limits.MODEL_ID.fullmatch(model):
+            model = answer_model(m.message.get("model")) if isinstance(m.message, dict) else None
+            if model is not None:
                 answer["model"] = model  # модель ответа — последней его записи с настоящей моделью
             if isinstance(content, str):
                 content = [{"type": "text", "text": content}]
@@ -215,8 +220,7 @@ def last_model(project: Path, chat: str) -> str | None:
     for m in reversed(get_session_messages(chat, directory=str(project))):
         if m.type != "assistant" or m.parent_tool_use_id is not None or not isinstance(m.message, dict):
             continue
-        model = m.message.get("model")
-        if isinstance(model, str) and model != "<synthetic>" and limits.MODEL_ID.fullmatch(model):
+        if (model := answer_model(m.message.get("model"))) is not None:
             return model
     return None
 

@@ -122,7 +122,9 @@ export function slashMenu(field, { items, onPick, host = null }) {
   function pick(index) {
     const item = rows[index];
     if (!item) return;
-    field.value = field.value.replace(TAKEN, '');
+    const prefix = field.value.match(TAKEN)?.[0];
+    if (!prefix) { close(); return; }
+    field.setRangeText('', 0, prefix.length, 'start');
     close();
     field.focus();
     field.dispatchEvent(new Event('input', { bubbles: true }));

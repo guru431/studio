@@ -170,6 +170,8 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
             name = link.inner_text().strip()
             with tap_state(page, f'#mobile-section-links a[data-section="{section}"]'):
                 link.tap()
+                pw.expect(page.locator('#mobile-sections')).not_to_be_visible()
+                pw.expect(page).to_have_url(page.url.split('/#')[0] + '/#/' + section)
                 pw.expect(page.locator('#mobile-more')).to_have_attribute('aria-current', 'page')
                 pw.expect(page.locator('#mobile-more-label')).to_have_text('Ещё: ' + name)
                 geometry = page.evaluate(NAV_GEOMETRY)
@@ -491,6 +493,7 @@ def test_landscape_navigation_reaches_every_section_and_profile(iphone, tmp_path
     with tap_state(page, '#menu a[href="#/settings"]'):
         page.locator('#menu a[href="#/settings"]').tap()
         pw.expect(page).to_have_url(page.url.split('/#')[0] + '/#/settings')
+        pw.expect(menu).not_to_be_visible()
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)

@@ -12,12 +12,14 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import threading
 import uuid
 from pathlib import Path
 
 import bridge
 import state
+from claude_code import SKILL_FOLDERS, SKILL_NAME
 
 
 def _shared_ops() -> tuple[frozenset, frozenset]:
@@ -39,7 +41,6 @@ OPEN_MAX = 2 * 1024 * 1024       # текст до 2 МиБ (§6)
 RAW_MAX = 10 * 1024 * 1024
 T0 = 1_800_000_000               # часы машины: свои, не настоящие
 LEGACY_LIMITS = {"images": 4, "attachments": 8}  # вложения хода моста без `hello.limits` (до 0.48.0)
-SKILL_FOLDERS = (".agents/skills", ".claude/skills")  # `skills.FOLDERS` моста
 
 
 def enroll(s, login="owner", name="Рабочий ПК", password="password-123", ip="10.77.48.5") -> tuple[int, str]:
@@ -455,7 +456,7 @@ class FakeMachine:
         chat = project.get("chats", {}).get(req["chat"], {})
         engine = req.get("engine", "claude")
         catalog = self.hello if engine == "claude" else getattr(self, engine) or {}
-        saved = project.get("chats", {}).get(req["chat"], {}).get("settings", {})
+        saved = chat.get("settings", {})
         model = req.get("model") or (catalog.get("models") or [{"id": "codex-test"}])[0]["id"]
         return {"settings": {"model": req.get("model") or saved.get("model") or model,
                 "effort": req.get("effort") or saved.get("effort") or "high",
@@ -478,9 +479,10 @@ class FakeMachine:
         if not self.skills:
             raise Refused("invalid", "неизвестная просьба")
         _, project = self._project(req)
-        if req.get("folder") not in SKILL_FOLDERS or not isinstance(req.get("name"), str):
+        folder, name = req.get("folder"), req.get("name")
+        if folder not in SKILL_FOLDERS or not isinstance(name, str) or not re.fullmatch(SKILL_NAME, name):
             raise Refused("invalid")
-        skill = project.get("skills", {}).get((req["folder"], req["name"]))
+        skill = project.get("skills", {}).get((folder, name))
         if skill is None:
             raise Refused("not_found", "нет такого навыка")
         return {"text": skill["text"]}
@@ -909,7 +911,7 @@ class FakeMachine:
         del self.running[chat_id]
         if chat is not None:
             self.now += 1
-            model = chat.get("settings", {}).get("model") if self.timing else None
+            model = done.get("model")
             chat["messages"].append({"id": f"m-{len(chat['messages'])}", "role": "assistant",
                                      "text": run["text"], "steps": run["steps"], "time": self.now,
                                      **({"model": model} if isinstance(model, str) else {}),

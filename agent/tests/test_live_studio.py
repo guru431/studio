@@ -192,7 +192,8 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
         events = await asyncio.to_thread(b.stream, f"{proj}/chats/{chat}/turn", {"text": "Ответь одним словом: готово"})
         kinds = [k for k, _ in events]
         assert kinds[0] == "turn" and kinds[-1] == "done", kinds
-        assert events[-1][1] == {"status": "done"}, events[-1]
+        assert events[-1][1]["status"] == "done", events[-1]
+        answer_model = events[-1][1].get("model")
         assert "готово" in "".join(e["text"] for k, e in events if k == "text").lower()
 
         # ход 2: карточка разрешения на Bash, ответ allow, итог шага
@@ -208,7 +209,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
         events = await asyncio.to_thread(b.stream, f"{proj}/chats/{chat}/turn",
                                          {"text": f"Выполни в Bash: echo {PROBE}"}, on_event)
         kinds = [k for k, _ in events]
-        assert kinds[-1] == "done" and events[-1][1] == {"status": "done"}, events[-1]
+        assert kinds[-1] == "done" and events[-1][1]["status"] == "done", events[-1]
         assert [(a["kind"], a["tool"]) for a in asks] == [("permission", "Bash")], kinds
         assert PROBE in asks[0]["input"]["command"]
         assert "asked" in kinds
@@ -222,6 +223,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
         status, data = await asyncio.to_thread(b.call, "GET", f"{proj}/chats/{chat}")
         assert status == 200
         assert [m["role"] for m in data["items"]] == ["user", "assistant", "user", "assistant"]
+        assert answer_model and data["items"][1]["model"] == answer_model
         assert [s["tool"] for s in data["items"][3]["steps"]] == ["Bash"]
         assert PROBE in data["items"][3]["steps"][0]["text"]
 
@@ -246,7 +248,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
                                          {"text": f"Выполни в Bash: echo {PROBE}-stop"}, on_stop)
         kinds = [k for k, _ in events]
         assert [(a["kind"], a["tool"]) for a in stops] == [("permission", "Bash")], kinds
-        assert kinds[-1] == "done" and events[-1][1] == {"status": "stopped"}, events[-1]
+        assert kinds[-1] == "done" and events[-1][1]["status"] == "stopped", events[-1]
         assert "asked" in kinds and not any(k == "result" and f"{PROBE}-stop" in e["text"] and not e["error"]
                                             for k, e in events), kinds
 
@@ -269,7 +271,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
             {"text": "Задай мне один вопрос инструментом AskUserQuestion с двумя вариантами: красный, синий; "
                      "затем ответь одним словом, что я выбрал"}, on_question)
         kinds = [k for k, _ in events]
-        assert kinds[0] == "turn" and kinds[-1] == "done" and events[-1][1] == {"status": "done"}, events[-1]
+        assert kinds[0] == "turn" and kinds[-1] == "done" and events[-1][1]["status"] == "done", events[-1]
         assert [q["kind"] for q in questions] == ["question"], kinds
         assert len(questions[0]["questions"]) == 1 and len(questions[0]["questions"][0]["options"]) == 2
         assert "син" in "".join(e["text"] for k, e in events if k == "text").lower(), kinds

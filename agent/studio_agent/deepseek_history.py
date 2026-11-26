@@ -216,9 +216,8 @@ def _arguments(value):
     return value if isinstance(value, dict) else {"arguments": value}
 
 
-def _assistant(current, data, calls):
-    message = data.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
+def _assistant(current, message, calls):
+    content = message.get("content")
     if not isinstance(content, list):
         return
     for block in content:
@@ -343,15 +342,15 @@ def read(path, *, image_blocks=None):
                     out.append(message)
                     current, calls = None, {}
             elif kind == "assistant/message":
+                inner = data.get("message")
+                inner = inner if isinstance(inner, dict) else {}
                 if current is None:
-                    inner = data.get("message")
-                    current = {"id": _identifier(inner.get("id") if isinstance(inner, dict) else None, str(len(out))),
+                    current = {"id": _identifier(inner.get("id"), str(len(out))),
                                "role": "assistant", "text": "", "steps": [], "time": None}
                     out.append(current)
-                inner = data.get("message")
-                if pair := _pair(inner.get("source") if isinstance(inner, dict) else None):
+                if pair := _pair(inner.get("source")):
                     current["model"] = pair[1][:100]  # модель ответа (протокол §26)
-                _assistant(current, data, calls)
+                _assistant(current, inner, calls)
             elif kind == "tool/result" and current is not None:
                 _result(data, calls)
     except Unsupported:

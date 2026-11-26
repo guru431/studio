@@ -285,6 +285,8 @@ async def test_codex_queue_starts_a_new_turn_after_completion(runner):
 
 async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     pid = projects.pid(runner.project.name)
+    now = 100.0
+    runner.monotonic = lambda: now
     runner.start(runner.project, pid, CHAT, "Привет", "model-test", "high")
     task = runner._turns[CHAT].task
     rid = await asking(runner)
@@ -293,10 +295,11 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     assert running and snapshot[0]["e"]["text"] == "Ответ"
     assert snapshot[0]["e"]["asks"][0]["tool"] == "Shell"
     assert snapshot[0]["e"]["activity"] == {"state": "waiting"}
+    now = 101.5
     runner.answer(pid, CHAT, rid, "always", None, None)
     await task
     assert runner.fake.replies == [{"id": 91, "result": {"decision": "acceptForSession"}}]
-    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done", "turn_ms": 1500, "session_ms": 1500}
     assert [f["e"]["state"] for f in runner.sent if f["e"]["k"] == "activity"] == [
         "thinking", "responding", "waiting", "thinking"]
     assert not runner.live() and runner.fake.clients[0].closed
@@ -305,11 +308,15 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
 
     # После перезапуска моста та же вкладка продолжает настоящий thread, модель и усилие не теряются.
     again = codex.CodexRunner(runner.sent.append, home=home, find_cli=lambda: Path("codex.exe"), factory=runner.fake)
+    now = 200.0
+    again.monotonic = lambda: now
     again.start(runner.project, pid, CHAT, "Дальше", None, None)
     task = again._turns[CHAT].task
     rid = await asking(again)
+    now = 200.25
     again.answer(pid, CHAT, rid, "deny", None, None)
     await task
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done", "turn_ms": 250, "session_ms": 1750}
     assert len([m for m, _ in runner.fake.calls if m == "thread/start"]) == 1
     assert ("thread/resume", {"threadId": THREAD, "excludeTurns": True, "cwd": str(runner.project),
                               "model": "model-test"}) in runner.fake.calls

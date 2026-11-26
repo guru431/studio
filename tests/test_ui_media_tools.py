@@ -6,7 +6,7 @@ import pytest
 
 from test_ui_browser import (API, CLIP, FEED_READY, NEWEST_DONE, NO_OVERFLOW, READY, SPY, add_gateway, browser,  # noqa: F401
                              clips, done_cards, go, is_open, live, live_sql, make_images, photo_screen, png_of, problems,
-                             put_file, ready_clips, set_value, signin, video_screen)
+                             put_file, ready_clips, set_value, signin, video_screen, viewer_details)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -36,7 +36,7 @@ def test_photo_viewer_uses_the_result_as_source_for_a_new_prompt(browser, live, 
         ("wait", "document.querySelector('#photo-source img')?.naturalWidth === 40"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
         ("eval", "source", "document.querySelector('#viewer .viewer-stage img').getAttribute('src').split('/').at(-1)"),
-        ("click", "#viewer .act-use-source"),
+        *viewer_details(width), ("click", "#viewer .act-use-source"),
         ("wait", "!document.querySelector('#viewer') && document.querySelector('#photo-source img')?.naturalWidth > 0"),
         ("eval", "composer", "[location.hash, document.activeElement.id, document.querySelector('#photo-prompt').value,"
          " document.querySelector('#photo-source img').getAttribute('src'), window.sentForms.length]"),
@@ -75,7 +75,7 @@ def test_photo_model_chip_failed_pick_more_variants_and_to_field(browser, live, 
         ("click", "#photo-select-exit"),
         # «В поле» правки: промпт, формат, сила и исходник тем же файлом истории
         ("type", "#photo-prompt", "свой текст"),
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-to-field"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width), ("click", "#viewer .act-to-field"),
         ("wait", is_open("#photo-field-dialog")), ("click", "#photo-field-replace"),
         ("wait", f"!{is_open('#viewer')}"),
         ("eval", "prompt", "document.querySelector('#photo-prompt').value"),

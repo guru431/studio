@@ -3,6 +3,7 @@
 Список — имя и описание из начала файла, без текста; текст — по одному навыку. Пути — как у чтения файлов
 (`files.resolve`): ссылка внутри проекта читается, выход за проект — запись пропущена или `outside`."""
 
+import codecs
 import json
 import os
 import re
@@ -68,14 +69,13 @@ def head(text: str) -> tuple[str, str]:
 
 
 def _head_text(data: bytes) -> str | None:
-    """Начало файла текстом; NUL или не UTF-8 — `None` (мультибайтный знак, разрезанный `HEAD`, отбрасывается)."""
-    if b"\0" in data:
+    """Начало файла текстом; NUL или не UTF-8 — `None`. Лишний байт отличает срез `HEAD` от конца файла."""
+    prefix = data[:HEAD]
+    if b"\0" in prefix:
         return None
     try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        if len(data) == HEAD and e.start >= len(data) - 3:
-            return data[:e.start].decode("utf-8")
+        return codecs.getincrementaldecoder("utf-8")().decode(prefix, final=len(data) <= HEAD)
+    except UnicodeDecodeError:
         return None
 
 
@@ -86,7 +86,7 @@ def _entry(project: Path, folder: str, name: str) -> dict | None:
         if not stat.S_ISREG(info.st_mode) or info.st_size > limits.SKILL_MAX:
             return None
         with open(path, "rb") as f:
-            text = _head_text(f.read(HEAD))
+            text = _head_text(f.read(HEAD + 1))
     except (Refused, OSError):
         return None
     if text is None:

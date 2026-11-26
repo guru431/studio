@@ -221,7 +221,12 @@ def test_queue_pauses_when_the_send_is_uncertain(browser, live):           # Rev
             pause(2500),                                   # квитанция: сервер хода не принимал — слова остаются
             ("eval", "paused", f"[{QUEUED}, {ERROR}, {USERS}, !{resume}.disabled]"),
             ("eval", "buttons", "[...document.querySelectorAll('#code-queue .code-queue-actions button')].every(b => !b.disabled)"),
-            ("eval", "resume", f"{resume}.click(); true"),
+            ("click", "#code-queue button[aria-label='Изменить ожидающее сообщение']"),
+            ("wait", "document.querySelector('#code-queue textarea')"),
+            ("type", "#code-queue textarea", " изменено"),
+            ("click", "#code-queue .code-queue-actions button:first-child"),
+            ("wait", f"{ERROR}.startsWith('Исход отправки неизвестен')"),
+            ("click", "#code-queue .code-queue-actions button:last-child"),
             ("wait", f"{USERS}.length === 2 && {ANSWERED} && {QUEUED}.length === 0"),
             pause(1500),
             ("eval", "users", USERS), ("eval", "saved", saved)])
@@ -444,8 +449,7 @@ def test_closed_page_returns_the_queue_to_the_draft(browser, live):        # Rev
 
 
 def test_locked_page_keeps_the_queue_out_of_the_drafts(browser, live):
-    """Блокировка стирает черновики: закрытие запертой страницы очередь в хранилище не пишет; после отпирания (с
-    <html> снят `shrouded`) — снова пишет."""
+    """Запертая страница оставляет очередь в памяти при возврате из bfcache и не пишет её в хранилище при закрытии."""
     live.add_user("queue-lock")
     live.gw.chat_hold = held_until("go-lock")
     hide = ("eval", "hide", "window.dispatchEvent(new Event('pagehide')); true")
@@ -455,6 +459,9 @@ def test_locked_page_keeps_the_queue_out_of_the_drafts(browser, live):
             ("type", "#chat-input", "Тайное"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
             ("eval", "lock", "document.dispatchEvent(new Event('studio-locked'));"
                              " document.documentElement.classList.add('shrouded'); true"),
+            ("eval", "back", "window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));"
+                             " window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));"
+                             f" [{QUEUED}, {draft_of(CHAT)}]"),
             hide, pause(100),
             ("eval", "locked", f"[{draft_of(CHAT)}, sessionStorage.getItem('studio-chat-drafts')]"),
             ("eval", "unlock", "document.documentElement.classList.remove('shrouded'); true"), pause(100),
@@ -466,6 +473,7 @@ def test_locked_page_keeps_the_queue_out_of_the_drafts(browser, live):
         live.gw.chat_hold = False
     assert not r.get("failed"), r
     v = r["values"]
+    assert v["back"] == [["Тайное"], None]
     assert v["locked"] == [None, None] and v["opened"] == "Открытое"
     assert not problems(r), problems(r)
 
@@ -613,6 +621,7 @@ def test_pasted_and_dropped_files_become_attachments(browser, live):
         ("wait", "document.querySelector('#composer .att-chip.bad')"),
         ("eval", "unfit", "document.querySelector('#composer .att-chip.bad .att-state').textContent"),
         ("eval", "text_paste", """(() => { const dt = new DataTransfer(); dt.setData('text/plain', 'просто текст');
+          dt.items.add(new File(['image data'], 'excel.png', { type: 'image/png' }));
           const field = document.querySelector('#chat-input'); field.focus();
           const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
           field.dispatchEvent(ev);

@@ -1,6 +1,6 @@
 /* Все даты интерфейса — в часовом поясе учётки; серверные отметки остаются секундами Unix. */
 import { me } from './api.js';
-import { locale } from './i18n.js';
+import { locale, tr } from './i18n.js';
 
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
 export const timeZone = () => me?.timezone || DEFAULT_TIMEZONE;
@@ -17,6 +17,19 @@ export function dateOnly(stamp, options = {}) {
 export function timeOnly(stamp) {
   return new Date(stamp * 1000).toLocaleTimeString(locale(),
     { hour: '2-digit', minute: '2-digit', timeZone: timeZone() });
+}
+
+/** Длительность в миллисекундах: «{0} с» (меньше 10 с — до десятой), «{0} мин {1} с», «{0} ч {1} мин». */
+export function duration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return tr("нет данных");
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    const value = seconds < 10 ? Math.floor(seconds * 10) / 10 : Math.floor(seconds);
+    return tr("{0} с", value.toLocaleString(locale(), { maximumFractionDigits: 1 }));
+  }
+  const whole = Math.floor(seconds);
+  if (whole < 3600) return tr("{0} мин {1} с", Math.floor(whole / 60), whole % 60);
+  return tr("{0} ч {1} мин", Math.floor(whole / 3600), Math.floor(whole % 3600 / 60));
 }
 
 /** Календарные сутки считаем по дате выбранного пояса: сутки с переходом часов бывают не по 24 часа. */

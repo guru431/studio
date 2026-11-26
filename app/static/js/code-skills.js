@@ -57,11 +57,11 @@ export function skillFile(key, name, description, text) {
   return `---\nname: ${key}\ndescription: ${JSON.stringify(about)}\ndisable-model-invocation: true\n---\n\n${text}\n`;
 }
 
-export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost, failed, readonly = false }) {
+export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost, failed, changed, readonly = false }) {
   const base = `/api/code/agents/${aid}/projects/${pid}`;
-  const chip = skillChip(chipHost, { changed: () => chips.delete(key) });   // крестик
+  const chip = skillChip(chipHost, { changed: () => { chips.delete(key); changed?.(); } });   // крестик
   chip.node.id = 'code-skill-chip';
-  const choose = (item) => { chip.set(item); chips.set(key, item); };
+  const choose = (item) => { chip.set(item); chips.set(key, item); changed?.(); };
   if (chips.has(key)) chip.set(chips.get(key));
   let commandRows = [];
 
@@ -78,8 +78,8 @@ export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost
     if (item.kind !== 'command') choose(item);       // «/слово» slash.js уже убрал из поля
     else {
       const prefix = `/${item.name} `;
-      text.value = prefix + text.value.replace(/^\/\S+[ \t]*/, '');
-      text.setSelectionRange(prefix.length, prefix.length);
+      const old = text.value.match(/^\/\S+[ \t]*/)?.[0] || '';
+      text.setRangeText(prefix, 0, old.length, 'end');
     }
     text.dispatchEvent(new Event('input', { bubbles: true }));
     text.focus();
@@ -191,7 +191,8 @@ export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost
       return { text: value, item };
     },
     preset(item) { if (item) choose(item); },
-    clear() { chip.clear(); chips.delete(key); },
+    selected: chip.value,
+    clear() { chip.clear(); chips.delete(key); changed?.(); },
     close() { menu.close(); },
     label(value) {
       if (typeof value !== 'string') return null;
@@ -202,10 +203,33 @@ export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost
       }
       return null;
     },
-    async quick() {
-      return (await library()).filter((row) => row.quick).map((row) => ({ id: row.id, name: row.name }));
+    quickActions({ available, busy, submit, paint }) {
+      const section = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
+        'aria-label': tr("Быстрые действия") }, el('h2', {}, tr("Быстрые действия")));
+      if (readonly) return section;
+      library().then((rows) => {
+        for (const row of rows.filter((item) => item.quick)) {
+          const action = el('button', { type: 'button', class: 'btn code-quick-action', title: row.name }, row.name);
+          action.addEventListener('click', async () => {
+            if (section.hidden || !available()) return;
+            busy(true);
+            let value;
+            try {
+              value = await libraryText(row.id);
+            } catch (err) {
+              failed(err);
+              return;
+            } finally {
+              busy(false);
+            }
+            submit(value);
+          });
+          section.append(action);
+        }
+        paint();
+      }, () => {});
+      return section;
     },
-    libraryText,
     /** Пункты меню «Ветки и рабочие копии»: `changed()` — изменённые файлы последнего ответа, `verify(engine, text,
      * skill)` — новый чат другого помощника с текстом и навыком в поле. */
     menuItems({ changed, verify: verifyWith }) {

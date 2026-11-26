@@ -241,12 +241,15 @@ async def test_chats_list_external_sessions_as_other_origin(runner, home):
 
 
 async def test_turn_streams_text_step_and_permission_card_then_done(runner, home):
+    now = 100.0
+    runner.monotonic = lambda: now
     runner.start(runner.project, runner.pid, CHAT, "Запиши файл вне проекта", None, None)
     task = runner._turns[CHAT].task
     rid = await asking(runner)
     card = runner._turns[CHAT].asks[rid].event
     assert card["tool"] == "write" and card["input"]["sandbox_permissions"] == "danger-full-access"
     assert not card["always"]
+    now = 101.5
     runner.answer(runner.pid, CHAT, rid, "allow", None, None)
     await task
     assert runner.fake.replies[0] == {"id": 0, "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}}}
@@ -256,9 +259,11 @@ async def test_turn_streams_text_step_and_permission_card_then_done(runner, home
     assert [e["error"] for e in events(runner, "result") if e["id"] == "call_probe_6"] == [True]
     settings = events(runner, "settings")[0]
     assert settings["model"] == TOOLS and settings["access_fixed"] and settings["overlay"]["profile"] == "web"
-    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done", "turn_ms": 1500, "session_ms": 1500}
     assert runner.aliases.target(runner.project, CHAT) == SESSION
-    assert runner.choices.details(CHAT)["context"]["used"] == 7342
+    details = runner.choices.details(CHAT)
+    assert details["context"]["used"] == 7342
+    assert (details["turn_ms"], details["session_ms"]) == (1500, 1500)
     prompt = runner.fake.prompts[0]["prompt"]
     assert prompt == [{"type": "text", "text": "Запиши файл вне проекта"}]
 

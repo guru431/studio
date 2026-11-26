@@ -394,7 +394,7 @@ def args_of(arguments: str) -> "dict | None":
     """Аргументы вызова модели: JSON-объект; иначе None."""
     try:
         args = json.loads(arguments)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return args if isinstance(args, dict) else None
 

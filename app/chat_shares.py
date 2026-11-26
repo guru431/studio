@@ -306,6 +306,10 @@ def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tupl
         # what the chat page shows (chat._message_out): «Интернет»/MCP steps without text for the model, the words
         # of an answer that failed, the text of an answer still being written
         shown = chat._message_out(message, [])
+        for step in shown["tools"]:
+            if step.get("kind") == "knowledge" and isinstance(step.get("hits"), list):
+                step["hits"] = [{"doc": hit["doc"], "n": hit["n"]} for hit in step["hits"]
+                                if isinstance(hit, dict) and isinstance(hit.get("doc"), str) and type(hit.get("n")) is int]
         attachments = []
         for a in atts.get(message["id"], []):
             # Missing/deleted source files are never turned into broader media access.

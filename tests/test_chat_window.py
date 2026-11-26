@@ -42,6 +42,33 @@ def test_window_is_manual_then_listed_then_remembered_then_the_table(studio):   
     assert limit_of(studio, cid) == chat.CONTEXT["local-gemma-abl"] == 131072      # прежняя таблица
 
 
+def test_model_list_failure_is_cached_briefly_and_endpoint_change_clears_facts(studio):
+    gw = add_gateway(studio); cid = new_chat(studio)
+    window(studio, 65536)
+    assert limit_of(studio, cid) == 65536
+    state.DB.execute("UPDATE model_facts SET ratio = 2.0 WHERE connection_id = ?", (gw,))
+    assert studio.c.patch(f"/api/connections/{gw}", json={"name": "Новое имя"}).status_code == 200
+    assert state.DB.execute("SELECT ratio FROM model_facts WHERE connection_id = ?", (gw,)).fetchone()[0] == 2.0
+
+    seen = []
+    async def down(request):
+        seen.append(request.url.host)
+        return httpx.Response(503)
+
+    studio.gw.on["/v1/models"] = down
+    chat.LIMITS.clear()
+    assert limit_of(studio, cid) == limit_of(studio, cid) == 65536
+    assert seen == ["10.77.1.15"]
+    studio.clock[0] += chat.CONTEXT_RETRY_SEC + 1
+    assert limit_of(studio, cid) == 65536 and len(seen) == 2
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",
+                     (json.dumps(["10.77.1.15:4000", "10.77.1.16:4000"]),))
+    r = studio.c.patch(f"/api/connections/{gw}", json={"base_url": "http://10.77.1.16:4000", "token": studio.gw.TOKEN})
+    assert r.status_code == 200, r.text
+    assert state.DB.execute("SELECT 1 FROM model_facts WHERE connection_id = ?", (gw,)).fetchone() is None
+    assert limit_of(studio, cid) == chat.CONTEXT["local-gemma-abl"] and seen[-1] == "10.77.1.16"
+
+
 def test_ratio_from_model_facts_scales_the_count(studio):                          # п. 31(а)
     text = [{"role": "user", "content": "я" * 6000}]
     assert (chat.estimate_tokens(text), chat.estimate_tokens(text, 2.0)) == (2000, 3000) and chat.DEFAULT_RATIO == 3.0
@@ -105,12 +132,14 @@ def test_context_refusal_retries_once_with_compaction_then_refuses_in_words(stud
             return httpx.Response(400, json={"error": {"message": "This model's maximum context length is 8192 tokens."}})
         return await studio.gw.builtin(request)
     studio.gw.on["/v1/chat/completions"] = completions
+    studio.gw.chat_usage = {"prompt_tokens": 100, "completion_tokens": 10}
     studio.gw.chat_script = [["Пересказ двух ходов."], ["Ответ-3"]]
     events = sse(turn(studio, cid, "Вопрос-3"))
     assert events[-1] == ("done", {"status": "done"}) and ("recovery", {"stage": "summary"}) in events
     assert len(seen) == 3                                                  # отказ, пересказ, повтор
     assert seen[2]["messages"][1]["content"] == chat.SUMMARY_BLOCK.format("Пересказ двух ходов.") + "Вопрос-3"
-    assert messages(studio, cid)[-1]["content"] == "Ответ-3"
+    reply = messages(studio, cid)[-1]
+    assert reply["content"] == "Ответ-3" and reply["usage"] == {"in": 100, "out": 10}  # круга пересказа нет в расходе
     refuse[0] = 9                                                          # отказ и после сжатия
     events = sse(turn(studio, cid, "Вопрос-4"))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith(chat.CONTEXT_WORDS)

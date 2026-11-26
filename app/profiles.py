@@ -19,6 +19,7 @@
 """
 import json
 import logging
+from typing import Literal, get_args
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,7 +41,8 @@ REFUSED = "подключение не принимает параметр «{0}
 REJECTED = ("unknown", "unsupported", "unrecognized", "not supported", "extra fields not permitted",
             "extra inputs are not permitted", "unexpected keyword")
 #: уровень рассуждения диалога (`chats.effort`, спека 2026-11-25 п. 40) — только провайдерам EFFORT_PROVIDERS
-EFFORTS = ("low", "medium", "high")
+Effort = Literal["low", "medium", "high"]
+EFFORTS = get_args(Effort)
 EFFORT_PROVIDERS = ("openai", "openrouter")
 #: отказ сервиса по параметру уровня (`reasoning_effort`, `reasoning`) — вместо REFUSED
 EFFORT_REFUSED = "модель не принимает уровень рассуждения — выберите «Как у модели»"

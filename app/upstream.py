@@ -298,14 +298,15 @@ async def ws_target(conn, url: str) -> WsTarget:
 def json_body(response: httpx.Response) -> dict:
     try:
         body = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     return body if isinstance(body, dict) else {}
 
 
-def message(response: httpx.Response) -> str | None:
+def message(response: httpx.Response, *, body: dict | None = None) -> str | None:
     """Сообщение отказа шлюза: OpenAI `error.message`, LiteLLM `detail` или None."""
-    body = json_body(response)
+    if body is None:
+        body = json_body(response)
     error = body.get("error")
     text = error.get("message") if isinstance(error, dict) else error
     if not text and isinstance(body.get("detail"), dict):

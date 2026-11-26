@@ -1073,11 +1073,23 @@ function build(view, ctx) {
     });
     // 1:1 — точка под пальцем или курсором остаётся на месте; клик мимо картинки — закрыть
     img.addEventListener('click', (event) => {
-      const fx = event.offsetX / img.clientWidth;
-      const fy = event.offsetY / img.clientHeight;
-      if (!dialog.classList.toggle('full')) return;
-      stage.scrollLeft = fx * img.offsetWidth - event.clientX;
-      stage.scrollTop = fy * img.offsetHeight - event.clientY;
+      if (dialog.classList.contains('full')) {
+        dialog.classList.remove('full');
+        return;
+      }
+      if (!img.naturalWidth) return;
+      const box = img.getBoundingClientRect();
+      const fit = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
+      const width = img.naturalWidth * fit, height = img.naturalHeight * fit;
+      // Поля вокруг вписанного фото входят в прямоугольник img, но остаются фоном просмотра.
+      const fx = (event.clientX - box.left - (box.width - width) / 2) / width;
+      const fy = (event.clientY - box.top - (box.height - height) / 2) / height;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) { dialog.close(); return; }
+      const offsetX = (event.clientX - box.left) * img.clientWidth / box.width;
+      const offsetY = (event.clientY - box.top) * img.clientHeight / box.height;
+      dialog.classList.add('full');
+      stage.scrollLeft = fx * img.offsetWidth - offsetX;
+      stage.scrollTop = fy * img.offsetHeight - offsetY;
     });
     stage.addEventListener('click', (event) => { if (event.target === stage) dialog.close(); });
     root.append(dialog);

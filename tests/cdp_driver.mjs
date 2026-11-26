@@ -40,7 +40,8 @@ import process from 'node:process';
 
 const POLL_MS = 50;
 const IDLE_MS = 300;
-const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8, Delete: 46, Home: 36, End: 35, ArrowLeft: 37, ArrowRight: 39,
+const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8, Delete: 46, Home: 36, End: 35,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
   Slash: 191, ...Object.fromEntries([...'0123456789'].map((d) => [d, 48 + Number(d)])) };
 const CODES = { Slash: 'Slash', ...Object.fromEntries([...'0123456789'].map((d) => [d, `Digit${d}`])) };
 const MODIFIERS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };

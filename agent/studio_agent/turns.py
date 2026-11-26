@@ -101,6 +101,7 @@ class _Turn:
     access: str | None = None
     context: dict | None = None
     settings: dict | None = None
+    answer_model: str | None = None
     activity: dict | None = None
     progress: dict = field(default_factory=dict)
     feed: events.Feed = field(default_factory=events.Feed)
@@ -594,7 +595,7 @@ class Runner:
                     received_result = False
                     async for message in self._stream(t):
                         self._subtask(t, message)
-                        self._cache_usage(t, message)
+                        self._observe_answer(t, message)
                         for e in t.feed.events(message):
                             self._send(t, e)
                         result_message = isinstance(message, ResultMessage)
@@ -785,8 +786,8 @@ class Runner:
         t.child_states[child] = row
         self._children_progress(t)
 
-    def _cache_usage(self, t, message):
-        """Начало ответа главного агента обновляет оценку; повторные блоки того же ответа — нет."""
+    def _observe_answer(self, t, message):
+        """Модель и кэш из ответа главного агента; повторные блоки не обновляют оценку кэша."""
         if getattr(message, "parent_tool_use_id", None) is not None:
             return
         if isinstance(message, StreamEvent) and message.event.get("type") == "message_start":
@@ -796,6 +797,8 @@ class Runner:
             model, message_id, usage = message.model, message.message_id, message.usage
         else:
             return
+        if (actual := sessions.answer_model(model)) is not None:
+            t.answer_model = actual
         if not t.context or not isinstance(model, str) or model == "<synthetic>" or not isinstance(message_id, str):
             return
         previous = t.context.get("cache") or {}
@@ -920,6 +923,8 @@ class Runner:
             done["not_started"] = True
         if t.times:
             done.update(t.times)
+        if t.answer_model is not None:
+            done["model"] = t.answer_model
         if t.queued:
             originals = {item["id"]: item["text"] for item in t.followups}
             done["unsent"] = [{"id": message_id, "text": originals.get(message_id, text)}

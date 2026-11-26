@@ -79,6 +79,7 @@ def test_files_list_attachments_media_and_mcp_results(studio):
     media_of = {a["name"]: a["media_id"] for a in messages(studio, cid)[0]["attachments"]}
 
     items = studio.c.get(f"/api/chats/{cid}/files").json()["items"]
+    assert studio.c.get(f"/api/chats/{cid}").json()["file_count"] == len(items)
     assert [(i["kind"], i["name"], i["mime"], i["size"] is None) for i in items] == [
         ("attachment", "notes.txt", "text/plain", False), ("attachment", "p.png", "image/png", False),
         ("media", "call.mp3", "audio/mpeg", False), ("result", "plot.png", "image/png", True)]

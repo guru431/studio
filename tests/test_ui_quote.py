@@ -165,7 +165,10 @@ SELECT_ANSWER = """(() => { const md = document.querySelector('#messages .msg.as
   const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); return sel.toString(); })()"""
 
 
-def test_quote_reaches_the_request_in_chat(browser, live):
+def test_quote_reaches_the_request_in_chat(browser, live, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="studio")
     login = "quote-chat"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
@@ -173,10 +176,17 @@ def test_quote_reaches_the_request_in_chat(browser, live):
         ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
         ("type", "#chat-input", "Привет"), ("press", "Enter"), ("wait", ANSWERED),
         ("eval", "selected", SELECT_ANSWER),
-        ("wait", "!document.querySelector('#quote-float').hidden"), ("click", "#quote-float"),
+        ("wait", "!document.querySelector('#quote-float').hidden"),
+        ("eval", "watch_estimate", """(() => { const real = window.fetch;
+          window.fetch = function(url, opts) {
+            if (String(url).endsWith('/estimate')) window.estimateText = JSON.parse(opts.body).text;
+            return real.call(this, url, opts);
+          }; return true; })()"""),
+        ("click", "#quote-float"),
         ("wait", "!document.querySelector('#chat-quote').hidden"),
         ("eval", "chip", "document.querySelector('#chat-quote').textContent.trim()"),
-        ("type", "#chat-input", "Почему?"), ("press", "Enter"),
+        ("type", "#chat-input", "Почему?"),
+        ("wait", "window.estimateText === '> Здравствуйте!\\n\\nПочему?'"), ("press", "Enter"),
         ("wait", "document.querySelectorAll('#messages .msg.assistant').length === 2 && " + ANSWERED),
         ("eval", "after", "[document.querySelector('#chat-input').value, document.querySelector('#chat-quote').hidden]")],
         width=1280)
@@ -184,6 +194,7 @@ def test_quote_reaches_the_request_in_chat(browser, live):
     v = r["values"]
     assert v["chip"] == "Цитата: Здравствуйте!", v
     assert live.gw.chat_requests[-1]["messages"][-1]["content"] == "> Здравствуйте!\n\nПочему?"
+    assert "> Здравствуйте!" not in caplog.text and "Почему?" not in caplog.text
     assert v["after"] == ["", True], v
     assert not problems(r), problems(r)
 

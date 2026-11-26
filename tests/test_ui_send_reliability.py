@@ -296,24 +296,26 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
             add_cloud(page, live)
             page.on("request", lambda r: puts.append(r.post_data) if r.method == "PUT" else None)
             live.cloud.chunk_pause = 4
+            page.evaluate("() => { window.realNow = Date.now; window.testNow = Date.now(); Date.now = () => window.testNow; }")
             for first in ("Начало ответа. ", "я" * 40000):
                 live.cloud.chat_reply = [first, "конец"]
                 puts.clear()
                 page.locator("#chat-input").fill("Расскажи")
                 page.locator("#send").click()
                 pw.expect(page.locator(LAST + " .md")).to_contain_text(first[:20])
-                page.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+                page.evaluate("() => { window.testNow += 1250; window.dispatchEvent(new PageTransitionEvent('pagehide')); }")
                 until(page, lambda: len(puts) == 2)
                 # подпись — после конца сохранения: до него она пуста (ответ ещё «идёт»), после — итог «остановлено»
                 pw.expect(page.locator(LAST + " .msg-meta")).to_have_text("остановлено")
                 assert puts[0] == puts[1]                # keepalive и итог страницы — одно тело
-                assert json.loads(puts[0])["total_ms"] >= 0      # числа ответа — в keepalive: при закрытии дойдёт он
+                assert json.loads(puts[0])["total_ms"] == 1250   # время хода сохранено в keepalive
                 status, answer = page.evaluate(last_saved)
                 assert status == "stopped"
                 if len(first) < 100:
                     assert answer == first
                 else:                                # 80 КБ UTF-8 > PART_BYTES: начало, что влезло
                     assert 20000 < len(answer) < 40000 and set(answer) == {"я"}
+            page.evaluate("() => { Date.now = window.realNow; }")
             # Настоящая перезагрузка: поток рвётся сетевой ошибкой раньше `pagehide` — итог ошибки не уходит первым.
             live.cloud.chat_reply = ["Перед перезагрузкой. ", "конец"]
             page.locator("#chat-input").fill("Снова")

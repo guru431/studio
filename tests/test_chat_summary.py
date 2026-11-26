@@ -238,6 +238,24 @@ def test_compact_asks_for_consent_when_a_transcript_goes_to_a_cloud_model(studio
     assert compact(studio, cid).status_code == 200 and stored(cid)["summary"] == "Итог"
 
 
+def test_compact_rechecks_transcript_consent_after_waiting_for_the_window(studio, fake_audio, monkeypatch):
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    doc = from_transcript(studio, tid).json()
+    sse(turn(studio, cid, "Первый", attachment_ids=[doc["id"]], external_ok=True))
+    sse(turn(studio, cid, "Второй"))
+    sent = len(studio.gw.chat_requests)
+
+    async def window_after_the_history_changed(conn, model):
+        state.DB.execute("UPDATE messages SET model = 'local-gemma-abl' WHERE chat_id = ? AND role = 'assistant'", (cid,))
+        return 131072
+
+    monkeypatch.setattr(chat, "model_window", window_after_the_history_changed)
+    assert code(compact(studio, cid)) == (409, "external")
+    assert len(studio.gw.chat_requests) == sent and stored(cid)["summary"] is None
+
+
 def test_compact_is_refused_once_the_shared_model_is_withdrawn(studio):
     """Общее подключение: модель снята из раздела для учёток — ход 422, сжатие тоже, без запроса к модели."""
     make_user(studio, "admin", is_admin=True); make_user(studio, "existing")
@@ -296,6 +314,19 @@ def test_compact_through_cleaner_marks_the_attachments_as_cleaner_used(cleaner_g
     r = compact(s, cid)
     assert r.status_code == 200, r.text
     assert used(doc["id"]) == 1 and stored(cid)["summary"] == "Привет из облака"
+
+
+def test_compact_rejected_before_request_does_not_mark_cleaner_use(cleaner_gw, monkeypatch):
+    s, gw = cleaner_gw
+    gw.models[0]["context_length"] = 131072
+    cid = routed_chat(s, gw)
+    doc = attach(s, "отчёт.txt", "Квартальный отчёт.".encode(), "text/plain")
+    sse(turn(s, cid, "Один", attachment_ids=[doc["id"]])); sse(turn(s, cid, "Два"))
+    state.DB.execute("UPDATE attachments SET cleaner_used = 0")
+    sent = len(gw.turns)
+    monkeypatch.setattr(chat, "_summary_plan", lambda *args: None)
+    assert code(compact(s, cid)) == (413, "context")
+    assert used(doc["id"]) == 0 and len(gw.turns) == sent
 
 
 def test_compact_without_cleaner_leaves_the_attachments_unmarked(studio):

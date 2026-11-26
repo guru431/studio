@@ -48,10 +48,22 @@ def test_shared_limits_count_files_and_images_together(studio, monkeypatch):
     aid, machine, link = setup(studio)
     link.hello["attachments"] = True
     result = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "attachments": [FILE] * 8, "images": [PNG]})
-    assert result.status_code == 422
+    assert (result.status_code, detail(result)["message"]) == (422, "можно прикрепить до 8 файлов")
     monkeypatch.setattr(claude_code, "IMAGES_MAX", 25)
     result = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "attachments": [FILE], "images": [PNG]})
     assert result.status_code == 413 and not sent(machine, "turn")
+
+
+def test_excess_attachment_count_is_refused_before_decoding(studio, monkeypatch):
+    aid, machine, _ = setup(studio)
+
+    def unexpected(*args):
+        pytest.fail("Изображения декодируются только после проверки числа")
+
+    monkeypatch.setattr(claude_code, "_turn_images", unexpected)
+    answer = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "images": [PNG] * 5})
+    assert (answer.status_code, detail(answer)["message"]) == (422, "можно прикрепить до 4 изображений")
+    assert not sent(machine, "turn")
 
 
 @pytest.mark.integration

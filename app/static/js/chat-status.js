@@ -7,7 +7,6 @@ import { el, withCard } from './ui.js';
 import { icon } from './icons.js';
 import { popupPanel } from './menu.js';
 import { statusActions } from './status-bar.js';
-import { fileCount } from './chat-dialog-files.js';
 
 export const SILENCE_MS = 10000;
 const QUIET = ['tool', 'think', 'write', 'load', 'wait'];   // у них тишина — признак, у карты и скана — нет
@@ -176,9 +175,9 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       if (!steps.length) toolsPopup.close();
       else if (toolsPopup.isOpen()) paintSteps();
     },
-    /** Открытый диалог (`{chat, messages, media}` с сервера) или null: счёт «Файлов диалога». */
+    /** Счёт «Файлов диалога» из ответа GET диалога. */
     dialog(chat) {
-      const n = chat ? fileCount(chat) : 0;
+      const n = chat?.file_count ?? 0;
       filesCount.textContent = String(n);
       const label = tr("Файлы диалога: {0}", n);
       if (filesButton.getAttribute('aria-label') !== label) {

@@ -207,12 +207,17 @@ def test_refusal_needs_a_rejection_marker_next_to_the_name():
     assert profiles.refusal("Unrecognized request argument supplied: top_k", {"temperature": 0.3}) is None
 
 
-def test_page_rejection_markers_match_the_server():
-    """Прямой ход узнаёт отказ параметра на странице (chat.js `serviceRefusal`) по тем же признакам, что сервер."""
+def test_direct_answer_markers_and_limits_match_the_server():
+    """Прямой ход и запрос usage используют общие признаки отказа; поля PUT ограничены теми же числами."""
     import re
     from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "app/static/js/chat.js").read_text(encoding="utf-8")
+    import chat
+
+    js = Path(__file__).resolve().parents[1] / "app/static/js"
+    source = (js / "chat-usage.js").read_text(encoding="utf-8")
     block = re.search(r"const REJECTED = \[(.*?)\];", source, re.S)
-    assert block, "нет REJECTED в chat.js"
+    assert block, "нет REJECTED в chat-usage.js"
     assert tuple(re.findall(r"'([^']*)'", block.group(1))) == profiles.REJECTED
-    assert "REJECTED.some((marker) => lowered.includes(marker))" in source
+    for name in ("USAGE_MAX", "MS_MAX"):
+        value = re.search(rf"const {name} = (\d+);", source)
+        assert value and int(value.group(1)) == getattr(chat, name)

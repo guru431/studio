@@ -5,7 +5,7 @@ import { tr } from './i18n.js';
  *
  * quoted(text) — текст без краевых пробелов, каждая строка с «> »; отправляемая цитата целиком (с «> » и «…» обрезки)
  *   — не длиннее QUOTE_MAX знаков.
- * quoteChip(host, field, { id, changed }) → { node, set(text), clear(), value(), fold() }: чип `div.quote-chip#id`
+ * quoteChip(host, field, { id, changed }) → { node, set(text), clear(), value(), composed(), fold() }: чип `div.quote-chip#id`
  *   (значок, начало цитаты, «Убрать цитату») — в host перед рамкой поля; changed() — после смены цитаты.
  * selectionQuote(scroller, { texts, quote }) → { unmount() }: выделение целиком внутри одного узла `texts` ленты —
  *   кнопка `#quote-float` «Цитировать» у конца выделения; нажатие — quote(выделенный текст). */
@@ -51,12 +51,13 @@ export function quoteChip(host, field, { id = 'quote-chip', changed = null } = {
   remove.addEventListener('click', () => { clear(); field.focus({ preventScroll: true }); });
   if (host) host.insertBefore(node, field.closest('.field-box') && host.contains(field.closest('.field-box'))
     ? field.closest('.field-box') : null);
+  const composed = () => !current ? field.value : [quoted(current), field.value].filter(Boolean).join('\n\n');
   return {
-    node, set, clear,
+    node, set, clear, composed,
     value: () => current,
     fold() {
       if (!current) return false;
-      field.value = field.value ? `${quoted(current)}\n\n${field.value}` : quoted(current);
+      field.value = composed();
       field.dispatchEvent(new Event('input', { bubbles: true }));
       clear();
       return true;

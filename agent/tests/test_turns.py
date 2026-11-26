@@ -71,7 +71,8 @@ async def test_turn_streams_text_steps_and_ends_done(home, project, monkeypatch)
     turn = r.start(project, PID, CHAT, "Привет", None, None)
     await settle(r)
     assert kinds(sent) == ["text", "text", "step", "result", "done"]
-    assert {e["turn"] for e in sent} == {turn} and bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
+    assert {e["turn"] for e in sent} == {turn} and bare(sent[-1]["e"]) == {
+        "k": "done", "status": "done", "model": "claude-opus-5-5"}
     assert all(e["t"] == "ev" and e["project"] == PID and e["chat"] == CHAT for e in sent)
     assert sent[-1]["project_name"] == project.name
     assert sent[2]["e"] == {"k": "step", "id": "t1", "tool": "Read", "input": {"file_path": "a"}}
@@ -233,7 +234,8 @@ async def test_failure_before_the_query_is_not_started_and_after_it_is_a_broken_
     r.start(project, PID, CHAT, "Привет", None, None)
     await settle(r)
     assert any(s["e"].get("k") == "text" for s in sent)
-    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": "Claude Code прервал ход — повторите задание"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error",
+                                  "message": "Claude Code прервал ход — повторите задание", "model": "claude-opus-5-5"}
 
 
 async def test_other_failures_end_with_their_words(home, project):

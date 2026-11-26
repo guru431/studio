@@ -93,8 +93,9 @@ function stepNode(s) {
 function sourcesNode(steps) {
   const links = steps.flatMap((s) => (s.kind === 'search' ? (Array.isArray(s.results) ? s.results : []).map((x) => x && x.url)
     : (s.error ? [] : [s.url]))).filter(webLink).length;
+  const called = steps.filter((s) => !s.auto).length;
   return el('details', { class: 'shared-sources' },
-    el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
+    el('summary', {}, links ? tr("Источники ({0})", links) : (called ? tr("Вызовы инструментов ({0})", called) : tr("Знания"))),
     el('ul', {}, ...steps.map(stepNode)));
 }
 
@@ -324,9 +325,7 @@ form.addEventListener('submit', async (event) => {
       if (message.status === 'streaming') node.append(el('p', { class: 'muted' }, tr("Ответ не был дописан, когда создавали ссылку")));
       if (typeof message.error === 'string' && message.error) node.append(el('p', { class: 'error' }, serverMessage(message.error)));
       const tools = Array.isArray(message.tools) ? message.tools.filter((s) => s && typeof s === 'object') : [];
-      // шаг автоматического блока «Знаний» (`auto`) — не вызов инструмента, как в экспорте (chat_exports)
-      const called = tools.filter((s) => !s.auto);
-      if (called.length) node.append(sourcesNode(called));
+      if (tools.length) node.append(sourcesNode(tools));
       if (message.reasoning) node.append(el('details', {}, el('summary', {}, tr("Рассуждение")), el('pre', {}, message.reasoning)));
       for (const image of message.images || []) {
         if (image.missing) {

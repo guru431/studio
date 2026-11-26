@@ -685,7 +685,7 @@ def test_found_goes_into_the_first_text_part_of_a_message_with_a_photo():
     assert chat._prefix(block, [parts[1]]) == [{"type": "text", "text": block}, parts[1]]
 
 
-def test_past_tool_output_goes_to_the_next_turn_as_its_first_1500_chars(studio):
+def test_model_gets_the_full_tool_output_in_that_turn_and_1500_chars_in_the_next(studio):
     cid = web_chat(studio); studio.gw.exa_page_text = "слово " * 6000
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."], ["Да."]]
     sse(turn(studio, cid, "Прочитай https://example.test/long"))

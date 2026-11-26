@@ -3,7 +3,7 @@ import { tr } from './i18n.js';
  * `bridge.turn_limits`); мост без поля (до 0.48.0) — прежние 4 изображения и 8 вложений всего. Отказ — до отправки,
  * словами с действующим числом: незнакомого числа старому мосту страница не шлёт. */
 
-const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+export const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const LEGACY = { images: 4, attachments: 8 };
 
 /** Пределы компьютера: { images, attachments }. */

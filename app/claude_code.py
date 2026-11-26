@@ -314,13 +314,13 @@ def _turn_images(images: list[TurnImage]) -> list[dict]:
     return [image.model_dump() for image in images]
 
 
-def _turn_counts(link, images: list[dict], attachments: list[dict]) -> None:
+def _turn_counts(link, images: int, attachments: int) -> None:
     """Число вложений хода — по пределам моста (`bridge.turn_limits`); без канала — `bridge.LIMITS_MAX`, и `ask`
     скажет `offline`. Отказ — до моста, словами с действующим числом."""
     counts = bridge.turn_limits(link.hello) if link is not None else bridge.LIMITS_MAX
-    if len(images) > counts["images"]:
+    if images > counts["images"]:
         raise _refuse(422, "invalid", f"можно прикрепить до {counts['images']} изображений")
-    if len(images) + len(attachments) > counts["attachments"]:
+    if images + attachments > counts["attachments"]:
         raise _refuse(422, "invalid", f"можно прикрепить до {counts['attachments']} файлов")
 
 
@@ -1448,10 +1448,13 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
         raise _refuse(422, "invalid", f"нужны текст и до {counts['attachments']} вложений") from None
     if (not body.text.strip() and not body.images and not body.attachments) or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
+    before_decode = bridge.LINKS.get(aid)
+    _turn_counts(before_decode, len(body.images), len(body.attachments))
     images = await asyncio.to_thread(_turn_images, body.images)
     attachments = await asyncio.to_thread(_turn_attachments, body.attachments, images)
     link = bridge.LINKS.get(aid)
-    _turn_counts(link, images, attachments)
+    if link is not before_decode:
+        _turn_counts(link, len(images), len(attachments))
     if op == "steer" and link is not None and not link.hello.get("chat_control"):
         raise _refuse(409, "unsupported", "Обновите мост для отправки уточнений во время работы")
     if op == "steer" and body.mode == "queue":

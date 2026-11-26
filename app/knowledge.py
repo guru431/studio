@@ -26,6 +26,7 @@
 - В журнал — только id, коды и числа: ни текстов, ни запросов, ни имён документов и баз, ни имён моделей.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -518,18 +519,46 @@ async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int =
 
 def hits_view(hits: list[Hit]) -> list[dict]:
     """Источники шага «Знания» под ответом (спека 2026-11-25, п. 28): `[{doc, n, id}]` — имя документа, номер куска
-    и id документа, без повторов пары (id, n); текст куска страница читает маршрутом (`chat_sources`)."""
+    и id источника, без повторов пары (id, n). Ссылка на кусок вложения переживает снятие отметки «выдержки»."""
+    if not hits:
+        return []
+    attachments = dict(state.DB.execute(
+        "SELECT id, attachment_id FROM kb_documents WHERE attachment_id IS NOT NULL"
+        " AND id IN (SELECT value FROM json_each(?))", (json.dumps(list({h.doc_id for h in hits})),)).fetchall())
     seen, out = set(), []
     for h in hits:
         if (h.doc_id, h.n) not in seen:
             seen.add((h.doc_id, h.n))
-            out.append({"doc": h.doc_name, "n": h.n, "id": h.doc_id})
+            att_id = attachments.get(h.doc_id)
+            doc_id = h.doc_id if att_id is None else f"attachment:{att_id}:{_chunk_hash(h.text)}"
+            out.append({"doc": h.doc_name, "n": h.n, "id": doc_id})
     return out
 
 
+def _chunk_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _attachment_chunk(uid: int, chat_id: str, reference: str, n: int) -> "dict | None":
+    att_id, _, digest = reference.partition(":")
+    if n < 1 or len(digest) != 64:
+        return None
+    row = state.DB.execute("SELECT a.name, a.text FROM attachments a JOIN messages m ON m.id = a.message_id"
+                           " WHERE a.id = ? AND a.user_id = ? AND m.chat_id = ?", (att_id, uid, chat_id)).fetchone()
+    if row is None or not row["text"]:
+        return None
+    start = (n - 1) * (CHUNK_CHARS - OVERLAP)
+    if n > 1 and start + OVERLAP >= len(row["text"]):    # chunks() ends as soon as the previous chunk reached EOF
+        return None
+    text = row["text"][start:start + CHUNK_CHARS]
+    return {"doc": row["name"], "n": n, "text": text} if _chunk_hash(text) == digest else None
+
+
 def chunk(uid: int, chat_id: str, doc_id: str, n: int) -> "dict | None":
-    """Кусок `n` документа `doc_id` для источника под ответом: документ жив и лежит в базе, которую учётка видит
-    (`visible_ids`), или это документ большого вложения этого диалога и этой учётки; иначе None."""
+    """Кусок `n` для источника под ответом: действующий документ видимой базы или неизменившийся кусок своего
+    вложения в этом диалоге. Прежний id документа большого вложения читается, пока его индекс существует."""
+    if doc_id.startswith("attachment:"):
+        return _attachment_chunk(uid, chat_id, doc_id.removeprefix("attachment:"), n)
     doc = state.DB.execute("SELECT id, kb_id, attachment_id, user_id, name FROM kb_documents"
                            " WHERE id = ? AND deleted IS NULL", (doc_id,)).fetchone()
     if doc is None:

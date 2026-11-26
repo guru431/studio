@@ -38,11 +38,12 @@ DESCRIPTION_MAX = 4000                       # знаков описания и�
 LOCAL_DESCRIPTION_MAX = 1000                 # то же локальной модели
 CALL_MAX = 64                                # имя функции для модели (`tool_name`)
 SERVER_PART = 24                             # знаков имени сервера в имени функции
-#: кириллица имени сервера в имени функции (`tool_name`); ъ и ь — пусто
+#: кириллица имени сервера и инструмента в имени функции (`tool_name`); ъ и ь — пусто
 TRANSLIT = str.maketrans({
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
     "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
     "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya"})
+TOOL_TRANSLIT = TRANSLIT | {ord(chr(letter).upper()): roman.capitalize() for letter, roman in TRANSLIT.items()}
 MAX_BYTES = 1024 * 1024
 TIMEOUT = 30
 DISCOVER_SEC = 60                            # срок списка инструментов одного сервера в ходе чата
@@ -735,12 +736,16 @@ def _host_like(text: str) -> bool:
 
 def has_url(value) -> bool:
     """В аргументах (JSON любой вложенности; ключи тоже) есть строка со ссылкой: URL_RE или имя хоста (`_host_like`)."""
-    if isinstance(value, str):
-        return URL_RE.search(value) is not None or _host_like(value)
-    if isinstance(value, dict):
-        return any(has_url(k) or has_url(v) for k, v in value.items())
-    if isinstance(value, list):
-        return any(has_url(v) for v in value)
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str) and (URL_RE.search(current) is not None or _host_like(current)):
+            return True
+        if isinstance(current, dict):
+            pending.extend(current)
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
     return False
 
 
@@ -754,10 +759,11 @@ def _unknown_tool(error, text=""):
 def tool_name(server: str, tool: str, taken=()) -> str:
     """Имя функции инструмента для модели — одно и то же от хода к ходу: `mcp_<сервер>__<инструмент>`, не длиннее
     CALL_MAX, знаки `[A-Za-z0-9_-]`. Сервер — нижний регистр, кириллица по TRANSLIT, серии прочих знаков — `_`,
-    первые SERVER_PART знаков, пусто — `server`; инструмент — прочие знаки `_`, регистр как есть. Занятое в
+    первые SERVER_PART знаков, пусто — `server`; инструмент — транслитерация с сохранением регистра и прочие знаки `_`. Занятое в
     `taken` — с хвостом `_2`, `_3`… (основа короче на длину хвоста)."""
     part = re.sub(r"[^a-z0-9]+", "_", server.lower().translate(TRANSLIT)).strip("_")[:SERVER_PART].rstrip("_")
-    base = f"mcp_{part or 'server'}__{re.sub(r'[^A-Za-z0-9_-]', '_', tool)}"
+    suffix = re.sub(r"[^A-Za-z0-9_-]", "_", tool.translate(TOOL_TRANSLIT))
+    base = f"mcp_{part or 'server'}__{suffix or 'tool'}"
     name, n = base[:CALL_MAX], 1
     while name in taken:
         n += 1

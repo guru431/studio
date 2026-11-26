@@ -81,6 +81,7 @@ export const ICONS = {
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6m4-6v6"/>',
   // вид ленты (views.js)
   preview: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/>',
+  maximize: '<path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/>',
   tiles: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>'
     + '<rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   table: '<path d="M10 6h10M10 12h10M10 18h10"/><rect x="3.5" y="4.5" width="3" height="3" rx=".8"/>'

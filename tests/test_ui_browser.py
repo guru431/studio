@@ -382,6 +382,11 @@ def is_open(selector):
     return f"!!document.querySelector({selector!r})?.open"
 
 
+def viewer_details(width, selector="#viewer"):
+    """На мобильном режим просмотра открывается со скрытой панелью сведений."""
+    return [("click", f"{selector} .viewer-details-toggle")] if width <= 760 else []
+
+
 def history_of(name):
     """Число диалогов и картинок вошедшего — под именем `name`."""
     return ("eval", name, f"(async () => {{ const m = {API};"
@@ -2298,7 +2303,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
                             " && document.querySelector('#photo-file').files.length === 0"),
         ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{model}']"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-        ("click", "#viewer .act-edit"),
+        *viewer_details(width), ("click", "#viewer .act-edit"),
         ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
         ("eval", "defaultModel", "document.querySelector('#edit-model-label').textContent"),
         ("eval", "defaultTip", "document.querySelector('#edit-mode-tip').textContent"),
@@ -2309,7 +2314,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("wait", f"!{is_open('#editor')} && {done_cards(2)}"),
         ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{nxt}']"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-        ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        *viewer_details(width), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         ("eval", "reset", "!document.querySelector('#edit-local').checked && document.querySelector('#edit-prompt').value === ''"),
         ("eval", "nextLabel", "document.querySelector('#edit-model-label').textContent"),
         ("eval", "nextTip", "document.querySelector('#edit-mode-tip').textContent"),
@@ -2366,7 +2371,7 @@ def test_brush_edit_of_a_picture_larger_than_2_mp_says_the_size_and_works(browse
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login, cards=1),
             ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-            ("click", "#viewer .act-edit"),
+            *viewer_details(width), ("click", "#viewer .act-edit"),
             ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
             ("eval", "tip", "document.querySelector('#edit-size-tip').hidden ? null"
                             " : document.querySelector('#edit-size-tip').textContent"),
@@ -2413,7 +2418,7 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
             ("wait", f"!{is_open('#describe-dialog')} && {done_cards(1)}"),
             ("eval", "prompt", "document.querySelector('#photo-prompt').value"),
             ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-            ("click", "#viewer .act-describe"), ("wait", described),
+            *viewer_details(width), ("click", "#viewer .act-describe"), ("wait", described),
             ("eval", "fits", f"{NO_OVERFLOW} && document.querySelector('#describe-dialog').scrollWidth"
                              " <= document.querySelector('#describe-dialog').clientWidth"),
             ("eval", "forms", "window.sentForms"),
@@ -2463,7 +2468,7 @@ def test_enhance_photo_from_device_and_viewer(browser, live, width):
             ("eval", "fit", f"{NO_OVERFLOW} && document.querySelector('{dialog}').scrollWidth"
                             f" <= document.querySelector('{dialog}').clientWidth"),
             ("click", "#photo-upscale-submit"), ("wait", done_cards(1)),
-            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-upscale"),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width), ("click", "#viewer .act-upscale"),
             ("wait", is_open(dialog)), set_value("[name=upscale-mode]", "fast"),
             set_value("[name=upscale-scale]", "1.5"), ("click", "#photo-upscale-submit"),
             ("wait", done_cards(2)), ("eval", "forms", "window.sentForms")],
@@ -2789,7 +2794,7 @@ def test_editor_strength_out_of_range_is_refused_in_words(browser, live):
     edit_error = "document.querySelector('#edit-error').textContent"
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-        ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        *viewer_details(390), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         ("type", "#edit-prompt", "make it blue"),
         set_value("#edit-strength", "5"), ("click", "#edit-submit"),
         ("wait", f"{edit_error}.length > 0"), ("eval", "high", edit_error),
@@ -4003,7 +4008,7 @@ def test_photo_compare_from_the_viewer_and_the_selection(browser, live, width):
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), ("eval", "made", MAKE_CHAIN),
         *go("photo"), ("wait", FEED_READY), ("wait", done_cards(2)),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("wait", "document.querySelector('#viewer .act-compare')"),
-        ("click", "#viewer .act-compare"), ("wait", is_open("#compare")),
+        *viewer_details(width), ("click", "#viewer .act-compare"), ("wait", is_open("#compare")),
         ("eval", "sides", COMPARE_SIDES),
         set_value("#compare-range", "30"),
         ("eval", "clip", "[document.querySelector('#compare .compare-right').style.clipPath,"
@@ -4112,7 +4117,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     v0 = len(live.gw.video_forms)
     player = f"{CLIP}[data-state=done] video"
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width), ("click", "#viewer .act-animate"),
         ("wait", "document.querySelector('#video-source img')?.naturalWidth > 0"),
         ("eval", "source", "document.querySelector('#video-source img').getAttribute('src').split('/').pop().split('?')[0]"),
         ("eval", "photoPrompt", "document.querySelector('#video-photo-prompt').value"),
@@ -4402,6 +4407,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         ("eval", "tile", f"[document.querySelector('{CLIP} .card-cap').textContent, !!document.querySelector('{CLIP} video'),"
                          f" {grid_cols('#video-feed')}]"),
         ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
+        *viewer_details(width, "#video-viewer"),
         ("wait", "document.querySelectorAll('#video-viewer .chain-step').length === 2"),
         ("eval", "viewer", viewer),
         ("eval", "inside", f"[...document.querySelectorAll('#video-viewer button')].every(b => {{ const r = b.getBoundingClientRect();"
@@ -4417,6 +4423,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
                               ".map(b => b.getAttribute('aria-label') || b.textContent)"),
         ("click", f"{CLIP} .cell-act .card-repeat"), ("wait", clips("done", 2)),
         ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
+        *viewer_details(width, "#video-viewer"),
         ("click", "#video-viewer .act-delete"), ("wait", is_open("#video-delete-dialog")),
         ("click", "#video-delete-confirm"),
         ("wait", f"!document.querySelector('#video-viewer') && document.querySelectorAll('{CLIP}').length === 1"),
@@ -4488,7 +4495,7 @@ def test_mic_inserts_text_at_the_cursor(browser, live, width):
             ("eval", "sent", "window.sentForms.length"),
             ("eval", "overflow", f"!({NO_OVERFLOW})"),
             # микрофон есть и в окне «Изменить», в чате и в видео
-            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width), ("click", "#viewer .act-edit"),
             ("wait", "document.querySelector('#editor .mic')"), ("press", "Escape"),
             *go("chat"), ("wait", "document.querySelector('#composer .mic')"),
             *go("video"), ("wait", "document.querySelector('#video-composer .mic')")],
@@ -4657,7 +4664,8 @@ def test_every_field_has_the_mic_and_clear_inside(browser, live, width):
     mobile = width < 760
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
         *field_steps("photo", "#photo-prompt", "#photo-composer"),
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width),
+        ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         *field_steps("editor", "#edit-prompt", "#editor"), ("press", "Escape"), ("wait", f"!{is_open('#editor')}"),
         *open_new_chat(mobile), ("wait", "document.querySelector('#chats').getBoundingClientRect().right <= 0"
                                          " || innerWidth > 760"),     # выдвижная панель списка уехала
@@ -5934,6 +5942,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
         ("eval", "photo", f"[!!document.querySelector('#photo-composer'), {hint}]"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        *viewer_details(width),
         ("eval", "acts", "[...document.querySelectorAll('#viewer .viewer-actions button')].map(b => b.textContent)"),
         ("click", "#viewer .act-download"), ("wait", "window.clicked.length === 2"),
         ("click", "#viewer .act-delete"), ("wait", is_open("#photo-delete-dialog")), ("click", "#photo-delete-confirm"),
@@ -9618,8 +9627,9 @@ CODE_IDLE_AFTER = ("document.querySelector('#code-chat').dataset.running === '0'
                    " && !document.querySelector('.code-ask')")
 #: ход дошёл до машины и кончился: задание рисуется в ленте ещё до POST хода (code-chat.js submit), а закрытая
 #: страница его уже не отправит — ждём ответ машины («Готово» в сценарии), а не только своё сообщение
+DONE_TEXT = "Ответ тестового моста готов"
 TURN_DONE = ("document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"
-             " && document.querySelector('#code-feed .code-msg.assistant')?.textContent.includes('Готово')")
+             f" && document.querySelector('#code-feed .code-msg.assistant .md')?.textContent.trim() === {json.dumps(DONE_TEXT)}")
 
 
 def code_free_machine(chats=None):
@@ -10655,7 +10665,9 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
             ("type", "#code-text", "Черновик задания"),
             ("eval", "lock", CODE_LOCK_NOW),         # потока нет (простой): закрытость увидит «Отправить»
             ("click", "#code-send"),
-            ("wait", LOCK_OPEN), ("eval", "locked", STORED_DRAFT),
+            ("wait", LOCK_OPEN),
+            ("eval", "inputUnderLock", "document.querySelector('#code-text').dispatchEvent(new Event('input', {bubbles: true}))"),
+            ("eval", "locked", STORED_DRAFT),
             ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
             ("wait", CODE_PIN_SHOWN), ("eval", "old", "!!(window.oldChat = document.querySelector('#code-chat'))"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
@@ -11808,7 +11820,7 @@ def test_code_unsaved_edit_asks_before_a_tab_switch(browser, live, target):
 @pytest.mark.parametrize("width", [320, 1280])
 def test_code_long_tab_titles_fit(browser, live, width):
     """Пять вкладок с названиями по 120 знаков: ряд — одна строка, страница не шире экрана; на телефоне ряд
-    листается вбок, активная — в видимой части."""
+    листается вбок, активная — в видимой части. У ряда и подписей нет вертикальной прокрутки."""
     from fake_bridge import pid
     login = f"code-tab-long-{width}"
     live.add_user(login)
@@ -11825,9 +11837,20 @@ def test_code_long_tab_titles_fit(browser, live, width):
       return [tops.size, bar.scrollWidth > bar.clientWidth, a.left >= b.left - 1 && a.right <= b.right + 1,
         title.scrollWidth > title.clientWidth, title.title.length > 100,
         b.top >= document.querySelector('.code-head').getBoundingClientRect().bottom]; })()"""
+    vertical = """(() => {
+      const root = document.documentElement, bar = document.querySelector('#code-tabbar');
+      const titles = [...bar.querySelectorAll('.code-tab-title')];
+      return [1, .85, .75].map(zoom => {
+        root.style.setProperty('--font-scale', '1.5');
+        root.style.setProperty('--ui-scale', zoom);
+        root.style.zoom = zoom;
+        return [getComputedStyle(bar).overflowY, bar.scrollTop, ...titles.map(title => title.scrollTop)];
+      });
+    })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
-            code_tab_ready(chats[4]), ("eval", "shape", settled(shape, 400)), ("eval", "fits", NO_OVERFLOW)],
+            code_tab_ready(chats[4]), ("eval", "shape", settled(shape, 400)), ("eval", "fits", NO_OVERFLOW),
+            ("eval", "vertical", vertical)],
             width=width, mobile=width < 760)
     finally:
         sb.stop()
@@ -11836,6 +11859,7 @@ def test_code_long_tab_titles_fit(browser, live, width):
     assert v["shape"][0] == 1 and v["shape"][2:] == [True, True, True, True] and v["fits"] is True
     if width < 760:
         assert v["shape"][1] is True
+    assert v["vertical"] == [["hidden", 0, 0, 0, 0, 0, 0]] * 3, v["vertical"]
     assert not problems(r), problems(r)
 
 

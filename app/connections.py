@@ -159,6 +159,20 @@ def get(user_id: int | None, conn_id: int, *, own: bool = False, gate: bool = Tr
     return _from_row(row, user_id)
 
 
+def model_endpoint(conn: Connection) -> tuple:
+    """Параметры получателя запросов. Имя карточки и список разделов модель не меняют."""
+    return (conn.id, conn.owner_id, conn.kind, conn.base_url, conn.cleaner, conn.s06, conn.via_cleaner,
+            conn.routed, conn.proxied)
+
+
+def current_model_endpoint(conn: Connection) -> bool:
+    """Снимок всё ещё на месте после ожидания ответа шлюза."""
+    try:
+        return model_endpoint(get(conn.user_id, conn.id, gate=False)) == model_endpoint(conn)
+    except HTTPException:
+        return False
+
+
 def token(conn: Connection, *, route: bool = True) -> str:
     """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
     Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
@@ -469,6 +483,8 @@ def patch(user_id: int | None, conn_id: int, body: ConnPatch) -> dict:
         state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id IS ?",
                          (*changes.values(), conn_id, user_id))
         sections.set_sections(user_id, conn_id, chosen)
+        if not kept or cleaner != conn.cleaner or s06 != conn.s06 or via != conn.via_cleaner:
+            state.DB.execute("DELETE FROM model_facts WHERE connection_id = ?", (conn_id,))
     log.info("владелец %s: подключение %d изменено", user_id, conn_id)
     return out(get(user_id, conn_id))
 

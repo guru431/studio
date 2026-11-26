@@ -19,7 +19,10 @@ export function messageNav({ scroller, feed, prefix = 'code', own = '.code-msg.u
     'aria-label': expandLabel, title: expandLabel, 'aria-pressed': 'false', disabled: true });
   previous.append(icon('upward'));
   next.append(icon('downward'));
-  allSteps.append(icon('expand'));
+  const expandIcon = icon('expand');
+  const collapseIcon = icon('collapse');
+  collapseIcon.style.display = 'none';
+  allSteps.append(expandIcon, collapseIcon);
   const node = el('nav', { class: 'code-message-nav', 'aria-label': tr("Навигация по чату"), hidden: true }, previous, allSteps, next);
   let alive = true;
   let messageTarget = null;
@@ -60,7 +63,8 @@ export function messageNav({ scroller, feed, prefix = 'code', own = '.code-msg.u
     allSteps.setAttribute('aria-label', stepsLabel);
     allSteps.setAttribute('aria-pressed', String(expanded));
     allSteps.title = stepsLabel;
-    allSteps.querySelector('path').setAttribute('d', expanded ? 'm8 5 4 4 4-4m-8 14 4-4 4 4' : 'm8 9 4-4 4 4m-8 6 4 4 4-4');
+    expandIcon.style.display = expanded ? 'none' : '';
+    collapseIcon.style.display = expanded ? '' : 'none';
     node.hidden = !feed.querySelector(own) && !list.length && !hasEarlier();
     previous.disabled = !!earlier?.busy() || (!before && !hasEarlier());
     next.disabled = !after && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;

@@ -6,21 +6,38 @@ import { tr } from './i18n.js';
  * query — отбор ленты (`&model=…`): страницы перелистывания читаются с ним же. */
 import { api } from './api.js';
 import { pageQuery } from './feed.js';
-import { iconButton } from './icons.js';
+import { icon, iconButton } from './icons.js';
 import { el, words } from './ui.js';
 
 const ready = (item) => !!item.media_id && item.state === 'done';
 const PAGE = 30;
 
 export function viewerNavigation(dialog, { item, items, section, open, done, opener, gallery = null, query = '' }) {
-  const state = gallery || { items: items.slice(), done, top: true, opener, query };
+  const state = gallery || { items: items.slice(), done, top: true, opener, query,
+    details: !matchMedia('(max-width: 760px), (pointer: coarse)').matches };
+  const top = dialog.querySelector('.viewer-top');
+  const close = top.querySelector('.viewer-close');
+  const details = dialog.querySelector('.viewer-bar');
+  details.id = `${dialog.id}-details`;
+  const toggle = iconButton('info', tr("Показать сведения"), { class: 'icon-btn viewer-details-toggle',
+    'aria-controls': details.id });
+  close.before(toggle);
+  function paintDetails() {
+    details.hidden = !state.details;
+    const label = state.details ? tr("На весь экран") : tr("Показать сведения");
+    toggle.setAttribute('aria-expanded', String(state.details));
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+    toggle.replaceChildren(icon(state.details ? 'maximize' : 'info'));
+  }
+  toggle.addEventListener('click', () => { state.details = !state.details; paintDetails(); });
+  paintDetails();
   const previous = iconButton('prev', tr("Предыдущий файл"), { class: 'icon-btn viewer-prev' });
   const next = iconButton('next', tr("Следующий файл"), { class: 'icon-btn viewer-next' });
   const position = el('span', { class: 'viewer-position', 'aria-live': 'polite', 'aria-atomic': 'true' });
   const error = el('p', { class: 'error small viewer-navigation-error', 'aria-live': 'polite' });
-  const controls = el('div', { class: 'viewer-navigation', 'aria-label': tr("Перелистывание") }, previous, position, next);
-  dialog.querySelector('.viewer-top').prepend(controls);
-  dialog.querySelector('.viewer-bar').prepend(error);
+  const controls = el('div', { class: 'viewer-navigation', 'aria-label': tr("Перелистывание") }, previous, position, next, error);
+  top.prepend(controls);
   dialog.dataset.item = item.id;
   let busy = false;
   const active = () => dialog.open && dialog.isConnected;

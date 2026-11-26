@@ -16,34 +16,41 @@ export const lengthRefusal = (err) => err?.code === 'context';
 export const lengthError = (m) => m?.status === 'error' && typeof m.error === 'string' && m.error.startsWith(CONTEXT_WORDS);
 
 /** `chatId()` — открытый диалог; `openWith(id, text)` — открыть наследника с итогом в поле; `busy()` — ответ идёт;
- * `failed(err)` — отказ. Ответ — { node, show(), hide(), button() }: node — строка под #chat-error, button() — кнопка
+ * `failed(err)` — отказ. Ответ — { node, show(), hide(), sync(), button() }: node — строка под #chat-error, button() — кнопка
  * для действий ответа с ошибкой длины. */
 export function continueOffer({ chatId, openWith, busy, failed }) {
   const label = () => tr("Новый диалог с итогом");
   const buttons = new Set();
+  let writing = false;
 
-  async function run() {
-    const id = chatId();
-    if (!id || busy()) return;
-    for (const b of [...buttons]) {
+  function sync() {
+    const disabled = writing || busy();
+    const text = writing ? tr("Пишу итог…") : label();
+    for (const b of buttons) {
       if (b !== main && !b.isConnected) {          // ответ перерисован — его прежней кнопки больше нет
         buttons.delete(b);
         continue;
       }
-      b.disabled = true;
-      b.textContent = tr("Пишу итог…");
+      b.disabled = disabled;
+      if (b.textContent !== text) b.textContent = text;
     }
+  }
+
+  async function run() {
+    const id = chatId();
+    if (!id || writing || busy()) return;
+    writing = true;
+    sync();
     try {
       const out = await api('POST', `/api/chats/${encodeURIComponent(id)}/continue`);
+      if (chatId() !== id || !node.isConnected) return;
       hide();
       openWith(out.chat_id, out.text || '');
     } catch (err) {
-      failed(err);
+      if (chatId() === id && node.isConnected) failed(err);
     } finally {
-      for (const b of buttons) {
-        b.disabled = busy();
-        b.textContent = label();
-      }
+      writing = false;
+      sync();
     }
   }
 
@@ -52,7 +59,7 @@ export function continueOffer({ chatId, openWith, busy, failed }) {
   const node = el('p', { class: 'chat-continue', id: 'chat-continue-offer', hidden: true }, main);
 
   function show() {
-    main.disabled = busy();
+    sync();
     node.hidden = false;
   }
 
@@ -60,8 +67,9 @@ export function continueOffer({ chatId, openWith, busy, failed }) {
     node.hidden = true;
   }
 
-  return { node, show, hide, button() {
-    const b = button(label(), { class: 'btn btn-sm msg-continue', disabled: busy() || null }, run);
+  return { node, show, hide, sync, button() {
+    const b = button(writing ? tr("Пишу итог…") : label(),
+      { class: 'btn btn-sm msg-continue', disabled: (writing || busy()) || null }, run);
     buttons.add(b);
     return b;
   } };

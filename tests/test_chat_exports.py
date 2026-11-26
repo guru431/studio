@@ -404,11 +404,11 @@ def test_auto_knowledge_step_is_not_a_tool_call_in_the_export(studio):
             'hits': [{'doc': 'справка.txt', 'n': 1, 'id': 'd1'}]}
     state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'", (json.dumps([auto]),))
     text = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
-    assert 'Вызовы инструментов' not in text and '- Инструмент' not in text
+    assert '### Знания\n\n- Знания · справка.txt' in text and 'Вызовы инструментов' not in text
     state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'",
                      (json.dumps([auto, {'kind': 'mcp', 'server': 'files', 'tool': 'read', 'text': 'x'}]),))
     text = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
-    assert '### Вызовы инструментов (1)\n\n- MCP · files · read' in text and '- Инструмент' not in text
+    assert '### Вызовы инструментов (1)\n\n- Знания · справка.txt\n- MCP · files · read' in text
 
 
 def test_english_export_translates_studio_words_but_not_the_conversation(studio):

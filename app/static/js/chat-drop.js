@@ -1,7 +1,8 @@
 /* Файлы в поле «Чата» из буфера и перетаскиванием (спека 2026-11-25-studio-skills-status-local-models, п. 24) — тем
- * же путём, что скрепка: `add(files)`. Вставка без файлов (текст) и перетаскивание не файлов — обычные. */
+ * же путём, что скрепка: `add(files)`. Буфер с текстом (например, таблица Excel с картинкой) вставляется как текст. */
 export function fileDrop(form, add) {
   form.addEventListener('paste', (event) => {
+    if (event.clipboardData?.getData('text/plain')) return;
     const files = [...(event.clipboardData?.files || [])];
     if (!files.length) return;
     event.preventDefault();

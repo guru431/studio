@@ -4,7 +4,7 @@ import pytest
 
 from fake_bridge import pid
 from test_codex import CATALOG
-from test_ui_browser import (API, CODE_CHAT_A, NO_OVERFLOW, READY, TURN_DONE, browser, code_chat, code_free_machine,  # noqa: F401
+from test_ui_browser import (API, CODE_CHAT_A, DONE_TEXT, NO_OVERFLOW, READY, TURN_DONE, browser, code_chat, code_free_machine,  # noqa: F401
                              code_online, code_requests, code_session, known_refusals, live, problems, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -28,7 +28,7 @@ def turns_finish(machine, count):
 
     def turn(req, events):
         if len(code_requests(machine, "turn")) <= count:
-            machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+            machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
         return original(req, events)
     machine._op_turn = turn
 
@@ -94,9 +94,10 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
     assert not problems(result), problems(result)
 
 
-def test_separate_copy_takes_the_skill_and_the_quote(browser, live):
+@pytest.mark.parametrize("skill, quoted, typed", [(True, True, "Почини"), (True, False, ""), (False, True, "")])
+def test_separate_copy_takes_the_skill_and_the_quote(browser, live, skill, quoted, typed):
     """«Запустить в отдельной копии»: навык и цитата уходят в ход копии, как при отправке здесь; чип снят."""
-    login = "code-skills-copy"
+    login = f"code-skills-copy-{int(skill)}-{int(quoted)}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Копия", messages=[
         {"id": "m-0", "role": "user", "text": "Что в проекте?", "steps": [], "time": 0},
@@ -114,7 +115,8 @@ def test_separate_copy_takes_the_skill_and_the_quote(browser, live):
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "mine", MINE),
             *code_chat(aid, CODE_CHAT_A),
             ("wait", "document.querySelector('#code-feed').textContent.includes('Три файла.')"),
-            ("eval", "quoted", quote), *pick("/Мой"), ("type", "#code-text", "Почини"),
+            *([("eval", "quoted", quote)] if quoted else []), *(pick("/Мой") if skill else []),
+            *([("type", "#code-text", typed)] if typed else []),
             ("click", "#code-branch-actions"), ("click", "#code-busy-copy"),
             ("wait", f"!location.hash.includes('{pid('alpha')}/') && {IDLE}"
                      " && document.querySelector('#code-feed')?.textContent.includes('Принято')"),
@@ -129,9 +131,10 @@ def test_separate_copy_takes_the_skill_and_the_quote(browser, live):
     assert not result.get("failed"), result
     values = result["values"]
     [turn] = code_requests(machine, "turn")
-    assert turn["text"] == "Текст навыка\n\n> Три файла.\n\nПочини"
+    body = "\n\n".join(part for part in ("> Три файла." if quoted else "", typed) if part)
+    assert turn["text"] == "\n\n".join(part for part in ("Текст навыка" if skill else "", body) if part)
     assert turn["project"] != pid("alpha")
-    assert values["copy"] == [["Навык: Мой навык", "> Три файла.\n\nПочини"]]
+    assert values["copy"] == [["Навык: Мой навык" if skill else None, body]]
     assert values["left"] == [True, True, ""]
     assert not problems(result), problems(result)
 
@@ -141,7 +144,7 @@ def test_old_bridge_has_library_skills_only(browser, live):                     
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Старый мост")})   # мост 0.47: без hello.skills
     machine.file_operations = machine.file_upload = True
-    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    machine.script = [{"k": "text", "text": DONE_TEXT}, {"k": "done", "status": "done"}]
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "mine", MINE),

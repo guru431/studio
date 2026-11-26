@@ -114,6 +114,9 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
         try:
             r = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
                 ("wait", ANSWERED), *pick("частями"),
+                ("eval", "reload", "location.reload()"),
+                ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY} && {ANSWERED}"
+                         f" && !{CHIP}.hidden && {CHIP}.textContent.endsWith('Частями')"),
                 ("type", "#chat-input", "Большая задача"), ("press", "Enter"),
                 ("wait", "!document.querySelector('#chat-tools').hidden"),
                 ("click", "#chat-tools"), ("wait", f"{TOOLS_PART}"),
@@ -140,10 +143,37 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
         assert len(gw.chat_requests) - sent == 3                         # ход, часть, итог хода
         part_request = gw.chat_requests[sent + 1]
         assert [m["role"] for m in part_request["messages"]] == ["system", "user"]
-        assert v["part"] == ["Сбор", "ready" if lang == "en" else "готово"], v
+        assert v["part"] == ["Сбор", "done" if lang == "en" else "готово"], v
         assert v["partText"] == "Итог части", v
         assert v["partsButton"] == ("1 of 1" if lang == "en" else "1 из 1"), v
         assert v["fits"] is True, v
         assert not problems(r), r.get("log")
     finally:
         gw.chat_script = []
+
+
+def test_slash_menu_wraps_arrows_accepts_tab_and_shows_load_failure(browser, live):
+    login = "slash-keys"
+    live.add_user(login)
+    menu = "document.querySelector('#slash-menu')"
+    selected = f"{menu}.querySelector('[aria-selected=true] .slash-name')?.textContent"
+    result = """(() => { const real = window.fetch;
+      window.fetch = (url, opts) => String(url).startsWith('/api/skills?')
+        ? Promise.resolve(new Response(JSON.stringify({detail: {code: 'http', message: 'Сбой каталога'}}),
+          {status: 503, headers: {'Content-Type': 'application/json'}})) : real(url, opts);
+      return true; })()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), ("eval", "skills", SKILLS),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+        ("type", "#chat-input", "/"), ("wait", OPTION),
+        ("eval", "names", f"[...{menu}.querySelectorAll('.slash-name')].map(n => n.textContent)"),
+        ("press", "ArrowUp"), ("eval", "last", selected),
+        ("press", "ArrowDown"), ("eval", "first", selected),
+        ("press", "Tab"), ("wait", f"{menu}.hidden && !{CHIP}.hidden"),
+        ("eval", "accepted", f"[{CHIP}.textContent, {INPUT}.value, document.activeElement === {INPUT}]"),
+        ("eval", "failure", result), ("type", "#chat-input", "/"),
+        ("wait", f"{menu}.querySelector('[role=status]').textContent === 'Сбой каталога'"),
+        ("eval", "shown", f"[!{menu}.hidden, !{OPTION}]"), ("press", "Escape"), ("wait", f"{menu}.hidden")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert len(v["names"]) >= 2 and v["last"] == v["names"][-1] and v["first"] == v["names"][0]
+    assert v["accepted"] == ["Навык: " + v["first"], "", True] and v["shown"] == [True, True]

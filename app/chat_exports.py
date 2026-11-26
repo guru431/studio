@@ -126,6 +126,9 @@ def _tool_line(step: dict, lang: str) -> list[str]:
         lines += ["  - " + _inline(f["name"]) for f in step.get("files") or [] if isinstance(f, dict) and f.get("name")]
     elif kind == "part":                                  # часть ответа (run_part) — название
         lines = ["- " + word("Часть: {}", lang, _inline(step.get("title") or ""))]
+    elif kind == "knowledge":
+        names = [_inline(name) for name in step.get("sources", []) if isinstance(name, str)]
+        lines = ["- " + word("Знания", lang) + (" · " + ", ".join(names) if names else "")]
     else:
         lines = ["- " + word("Инструмент", lang)]
     if error:
@@ -138,8 +141,12 @@ def _tool_line(step: dict, lang: str) -> list[str]:
 def _sources(tools: list, lang: str) -> str:
     links = sum(len(step.get("results") or []) if step.get("kind") == "search" else int(bool(step.get("url")) and not step.get("error"))
                 for step in tools)
-    head = word("Источники ({})", lang, links) if links else word("Вызовы инструментов ({})", lang, len(tools))
-    return "### " + head + "\n\n" + "\n".join(line for step in tools if isinstance(step, dict) for line in _tool_line(step, lang))
+    called = sum(not step.get("auto") for step in tools)
+    if links:
+        head = word("Источники ({})", lang, links)
+    else:
+        head = word("Вызовы инструментов ({})", lang, called) if called else word("Знания", lang)
+    return "### " + head + "\n\n" + "\n".join(line for step in tools for line in _tool_line(step, lang))
 
 
 def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
@@ -158,10 +165,9 @@ def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
             parts.append(("md", "*" + word("(ответ не дописан)", lang) + "*"))
         if message.get("error"):
             parts.append(("plain", word("Ошибка: {}", lang, server_word(message["error"], lang))))
-        # шаг автоматического блока «Знаний» (`auto`) — не вызов инструмента: в перечень и счёт вызовов не входит
-        called = [step for step in message.get("tools") or [] if not (isinstance(step, dict) and step.get("auto"))]
-        if called:
-            parts.append(("md", _sources(called, lang)))
+        tools = [step for step in message.get("tools") or [] if isinstance(step, dict)]
+        if tools:
+            parts.append(("md", _sources(tools, lang)))
         for step in message.get("steps", []):
             tool = step.get("tool")
             tool = server_word(tool, lang) if isinstance(tool, str) else tool      # как страница: message(s.tool)

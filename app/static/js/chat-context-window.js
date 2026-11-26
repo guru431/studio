@@ -5,7 +5,7 @@ import { locale, tr } from './i18n.js';
  * …/compact (п. 30), «Новый диалог с итогом» — POST …/continue (п. 27) и открытие нового диалога с итогом в поле. */
 import { api } from './api.js';
 import { button, el, openDialog, words } from './ui.js';
-import { duration } from './code-context.js';
+import { duration } from './time.js';
 import { speedOf } from './chat-usage.js';
 
 const NO_DATA = () => tr("нет данных");
@@ -14,6 +14,7 @@ const number = (value) => (Number.isFinite(value) ? value.toLocaleString(locale(
 /** `dialog()` — открытый диалог `{chat, messages}` или null; `connection()` — имя подключения; `estimate()` —
  * Promise `{tokens, limit}` или null; `busy()` — ответ идёт; `openWith(id, text)` — открыть диалог с текстом в поле. */
 export function contextWindow(host, { dialog, connection, estimate, busy, openWith }) {
+  let refresh = null;
   function open() {
     const data = dialog();
     if (!data) return null;
@@ -53,13 +54,23 @@ export function contextWindow(host, { dialog, connection, estimate, busy, openWi
       body: [summary, el('p', { class: 'muted small' }, tr("Занято — оценка Студии для следующего сообщения. Токены и время сообщает сервис модели; чего он не сообщил — «нет данных».")),
         fail], actions: [compact, fresh] });
     box.classList.add('code-usage-dialog');
+    let working = false;
+    const current = () => box.open && box.isConnected && dialog()?.chat.id === id;
+    const sync = () => {
+      if (box.open && !current()) box.close();
+      compact.disabled = fresh.disabled = working || busy();
+    };
+    refresh = sync;
+    box.addEventListener('close', () => { if (refresh === sync) refresh = null; }, { once: true });
     const paint = (out) => {
       cells.used.textContent = number(out?.tokens);
       cells.limit.textContent = Number.isFinite(out?.limit) && out.limit > 0 ? number(out.limit) : NO_DATA();
     };
     Promise.resolve().then(estimate).then(paint, () => paint(null));
     compact.addEventListener('click', async () => {
-      compact.disabled = fresh.disabled = true;
+      if (working || busy() || !current()) return;
+      working = true;
+      sync();
       fail.textContent = '';
       try {
         const out = await api('POST', `/api/chats/${encodeURIComponent(id)}/compact`);
@@ -68,22 +79,28 @@ export function contextWindow(host, { dialog, connection, estimate, busy, openWi
       } catch (err) {
         fail.textContent = words(err);
       } finally {
-        compact.disabled = fresh.disabled = busy();
+        working = false;
+        sync();
       }
     });
     fresh.addEventListener('click', async () => {
-      compact.disabled = fresh.disabled = true;
+      if (working || busy() || !current()) return;
+      working = true;
+      sync();
       fail.textContent = '';
       try {
         const out = await api('POST', `/api/chats/${encodeURIComponent(id)}/continue`);
+        if (!current()) return;
         box.close();
         openWith(out.chat_id, out.text || '');
       } catch (err) {
         fail.textContent = words(err);
-        compact.disabled = fresh.disabled = busy();
+      } finally {
+        working = false;
+        sync();
       }
     });
     return box;
   }
-  return { open };
+  return { open, sync: () => refresh?.() };
 }

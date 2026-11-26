@@ -30,7 +30,7 @@ PROBE = """<!doctype html><p>probe</p><script>
 (async () => {
   const probe = { ran: true, fetch: [], img: '', cookie: '', storage: '', parent: '' };
   for (const url of ['/health', 'https://example.test/x']) {
-    try { await fetch(url); probe.fetch.push('ok'); } catch (e) { probe.fetch.push('rejected'); }
+    try { await fetch(url, { mode: 'no-cors' }); probe.fetch.push('ok'); } catch (e) { probe.fetch.push('rejected'); }
   }
   probe.img = await new Promise((done) => { const i = new Image(); i.onload = () => done('loaded');
     i.onerror = () => done('blocked'); i.src = '/static/icons/icon-192.png'; });
@@ -42,11 +42,11 @@ PROBE = """<!doctype html><p>probe</p><script>
 </script>"""
 # decorate: блок ровно PREVIEW_MAX байт — кнопка, на байт больше — нет
 BIG = """(async () => { const { previewLinks, PREVIEW_MAX } = await import('/static/js/chat-preview.js');
-  const links = previewLinks(null, { host: document.body, chatId: () => 'x', allowed: () => true, failed: () => {} });
+  const links = previewLinks(null, { host: document.body, chatId: 'x', allowed: () => true, failed: () => {} });
   const block = (n) => { const f = document.createDocumentFragment(); const pre = document.createElement('pre');
-    const code = document.createElement('code'); code.className = 'language-html'; code.textContent = 'a'.repeat(n);
+    const code = document.createElement('code'); code.className = 'language-html'; code.textContent = 'я'.repeat(n);
     pre.append(code); f.append(pre); links.decorate(f); return f.querySelectorAll('.preview-open').length; };
-  return [block(PREVIEW_MAX), block(PREVIEW_MAX + 1)]; })()"""
+  return [block(PREVIEW_MAX / 2), block(PREVIEW_MAX / 2 + 1)]; })()"""
 FRAME = "document.querySelector('#chat-preview-dialog iframe.chat-preview-frame')"
 
 
@@ -72,7 +72,16 @@ def test_html_and_svg_blocks_open_in_a_sandbox_without_network(browser, live, wi
                               f" {FRAME}.getAttribute('src').startsWith('/api/chats/preview/')]"),
             ("eval", "note", "document.querySelector('#chat-preview-dialog .chat-preview-note').textContent"),
             ("eval", "probe", "window.probe"), ("eval", "fits", NO_OVERFLOW),
-            ("click", "#chat-preview-dialog .dialog-close"), ("wait", f"!{is_open('#chat-preview-dialog')}"),
+            ("eval", "protect", f"""(() => {{ const real = window.fetch; const path = '/api/chats/' + {CHAT};
+              window.fetch = async (url, opts) => {{
+                const response = await real(url, opts);
+                if (String(url) !== path || opts.method !== 'GET') return response;
+                const data = await response.json(); data.chat.protected = true;
+                return new Response(JSON.stringify(data), {{ headers: response.headers }});
+              }};
+              window.dispatchEvent(new Event('online')); return true;
+            }})()"""),
+            ("wait", f"!{is_open('#chat-preview-dialog')} && !{LAST_ANSWER}.querySelector('.preview-open')"),
             ("eval", "big", BIG)], width=width, mobile=mobile)
     finally:
         live.gw.chat_script = []
@@ -191,6 +200,7 @@ def test_knowledge_sources_and_result_pictures_under_the_answer(browser, live, w
         ("eval", "badge", f"{LAST_ANSWER}.querySelector('.web-badge').textContent"),
         ("eval", "step", f"{LAST_ANSWER}.querySelector('.web-steps .web-knowledge').firstChild.textContent"),
         ("eval", "open", f"{LAST_ANSWER}.querySelector('.web-steps').open = true"),
+        ("eval", "target", f"{LAST_ANSWER}.querySelector('.kb-source').getBoundingClientRect().height"),
         ("click", ".msg.assistant:last-child .kb-source"),
         ("wait", f"{is_open('#kb-source-dialog')} && document.querySelector('#kb-source-dialog .kb-source-text')"),
         ("eval", "chunk", "[document.querySelector('#kb-source-dialog h2').textContent,"
@@ -206,7 +216,7 @@ def test_knowledge_sources_and_result_pictures_under_the_answer(browser, live, w
     assert v["step"] == "Знания диалога" and v["badge"].startswith("Знания: 1 поиск")
     assert v["summary"] == f"Источники ({len(hits)})"           # авто-шаг — не «Вызовы инструментов»
     assert v["chunk"][0] == v["sources"][0] and "4711" in v["chunk"][1]
-    assert v["local"] is True and v["fits"] is True
+    assert v["local"] is True and v["fits"] is True and v["target"] >= 24
 
     # картинка результата MCP — под ответом, нажатие — окно фото
     name, path = f"Графики {width}", f"/pictures-{width}"

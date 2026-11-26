@@ -11,7 +11,7 @@ import { contextWindow } from './chat-context-window.js';
 import { statsDialog } from './chat-stats.js';
 import { filesDialog } from './chat-dialog-files.js';
 import { chatTitle } from './chat-title.js';
-import { usageBody, usageOf, usageRefused, withSpeed } from './chat-usage.js';
+import { MS_MAX, REJECTED, usageBody, usageOf, usageRefused, withSpeed } from './chat-usage.js';
 import { placeSummary } from './chat-summary.js';
 import { chatSkills, humanText, skillMessage } from './chat-skills.js';
 import { noteParts, partNode, partsButton } from './chat-parts.js';
@@ -131,7 +131,7 @@ import { startConversation } from './chat-voice.js';
 import { dropPreviews, previewLinks } from './chat-preview.js';
 import { continueOffer, lengthError, lengthRefusal } from './chat-continue.js';
 import { knowledgeStep, sourceClicks } from './chat-knowledge-sources.js';
-import { resultImages } from './chat-result-images.js';
+import { imageThumb, resultImages } from './chat-result-images.js';
 import { effortChooser } from './chat-effort.js';
 import { answerSignal } from './sound.js';
 import { quoteChip, selectionQuote } from './quote.js';
@@ -422,10 +422,6 @@ function cleanerCounts(counts) {
   return Object.entries(counts || {}).map(([type, count]) => `${typeNames[type] || type}: ${count}`).join(' · ');
 }
 
-/* признаки отказа по параметру в ответе 400 — как profiles.REJECTED (сверяет tests/test_connection_profiles.py) */
-const REJECTED = ['unknown', 'unsupported', 'unrecognized', 'not supported', 'extra fields not permitted',
-  'extra inputs are not permitted', 'unexpected keyword'];
-
 /* 400 с именем отправленного параметра профиля подключения и признаком отказа — слова profiles.REFUSED, как у хода
    через сервер (profiles.refusal): одного имени мало — ошибка длины контекста vLLM называет `max_tokens` */
 async function serviceRefusal(response, params) {
@@ -554,7 +550,7 @@ const bodyBytes = (body) => new TextEncoder().encode(JSON.stringify(body)).lengt
  * chat.MS_MAX. */
 function numbersOf(job) {
   const ended = Date.now();
-  const ms = (since) => Math.min(86400000, Math.max(0, Math.round(ended - since)));
+  const ms = (since) => Math.min(MS_MAX, Math.max(0, Math.round(ended - since)));
   return { ...(job.usage ? { usage: job.usage } : {}), ...(job.firstAt ? { gen_ms: ms(job.firstAt) } : {}),
     total_ms: ms(job.started) };
 }
@@ -878,7 +874,10 @@ function build(view, ctx) {
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, effort.chip, effort.menu), send, stop),
     webNote, talkNote);
-  const skills = chatSkills({ input, host: skillHost, changed: () => ring.schedule() });   // меню — перед полем формы
+  const skills = chatSkills({ input, host: skillHost, changed: () => {
+    ring.schedule();
+    if (!editing && !queuing) dialogDrafts.typed(chatId);
+  } });   // меню — перед полем формы
   const fieldTools = inputBox.box.querySelector('.field-tools');
   fieldTools.insertBefore(talkToggle, fieldTools.querySelector('.mic'));
   let suggestKey = null;       // подсказки пустого экрана: { query, items } последнего запроса (items — когда пришли)
@@ -888,19 +887,19 @@ function build(view, ctx) {
   // строка состояния над полем (chat-status.js), окна «Диалог и контекст», «Статистика», «Файлы диалога»
   const ctxWindow = contextWindow(root, { dialog: () => (chatId && chat?.chat.id === chatId ? chat : null),
     connection: () => connName.textContent, estimate: estimateContext,
-    busy: () => jobs.has(chatId) || remoteStream(), openWith });
+    busy: summaryBusy, openWith });
   const status = chatStatus(root, { ring: ring.node, job: () => jobs.get(chatId) || null,
     last: () => {
       const m = chat?.chat.id === chatId ? chat.messages.findLast((x) => x.role === 'assistant') : null;
       return m ? liveOf(m) : null;
     },
     local: () => !!chat?.chat.local, stepNode, stats: () => statsDialog(root),
-    files: () => { if (chatId) filesDialog(root, chatId); }, parts: partsButton({ root }) });
+    files: showFiles, parts: partsButton({ root }) });
   form.before(status.bar);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
   // черновик на каждый диалог (chat-drafts.js); sectionDraft остаётся только защитой от автоперезагрузки
-  const dialogDrafts = chatDrafts(input, { autosize });
+  const dialogDrafts = chatDrafts(input, { autosize, skills });
   // стрелки по своим сообщениям и «Развернуть все шаги» (message-nav.js) — справа у ленты
   const historyBox = el('div', { class: 'chat-history' });
   scroller.replaceWith(historyBox);
@@ -929,7 +928,7 @@ function build(view, ctx) {
   share.hidden = true;
   head.append(share);
   // «Новый диалог с итогом» у отказа по длине (chat-continue.js) — строкой под #chat-error
-  const offer = continueOffer({ chatId: () => chatId, openWith, busy: () => sending || jobs.has(chatId) || remoteStream(),
+  const offer = continueOffer({ chatId: () => chatId, openWith, busy: summaryBusy,
     failed: (err) => { notice.textContent = words(err); } });
   notice.after(offer.node);
   // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
@@ -950,6 +949,16 @@ function build(view, ctx) {
       blocked: current.protected ? PROTECTED_SHARE : null } : null);
     listing.seen(current, !!current && chat.messages.some((m) => m.pending && m.status !== 'streaming'));
     tabs.show(current);
+  }
+
+  function showFiles() {
+    if (!chatId || chat?.chat.id !== chatId) return;
+    const shown = chat;
+    filesDialog(root, chatId, (count) => {
+      if (chat !== shown) return;
+      chat.file_count = count;
+      status.dialog(chat);
+    });
   }
 
   /* выдвижная панель списка (≤ 760px) */
@@ -1237,8 +1246,10 @@ function build(view, ctx) {
       fail.textContent = '';
       try {
         await api('DELETE', `/api/chats/${id}/media/${item.id}`);
-        if (chatId === id && chat) {
-          chat.media = (chat.media || []).filter((entry) => entry.id !== item.id);
+        if (chatId === id && chat && chat.media?.some((entry) => entry.id === item.id)) {
+          chat.media = chat.media.filter((entry) => entry.id !== item.id);
+          chat.file_count = Math.max(0, chat.file_count - 1);
+          status.dialog(chat);
           paintMedia();
         }
         dialog.close();
@@ -1294,7 +1305,11 @@ function build(view, ctx) {
           const done = await uploadMedia(id, f);
           pendingMedia = pendingMedia.filter((x) => x !== item);
           saved += 1;
-          if (chatId === id) chat.media = [...(chat.media || []), done];
+          if (chatId === id && !(chat.media || []).some((entry) => entry.id === done.id)) {
+            chat.media = [...(chat.media || []), done];
+            chat.file_count += 1;
+            status.dialog(chat);
+          }
         } catch (err) {
           item.busy = false;
           item.error = words(err);
@@ -1453,14 +1468,13 @@ function build(view, ctx) {
   /* «После ответа» (chat-queue.js): текст поля — в очередь открытого диалога; правка сообщения, вложения и навык
      (чип chat-skills.js) в очередь не встают. Принято — поле и черновик диалога пусты */
   function enqueue() {
-    quote.fold();
-    const text = input.value;
+    const text = quote.composed();
     if (!chatId) return;
     if (editing) {                    // ответ пошёл (с другого устройства), пока открыта правка: она ждёт конца ответа
       notice.textContent = tr("Ответ ещё идёт — сохраните правку после него");
       return;
     }
-    if (!text.trim() && !skills.chosen()) return;
+    if (!text.trim() && !atts.length && !skills.chosen()) return;
     if (atts.length) {
       notice.textContent = tr("В очередь встаёт только текст — вложения отправьте после ответа");
       return;
@@ -1475,6 +1489,7 @@ function build(view, ctx) {
       return;
     }
     notice.textContent = '';
+    quote.clear();
     inputDraft.sent(text);
     input.value = '';
     autosize();
@@ -1639,7 +1654,7 @@ function build(view, ctx) {
     const sent = atts.filter((a) => a.meta && !a.error);
     const local = atts.filter((a) => !a.meta && !a.error && a.file);
     const skillId = skills.chosen()?.id;
-    const out = await api('POST', `/api/chats/${id}/estimate`, { text: input.value,
+    const out = await api('POST', `/api/chats/${id}/estimate`, { text: quote.composed(),
       attachment_ids: sent.slice(0, ATTACH_MAX).map((a) => a.meta.id), ...(skillId ? { skill_id: skillId } : {}) });
     if (chatId !== id) return null;
     const guess = local.reduce((sum, a) => sum + (a.file.type.startsWith('image/') ? 1000
@@ -1864,9 +1879,7 @@ function build(view, ctx) {
     let name = el('b', {}, a.name);
     let mark = icon(a.kind === 'image' ? 'photo' : 'doc');
     if (a.media_id && a.kind === 'image') {
-      mark = el('button', { type: 'button', class: 'att-thumb', 'aria-label': tr("Открыть фото {0}", a.name) },
-        el('img', { src: `${file}?thumb=1`, alt: '', loading: 'lazy', decoding: 'async' }));
-      mark.addEventListener('click', () => showPhoto(a));
+      mark = imageThumb(a, showPhoto);
     } else if (a.media_id) {
       name = el('a', { class: 'att-file', href: `${file}?download=1`, download: '', title: tr("Скачать") }, name);
     }
@@ -2254,8 +2267,10 @@ function build(view, ctx) {
       p.shown = displayed;
       p.final = final;
       // «Открыть» у блоков html/svg — только у перечитанного с сервера: отметка защищённого источника к этому мигу верна
-      const fileLinks = final ? previewLinks(resultPathLinks(chatId, m), { host: root, chatId: () => chatId,
-        allowed: () => received.has(m) && !chat?.chat.protected, failed: (err) => { notice.textContent = words(err); } }) : null;
+      const id = chatId;
+      const fileLinks = final ? previewLinks(resultPathLinks(id, m), { host: root, chatId: id,
+        allowed: () => alive && id === chatId && received.has(m) && !chat?.chat.protected,
+        failed: (err) => { notice.textContent = words(err); } }) : null;
       if (displayed.length <= 2000) p.md.replaceChildren(renderMarkdown(displayed, { highlight: final, fileLinks }));
       else if (!final) p.md.replaceChildren(el('pre', { class: 'code-stream-text' }, displayed));
       else renderMarkdownInto(p.md, displayed, {
@@ -2408,12 +2423,18 @@ function build(view, ctx) {
       && m.live && liveOf(m) === m);
   }
 
+  function summaryBusy() {
+    return sending || jobs.has(chatId) || remoteStream() || otherTab();
+  }
+
   function syncBusy() {
     const busy = jobs.has(chatId) || remoteStream();
     editNote.querySelector('button').disabled = sending;
     send.hidden = busy;
     stop.hidden = !busy;
     queueAdd.hidden = !(busy || otherTab());
+    offer.sync();
+    ctxWindow.sync();
     paintGuard();
     status.paint();
     // после текущего шага: конец ответа следом перечитывает ленту (refresh), и очередь ждёт её
@@ -2445,7 +2466,7 @@ function build(view, ctx) {
     // сообщение очереди принято — из очереди уходит; поле и черновик — набранное человеком, их не трогаем
     if (attempt.queued) queue.done(attempt.queued);
     inputDraft.sent(attempt.text);                     // ушли из раздела до подтверждения — черновиком не вернётся
-    if (!attempt.queued) dialogDrafts.sent(attempt.id, attempt.text);
+    if (!attempt.queued && !attempt.edit) dialogDrafts.sent(attempt.id, attempt.text, attempt.skill);
     if (attempt.edit) {
       if (editing?.message.id === attempt.edit.id && chatId === attempt.id) closeEdit();
     } else if (!attempt.queued && input.value === attempt.text) { input.value = ''; autosize(); }
@@ -2508,6 +2529,8 @@ function build(view, ctx) {
     roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
+    dropPreviews(root);
+    root.querySelector('#kb-source-dialog[open]')?.close();
     quote.clear();
     closeEdit();
     unqueueField();                                  // в поле — набранное, а не текст уходящего сообщения очереди
@@ -2694,13 +2717,13 @@ function build(view, ctx) {
   }
 
   async function submit(regenerate, externalOk = false, webOk = false) {
-    if (!regenerate && !queuing && !voiceWait) quote.fold();   // цитата — в начало поля (сообщение очереди и «Разговора» — нет)
     // ответ идёт (здесь или через сервер с другого устройства): Enter ставит текст в очередь. Ответ другой вкладки
     // (`otherTab`) — только кнопкой «После ответа»: его признак у страницы бывает устаревшим, сервер решит сам
     if (!regenerate && !queuing && !voiceWait && chatId && (jobs.has(chatId) || remoteStream())) {
       enqueue();
       return null;
     }
+    if (!regenerate && !queuing && !voiceWait) quote.fold();   // цитата — в начало поля (очередь и «Разговор» не трогаем)
     stopWaiting();                                 // ждали скан — ход идёт сейчас
     const text = input.value;
     const retained = editing?.message.attachments?.length || 0;
@@ -2811,7 +2834,7 @@ function build(view, ctx) {
     dialogDrafts.rename(null, created.id);         // черновик нового диалога переходит к созданному
     queue.show(created.id);
     made.id = created.id;
-    chat = { chat: created, messages: [] };
+    chat = { chat: created, messages: [], file_count: 0 };
     shareContext();
     draft = null;
     // ушли из раздела или в другой диалог, пока создавался этот, — адрес не трогать: ход дочитает «В работе»
@@ -3091,7 +3114,7 @@ function build(view, ctx) {
      первое нажатие перезаписало бы черновик прежним текстом поля. Поле занято правкой сообщения или уходящим сообщением
      очереди — черновик вернётся в поле, когда они кончатся (`closeEdit`, `unqueueField`) */
   const restored = (event) => {
-    if (!event.persisted || !alive || chatId === undefined) return;
+    if (!event.persisted || !alive || chatId === undefined || document.documentElement.classList.contains('shrouded')) return;
     if (editing) editing.previous = dialogDrafts.text(chatId);
     else if (queuing && !queuing.back) queuing.typed = dialogDrafts.text(chatId);
     else dialogDrafts.enter(chatId);

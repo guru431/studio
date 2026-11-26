@@ -787,6 +787,8 @@ def test_fake_machine_follows_the_protocol():
     assert ok("skill", project=p, name="review", folder=".claude/skills")[0] == {"text": "Смотри diff"}
     assert refused("skill", project=p, name="none", folder=".claude/skills")["code"] == "not_found"
     assert refused("skill", project=p, name="review", folder="docs")["code"] == "invalid"
+    for name in ("", "../x", "x" * 65):
+        assert refused("skill", project=p, name=name, folder=".agents/skills")["code"] == "invalid"
     many = refused("turn", project=p, chat=new, text="x", model=None, effort=None, images=[png] * 13)
     assert many["message"] == "можно прикрепить до 12 изображений"
     m.script = [{"k": "text", "text": "Да"}, {"k": "done", "status": "done"}]

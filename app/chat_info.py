@@ -63,12 +63,9 @@ async def stats(request: Request, days: int = Query(STATS_DAYS, ge=1, le=STATS_D
     return {"days": ordered}
 
 
-@router.get("/chats/{chat_id}/files")
-async def files(chat_id: str, request: Request):
-    """`{items: [{kind, name, size, mime, url}]}`: `kind` — `attachment`, `media` или `result`; `size` у файла
-    результата MCP — null (размер знает только сервер)."""
-    uid = request.state.user.id
-    row = chat._chat_row(uid, chat_id)
+def file_items(uid, row, *, servers=None) -> list[dict]:
+    """Вложения выбранных сообщений, медиа диалога и сохранённые файлы результатов MCP."""
+    chat_id = row["id"]
     items = [{"kind": "attachment", "name": a["name"], "size": a["size"], "mime": a["mime"],
               "url": _url(a["media_id"], a["mime"])} for a in state.DB.execute(
         "SELECT a.name, a.media_id, md.size, md.mime FROM attachments a JOIN messages m ON m.id = a.message_id"
@@ -78,7 +75,6 @@ async def files(chat_id: str, request: Request):
                "url": _url(m["media_id"], m["mime"])} for m in state.DB.execute(
         "SELECT name, size, mime, media_id FROM chat_media WHERE chat_id = ? AND deleted IS NULL"
         " ORDER BY created, rowid", (chat_id,))]
-    servers = None
     for message in state.DB.execute(
             "SELECT id, tools FROM messages WHERE chat_id = ? AND role = 'assistant' AND unchosen = 0"
             " AND tools IS NOT NULL ORDER BY created, rowid", (chat_id,)).fetchall():
@@ -93,4 +89,11 @@ async def files(chat_id: str, request: Request):
                     items.append({"kind": "result", "name": entry.get("name", ""), "size": None,
                                   "mime": entry.get("mime", ""),
                                   "url": f"/api/chats/{chat_id}/messages/{message['id']}/files/{i}/{n}"})
-    return {"items": items}
+    return items
+
+
+@router.get("/chats/{chat_id}/files")
+async def files(chat_id: str, request: Request):
+    """`{items: [{kind, name, size, mime, url}]}`; `size` у файла результата MCP — null."""
+    uid = request.state.user.id
+    return {"items": file_items(uid, chat._chat_row(uid, chat_id))}

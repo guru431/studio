@@ -52,11 +52,13 @@ def test_head_reads_folded_and_plain_descriptions():
 
 def test_limits_bad_fields_and_links(tmp_path):
     p = tmp_path / "demo"
-    for i in range(limits.SKILLS_MAX + 1):
+    for i in range(limits.SKILLS_MAX):
         put(p, ".agents/skills", f"s{i:03}", f"Навык {i}")
     listed = skills.list_skills(p)
-    assert len(listed["items"]) == limits.SKILLS_MAX == 100 and listed["truncated"] is True
+    assert len(listed["items"]) == limits.SKILLS_MAX == 100 and listed["truncated"] is False
     assert listed["items"][-1]["name"] == "s099"
+    put(p, ".claude/skills", "overflow", "Последний навык")
+    assert skills.list_skills(p) == {**listed, "truncated": True}
 
     q = tmp_path / "other"
     put(q, ".claude/skills", "big", b"x" * (limits.SKILL_MAX + 1))
@@ -88,6 +90,17 @@ def test_limits_bad_fields_and_links(tmp_path):
     assert listed["linked"]["description"] == "Внутри проекта" and "away" not in listed
     assert skills.read_skill(q, "linked", ".claude/skills") == {"text": "Внутри проекта"}
     assert refused(lambda: skills.read_skill(q, "away", ".claude/skills")) == "outside"
+
+
+def test_list_distinguishes_invalid_utf8_from_a_character_split_at_head(tmp_path):
+    title = b"# Review\n"
+    prefix = title + b"x" * (skills.HEAD - len(title) - 2)
+    put(tmp_path, ".agents/skills", "invalid-byte", prefix + b"\xffrest")
+    put(tmp_path, ".agents/skills", "invalid-continuation", prefix + b"\xe2xafter")
+    put(tmp_path, ".agents/skills", "ends-incomplete", prefix + b"\xe2\x82")
+    put(tmp_path, ".agents/skills", "split", prefix + "€".encode() + b"rest")
+    assert skills.list_skills(tmp_path) == {"truncated": False, "items": [
+        {"name": "split", "description": "Review", "folder": ".agents/skills"}]}
 
 
 async def test_skills_through_agent(agent, root, caplog):

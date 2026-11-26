@@ -39,16 +39,18 @@ function forget(id) {
   if (entry && !entry.items.length) queues.delete(id);
 }
 
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', (event) => {
+  if (locked && event.persisted) return;       // возврат из bfcache сохранит очередь в памяти запертой страницы
   const drafts = draftStore(CHAT_DRAFTS);
   for (const [id, entry] of locked ? [] : queues) {
     // уходящее (`sending`) не возвращаем: сервер мог его принять — в черновике оно ушло бы второй раз
     const kept = entry.items.filter((item) => !item.sending);
     if (!kept.length) continue;
-    const typed = drafts.saved()[id]?.text || '';
+    const saved = drafts.saved()[id];
+    const typed = saved?.text || '';
     // ушло ли — неизвестно: с квитанцией тот же текст уйдёт тем же `request_id` (chat-drafts.js `receipt`)
     drafts.save(id, [typed, ...kept.map((item) => item.text)].filter(Boolean).join('\n\n'),
-      kept.find((item) => item.uncertain)?.id);
+      !typed && kept.length === 1 && kept[0].uncertain ? kept[0].id : undefined, saved?.skill);
   }
   for (const entry of queues.values()) entry.items.length = 0;   // идущий `send` узнает, что очереди больше нет
   queues.clear();
@@ -83,7 +85,9 @@ export function chatQueue(host, { send, failed }) {
       const item = entry.items.find((row) => row.id === body.request_id);
       if (!item || item.sending) throw gone();
       if (body.text === null || !body.text.trim()) entry.items.splice(entry.items.indexOf(item), 1);
-      else {
+      else if (item.uncertain && body.text !== item.text) {
+        throw new Error(tr("Исход отправки неизвестен — сначала повторите сообщение без изменений"));
+      } else {
         item.text = body.text;
         item.version += 1;
       }

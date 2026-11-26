@@ -138,29 +138,31 @@ def test_claude_cache_uses_reported_ttl_and_does_not_refresh_for_duplicate_block
     from studio_agent.turns import _Turn
     r = Runner(lambda _: None, choices=store.Choices(home), cli_path=None, now=lambda: 1800000000)
     t = _Turn(home, PID, CHAT, "turn", context={"used": 2500, "limit": 100000})
-    def event(mid, creation=None, cached=0, parent=None):
+    def event(mid, creation=None, cached=0, parent=None, model="claude-test"):
         return StreamEvent(uuid="event", session_id=CHAT, parent_tool_use_id=parent, event={
-            "type": "message_start", "message": {"id": mid, "model": "claude-test", "usage": {
+            "type": "message_start", "message": {"id": mid, "model": model, "usage": {
                 "cache_read_input_tokens": cached, "cache_creation": creation or {}}}})
     for mid, creation, ttl in [
         ("five", {"ephemeral_5m_input_tokens": 100}, 300),
         ("hour", {"ephemeral_1h_input_tokens": 100}, 3600),
         ("mixed", {"ephemeral_1h_input_tokens": 100, "ephemeral_5m_input_tokens": 10}, 300),
     ]:
-        r._cache_usage(t, event(mid, creation))
+        r._observe_answer(t, event(mid, creation))
         assert t.context["cache"]["ttl_seconds"] == ttl
     r.now = lambda: 1800000060
-    r._cache_usage(t, event("mixed", {"ephemeral_5m_input_tokens": 10}))
+    r._observe_answer(t, event("mixed", {"ephemeral_5m_input_tokens": 10}))
     assert t.context["cache"]["updated_at"] == 1800000000
-    r._cache_usage(t, event("child", {"ephemeral_1h_input_tokens": 10}, parent="tool"))
+    r._observe_answer(t, event("child", {"ephemeral_1h_input_tokens": 10}, parent="tool", model="child-model"))
     assert t.context["cache"]["message_id"] == "mixed"
-    r._cache_usage(t, event("read", cached=100))
+    r._observe_answer(t, event("synthetic", model="<synthetic>"))
+    assert t.answer_model == "claude-test"
+    r._observe_answer(t, event("read", cached=100))
     assert t.context["cache"]["ttl_seconds"] == 300
     assert t.context["cache"]["updated_at"] == 1800000060
-    r._cache_usage(t, event("unknown"))
+    r._observe_answer(t, event("unknown"))
     assert t.context["cache"]["ttl_seconds"] is None
     r.now = lambda: 1800000090
-    r._cache_usage(t, event("unknown", {"ephemeral_1h_input_tokens": 100}))
+    r._observe_answer(t, event("unknown", {"ephemeral_1h_input_tokens": 100}))
     assert t.context["cache"]["ttl_seconds"] == 3600
     assert t.context["cache"]["updated_at"] == 1800000060
 

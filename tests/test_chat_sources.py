@@ -2,6 +2,7 @@
 блока (`auto`) называют документ и номер куска (`hits`), текст куска — маршрутом `chat_sources` с проверкой доступа."""
 import json
 
+import chat_exports
 import chat_shares
 import knowledge
 import state
@@ -50,6 +51,9 @@ def test_knowledge_steps_name_document_and_chunk_and_give_the_text(studio):
     snapshot, _ = chat_shares.regular_snapshot(uid, cid)
     shown = json.dumps(snapshot, ensure_ascii=False)
     assert "hits" in shown and "Обычная строка" not in shown
+    assert all("id" not in hit for step in snapshot["messages"][1]["tools"] for hit in step["hits"])
+    exported = chat_exports.markdown(snapshot, "en")
+    assert "Tool calls (1)" in exported and exported.count("Knowledge · справка.txt") == 2
     for bad in ("9/0", "1/99", "0/-1"):
         assert studio.c.get(f"{url}/{bad}").status_code == 404
     make_user(studio, "bob")
@@ -95,6 +99,22 @@ def test_attachment_document_of_another_chat_is_not_a_source(studio):
     own = messages(studio, first)[1]["id"]                                            # тот же шаг в своём диалоге — 200
     state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(forged, ensure_ascii=False), own))
     assert studio.c.get(f"/api/chats/{first}/messages/{own}/sources/0/0").json()["doc"] == "отчёт.txt"
+
+
+def test_attachment_source_survives_a_turn_that_sends_the_whole_document(studio):
+    gw = add_gateway(studio); cid = new_chat(studio)
+    small_model(studio, cid, gw, 20_000)
+    doc = attach(studio, "отчёт.txt", big_text("Пароль от сейфа — 4711.").encode())
+    sse(turn(studio, cid, "Какой пароль от сейфа?", attachment_ids=[doc["id"]]))
+    reply = messages(studio, cid)[1]
+    route = f"/api/chats/{cid}/messages/{reply['id']}/sources/0/0"
+    original = studio.c.get(route).json()
+    assert "4711" in original["text"]
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "local-gemma-abl"}).status_code == 200
+    sse(turn(studio, cid, "Ещё"))
+    assert not knowledge.big_attachments(cid) and studio.c.get(route).json() == original
+    state.DB.execute("UPDATE attachments SET text = REPLACE(text, '4711', '5555') WHERE id = ?", (doc["id"],))
+    assert code_of(studio.c.get(route), 404) == "gone"
 
 
 def test_head_of_a_document_without_matches_is_not_a_source(studio):

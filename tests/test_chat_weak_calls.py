@@ -1,7 +1,11 @@
 """Терпимость к слабому вызову инструментов (спека 2026-11-25-studio-skills-status-local-models, п. 33): вызов
-структурой исполняется при любом признаке конца, кроме обрыва (`length`); вызов текстом в `<tool_call>` разбирается
+структурой исполняется при любом признаке конца, кроме обрыва и `length`; вызов текстом в `<tool_call>` разбирается
 только у локальной модели (`sections.is_local`) и никогда — через Cleaner (решение 13, сторож —
 tests/test_cleaner_route_chat.py); неразобранные аргументы — отказ инструмента словами модели, не ошибка хода."""
+import json
+
+import chat
+import web
 from test_chat import messages, sse, turn
 from test_chat_web import call, chat_of, patch, web_chat
 
@@ -13,6 +17,32 @@ def test_structured_call_runs_with_any_finish_reason(studio):
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")], "ending": "stop"}, ["Нашёл."]]
     assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
     assert len(studio.gw.exa_requests) == 1 and messages(studio, cid)[1]["content"] == "Нашёл."
+
+
+def test_structured_call_cut_by_the_model_length_is_not_run(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")], "ending": "length"}, ["Ответ."]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert len(studio.gw.chat_requests) == 2 and studio.gw.exa_requests == []
+    assert "tools" in studio.gw.chat_requests[0] and messages(studio, cid)[1]["tools"] == []
+
+
+def test_text_parser_accepts_multiple_calls_and_keeps_blocks_without_names():
+    unnamed = '<tool_call>{"arguments": {}}</tool_call>'
+    text = unnamed + '\n<tool_call>{"name": "a", "arguments": "{}"}</tool_call>\n<tool_call>{"name": "b"}</tool_call>'
+    rest, calls = chat._text_calls(text)
+    assert rest == unnamed and [(call.name, call.arguments) for call in calls] == [("a", "{}"), ("b", "{}")]
+
+
+def test_tool_parsers_refuse_when_the_json_decoder_hits_its_depth_limit(monkeypatch):
+    def at_limit(value):
+        raise RecursionError
+
+    monkeypatch.setattr(json, "loads", at_limit)
+    body = '{"name": "web_search", "arguments": {}}'
+    rest, (parsed,) = chat._text_calls(f"<tool_call>{body}</tool_call>")
+    assert rest == "" and parsed.name == "web_search" and parsed.arguments == body
+    assert web.args_of(parsed.arguments) is None
 
 
 def test_local_model_text_call_is_executed_and_leaves_the_answer(studio):
@@ -45,3 +75,4 @@ def test_text_call_stays_text_for_a_cloud_role(studio):
     assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
     assert messages(studio, cid)[1]["content"] == TEXT_CALL and studio.gw.exa_requests == []
     assert len(studio.gw.chat_requests) == 1 and studio.gw.chat_requests[0]["model"] == "gemma4-abl"
+    assert any(t["function"]["name"] == "web_search" for t in studio.gw.chat_requests[0]["tools"])

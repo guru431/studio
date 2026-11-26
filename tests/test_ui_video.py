@@ -13,7 +13,7 @@ from PIL import Image
 from fakes import video_object
 from test_ui_browser import (CLIP, NO_OVERFLOW, READY, VIDEO_FEED_READY, add_gateway, browser, clips,  # noqa: F401
                              NEWEST_DONE, done_cards, go, is_open, live, make_images, photo_screen,
-                             png_of, problems, put_file, ready_clips, set_value, video_screen)
+                             png_of, problems, put_file, ready_clips, set_value, video_screen, viewer_details)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -139,7 +139,7 @@ def test_photo_context_is_editable_bounded_and_cleared_with_a_new_source(browser
     v0 = len(live.gw.video_forms)
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
         ("eval", "photo", "(window.photoId = document.querySelector('.photo-card').dataset.id)"),
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), *viewer_details(width), ("click", "#viewer .act-animate"),
         ("wait", "document.querySelector('#video-photo-prompt')?.value === 'кот 0'"),
         ("eval", "url", "location.hash"),
         # длинное описание в свёрнутом поле: отказ раскрывает его, фокус — в нём, счётчик — над пределом
@@ -228,6 +228,7 @@ def test_photo_to_video_context_by_touch_in_webkit(webkit, live, ready_clips, wi
         page.evaluate("location.hash = '#/photo'")
         until(page, done_cards(1))
         page.locator(NEWEST_DONE).tap()
+        page.get_by_role("button", name="Показать сведения").tap()
         page.locator("#viewer .act-animate").tap()
         until(page, "document.querySelector('#video-photo-prompt')?.value === 'кот 0'")
         assert page.evaluate("location.hash") == "#/video"
