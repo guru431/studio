@@ -36,6 +36,7 @@ services:
       STUDIO_MEDIA_FSTYPE: ${STUDIO_MEDIA_FSTYPE:-cifs}
       STUDIO_ORIGIN: ${STUDIO_URL:?Set STUDIO_URL}
       STUDIO_ALTERNATE_ORIGIN: ${STUDIO_ALTERNATE_ORIGIN:-}
+      STUDIO_MANAGED_HTTPS: ${STUDIO_MANAGED_HTTPS:-0}
       STUDIO_SPARK_CHAT_URL: ${STUDIO_SPARK_CHAT_URL:-}
       STUDIO_HAIRPIN_IP: ${STUDIO_HAIRPIN_IP:?Set STUDIO_HAIRPIN_IP}
     mem_limit: 2g
@@ -64,6 +65,12 @@ services:
       - type: bind
         source: /run/studio-docker
         target: /run/studio
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/studio-https
+        target: /var/lib/studio-https
+        read_only: true
         bind:
           create_host_path: false
     healthcheck:

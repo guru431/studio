@@ -23,6 +23,7 @@ import clock
 import db
 import account_profile as profile
 import security
+import site_https
 import security_log
 import state
 
@@ -183,6 +184,10 @@ def link(kind: str, token: str, origin: str | None = None) -> str:
     return (origin or state.CFG.origin.rstrip("/")) + "/account/" + kind + "#" + token
 
 
+def mail_link(kind: str, token: str, requested_origin: str | None) -> str:
+    return link(kind, token, site_https.origin() or requested_origin)
+
+
 async def login_code(uid: int, request: Request, next_: str, kind: str = "login") -> str:
     row = state.DB.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
     mail_ready()
@@ -307,6 +312,8 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
 
 def invite_links(token: str) -> list[str]:
     """Ссылка приглашения и, если задан, та же на другой адрес — для письма и для показа администратору."""
+    if origin := site_https.origin():
+        return [link("invite", token, origin)]
     links = [link("invite", token)]
     if state.CFG.alternate_origin:
         links.append(link("invite", token, state.CFG.alternate_origin))
@@ -431,7 +438,7 @@ async def recovery_mail(token: str, email: str, origin: str | None, *, admin: bo
                    "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
                    " Если вы не запрашивали её, проигнорируйте письмо.\n"
                    "To set a new password, open this one-time link, valid for 30 minutes."
-                   " If you did not request it, ignore this email.\n\n" + link("reset", token, origin))
+                   " If you did not request it, ignore this email.\n\n" + mail_link("reset", token, origin))
     except HTTPException:
         delete_token(token)
         if admin:
@@ -543,7 +550,7 @@ async def request_email(body: EmailIn, request: Request):
                                 " откройте её в браузере, где вошли в Студию.\n"
                                 "Confirm the email address of your account. The link is valid for 30 minutes;"
                                 " open it in the browser where you are signed in to Studio.\n\n"
-                                + link("verify", token, auth.request_origin(request)))
+                                + mail_link("verify", token, auth.request_origin(request)))
     except HTTPException:                # письмо не ушло — попытку вернуть (адрес свободен: 409 не возвращается)
         delete_token(token)
         refund("email-user", str(uid))

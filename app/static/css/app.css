@@ -318,6 +318,8 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 @media (hover: hover) { #mobile-section-links a:hover { background:var(--surface-2); } }
 #mobile-nav-edit { width:100%; white-space:normal; }
 #mobile-nav-editor fieldset { margin:var(--space-6) 0; padding:0; border:0; }
+#https-settings fieldset { margin:0; padding:0; border:0; min-inline-size:0; }
+#https-settings input[type=file] { width:100%; }
 #mobile-nav-editor legend { padding:0; }
 #mobile-nav-editor label { display:flex; gap:var(--space-5); align-items:center; color:var(--text-1); }
 #mobile-nav-editor input { width:20px; height:20px; }

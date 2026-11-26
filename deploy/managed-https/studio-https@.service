@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply Studio HTTPS settings
+After=apache2.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /etc/studio/managed-https/apply.py
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=45
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/studio/managed-https /etc/studio/.proxy.lock /var/lib/studio-https

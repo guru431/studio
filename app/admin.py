@@ -48,6 +48,7 @@ import roles
 import sections
 import security
 import security_log
+import site_https
 import skills
 import state
 import upstream
@@ -95,6 +96,16 @@ async def save_smtp_settings(body: account_mail.Settings):
 @router.post("/smtp/check")
 async def check_smtp_settings():
     return await account_mail.check()
+
+
+@router.get("/https")
+async def https_settings():
+    return site_https.settings()
+
+
+@router.put("/https")
+async def apply_https(request: Request):
+    return await site_https.apply(request)
 
 
 def require_local_admin(request: Request) -> auth.User:

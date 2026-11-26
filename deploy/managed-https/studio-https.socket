@@ -1,0 +1,13 @@
+[Unit]
+Description=Studio HTTPS settings socket
+
+[Socket]
+ListenStream=/var/lib/studio-https/apply.sock
+Accept=yes
+SocketUser=10001
+SocketMode=0600
+RemoveOnStop=yes
+MaxConnections=2
+
+[Install]
+WantedBy=sockets.target

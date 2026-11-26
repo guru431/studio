@@ -68,7 +68,8 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
     assert me["timezone"] == "Europe/Moscow"
     assert me["studio_version"] == release.VERSION
-    assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
+    assert me["managed_https"] is False
+    assert set(me) == {"id", "login", "name", "is_admin", "managed_https", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
                        "studio_version", "email", "email_codes", "notify_langs", "memory_on",

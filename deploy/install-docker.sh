@@ -54,6 +54,7 @@ grep -qE '^STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=$' /etc/studio/studio.env
 install -d -o 10001 -g 10001 -m 0700 /var/lib/studio
 install -d -o 10001 -g 10001 -m 0750 /run/studio-docker
 install -d -m 0755 /usr/local/share/studio "$R/releases"
+install -d -m 0755 /var/lib/studio-https
 # Test actual writes before altering the current release.
 probe="$STUDIO_MEDIA_DIR/.studio-deploy-$$"
 setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"

@@ -1,6 +1,7 @@
 """Render deployment templates from a local environment without changing Git."""
 import ipaddress
 import io
+import json
 import os
 from pathlib import PurePosixPath
 import re
@@ -13,6 +14,7 @@ TEMPLATES = {"deploy/install.sh", "deploy/studio-web.service",
              "deploy/studio-backup.service", "deploy/apache-vhost.conf",
              "deploy/docker/host.conf", "deploy/docker/nginx.conf",
              "deploy/docker/studio-docker.service", "deploy/docker/studio-backup.service"}
+HTTPS_POLICY = "deploy/managed-https/policy.json"
 
 
 def https_origin(value: str, name: str) -> SplitResult:
@@ -23,6 +25,26 @@ def https_origin(value: str, name: str) -> SplitResult:
             or parsed.port == 0):
         raise ValueError(f"Invalid {name}")
     return parsed
+
+
+def managed_https(environ):
+    enabled = environ.get("STUDIO_MANAGED_HTTPS", "0")
+    if enabled not in {"0", "1"}:
+        raise ValueError("Invalid STUDIO_MANAGED_HTTPS")
+    if enabled == "0":
+        return None
+    proxy = environ.get("STUDIO_PROXY_SSH")
+    port = int(environ.get("STUDIO_APACHE_PORT", "8443"))
+    primary = https_origin(environ.get("STUDIO_URL", ""), "STUDIO_URL")
+    ip = str(ipaddress.IPv4Address(primary.hostname))
+    if (environ.get("STUDIO_RUNTIME") != "docker" or not proxy or proxy != environ.get("STUDIO_SSH")
+            or environ.get("STUDIO_PROXY_SSH_PORT", environ.get("STUDIO_SSH_PORT")) != environ.get("STUDIO_SSH_PORT")
+            or (primary.port or 443) != port):
+        raise ValueError("Managed HTTPS requires a local Apache and an IP-based STUDIO_URL on its HTTPS port")
+    hosts = [ip]
+    if alternate := environ.get("STUDIO_ALTERNATE_ORIGIN"):
+        hosts.append(https_origin(alternate, "STUDIO_ALTERNATE_ORIGIN").hostname)
+    return {"probe_ip": ip, "port": port, "existing_hosts": hosts}
 
 
 def settings(environ):
@@ -117,8 +139,22 @@ def substitute(text, replacements):
     return re.sub(pattern, lambda match: values[match[0]], text)
 
 
+def add_managed_vhost(base):
+    # Copy Studio's proxy rules so transport, body limits and streaming stay in sync.
+    vhost = base[base.index("<VirtualHost "):]
+    vhost = re.sub(r"(?m)^    (?:ServerAlias|ProxyPreserveHost|SSLCertificateChainFile) .+\n", "", vhost)
+    vhost = re.sub(r"(?m)^    ServerName .+$", "    ServerName ${STUDIO_HTTPS_DOMAIN}\n    ProxyPreserveHost On", vhost)
+    vhost = re.sub(r"(?m)^    SSLCertificateFile .+$", "    SSLCertificateFile ${STUDIO_HTTPS_SLOT}/fullchain.pem", vhost)
+    vhost = re.sub(r"(?m)^    SSLCertificateKeyFile .+$", "    SSLCertificateKeyFile ${STUDIO_HTTPS_SLOT}/key.pem", vhost)
+    return (base + "\nIncludeOptional /etc/studio/managed-https/site.conf\n"
+            "<IfDefine STUDIO_HTTPS_DOMAIN>\n" + vhost + "</IfDefine>\n")
+
+
 def render(source, destination, environ):
     replacements, service_env = settings(environ)
+    https_policy = managed_https(environ)
+    if https_policy:
+        replacements.append(("STUDIO_MANAGED_HTTPS=0", "STUDIO_MANAGED_HTTPS=1"))
     environment = "".join(f"\nEnvironment={name}={value}" for name, value in service_env.items() if value)
     with tarfile.open(fileobj=source, mode="r|") as incoming:
         with tarfile.open(fileobj=destination, mode="w|") as outgoing:
@@ -131,7 +167,11 @@ def render(source, destination, environ):
                         if environment and member.name.endswith(".service"):
                             text = re.sub(r"(?m)^(Environment=STUDIO_ORIGIN=.*)$",
                                           lambda m: m[0] + environment, text)
+                        if https_policy and member.name == "deploy/apache-vhost.conf":
+                            text = add_managed_vhost(text)
                         body = text.encode("utf-8")
+                    elif https_policy and member.name == HTTPS_POLICY:
+                        body = (json.dumps(https_policy) + "\n").encode("ascii")
                     member.size = len(body)
                     outgoing.addfile(member, io.BytesIO(body))
                 else:
@@ -142,6 +182,7 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--check"]:
             settings(os.environ)
+            managed_https(os.environ)
         elif not sys.argv[1:]:
             render(sys.stdin.buffer, sys.stdout.buffer, os.environ)
         else:

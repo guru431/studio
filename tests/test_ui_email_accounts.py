@@ -1,5 +1,7 @@
 """Приглашения, почта и коды: реальные браузеры, клавиатура, касания и сохранение настроек."""
+import json
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from browser import run_playwright
 
 import account_mail
 import db
+import site_https
+import state
 from live_app import start_live_app
 
 pw = pytest.importorskip("playwright.sync_api")
@@ -320,6 +324,37 @@ def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser
     finally:
         connection.execute("DELETE FROM settings WHERE key='smtp'")
         connection.close()
+
+
+def test_admin_uploads_domain_certificate_from_settings(browser, live, monkeypatch, tmp_path):
+    instance, _ = browser
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, managed_https=True))
+    monkeypatch.setattr(site_https, "HOST_DIR", tmp_path)
+    submitted = []
+
+    async def apply(payload):
+        submitted.append(payload)
+        (tmp_path / "status.json").write_text(json.dumps({"domain": payload["domain"],
+            "origin": "https://studio.example.net:8443", "expires": "2030-01-02T00:00:00+00:00"}), encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(site_https, "_apply", apply)
+    with instance.new_context(viewport={"width": 320, "height": 900}, ignore_https_errors=True,
+                              extra_http_headers=owner_headers(live), service_workers="block") as context:
+        page = context.new_page()
+        page.goto(live.url + "/#/settings")
+        page.get_by_role("link", name="Домен и HTTPS", exact=True).click()
+        page.get_by_label("Доменное имя").fill("studio.example.net")
+        for label, name, data in [("Сертификат сайта", "site.der", b"\x80DER"),
+                                  ("Закрытый ключ", "site.key", b"key"),
+                                  ("Цепочка сертификатов", "site.p7b", b"\xffp7b")]:
+            page.get_by_label(label).set_input_files({"name": name, "mimeType": "application/octet-stream", "buffer": data})
+        page.get_by_label("Пароль учётной записи").fill("password-123")
+        page.get_by_role("button", name="Применить сертификат").click()
+        pw.expect(page.get_by_role("link", name="https://studio.example.net:8443")).to_be_visible()
+        pw.expect(page.get_by_label("Пароль учётной записи")).to_have_value("")
+        fits(page)
+    assert submitted == [{"domain": "studio.example.net", "certificate": "gERFUg==", "key": "a2V5", "chain": "/3A3Yg=="}]
 
 
 def test_account_without_email_can_sign_out_and_verify_link_asks_to_sign_in(browser, live):

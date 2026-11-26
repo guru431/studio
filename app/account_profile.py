@@ -122,6 +122,7 @@ def _me(request: Request) -> dict:
     views = json.loads(row["views"])
     accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
+            "managed_https": bool(row["is_admin"] and state.CFG.managed_https),
             "email": row["email"], "email_codes": bool(row["email_codes"]),
             # приложение-аутентификатор: on | off | reenter (ключ сервера сменился), резервных кодов осталось
             "totp": totp.status(uid), "totp_backup_left": totp.backup_left(uid),

@@ -1,4 +1,5 @@
 """Контракты почты: приглашения, миграция, восстановление, коды и ошибки отправки."""
+import json
 import logging
 import re
 import sqlite3
@@ -13,6 +14,7 @@ import db
 import email_accounts as accounts
 import manage
 import security
+import site_https
 import state
 from conftest import login, make_user, signin
 
@@ -111,6 +113,26 @@ def test_account_links_that_follow_a_request_use_its_configured_address(studio, 
     response = studio.c.post("/account/forgot", headers=same_origin, json={"login": "owner"})
     assert response.status_code == 200
     assert alternate + "/account/reset#" in mail[-1][2]
+
+
+def test_managed_https_domain_is_used_in_account_mail_from_a_legacy_address(studio, mail, monkeypatch, tmp_path):
+    admin(studio)
+    origin = "https://studio.example.net:8443"
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, managed_https=True, alternate_origin="https://192.0.2.101:8443"))
+    monkeypatch.setattr(site_https, "HOST_DIR", tmp_path)
+    (tmp_path / "status.json").write_text(json.dumps({"origin": origin}), encoding="utf-8")
+    response = studio.c.post("/api/admin/invitations", json={"email": "new@example.com"})
+    assert response.status_code == 201
+    secret = re.search(re.escape(origin) + r"/account/invite#([A-Za-z0-9_-]+)", mail[-1][2])[1]
+    assert "https://testserver" not in mail[-1][2]
+    headers = {"Host": "studio.example.net:8443", "Origin": origin}
+    assert studio.c.post("/account/invite/check", headers=headers, json={"token": secret}).status_code == 200
+    assert studio.c.post("/account/invite/check", headers={**headers, "Origin": "https://foreign.example"},
+                         json={"token": secret}).status_code == 403
+    assert studio.c.post("/account/forgot", json={"login": "owner"}).status_code == 200
+    assert origin + "/account/reset#" in mail[-1][2]
+    assert studio.c.post("/api/me/email", json={"email": "changed@example.com", "password": PASSWORD}).status_code == 200
+    assert origin + "/account/verify#" in mail[-1][2]
 
 
 def accept(studio, mail, email, name):

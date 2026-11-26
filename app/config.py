@@ -18,6 +18,7 @@ class Config:
     cleaner_ca: Path | None = None
     alternate_origin: str = ""
     spark_chat_url: str = ""
+    managed_https: bool = False
 
     @property
     def tmp_dir(self) -> Path:
@@ -38,4 +39,5 @@ def load() -> Config:
                   hairpin_ip=os.environ.get("STUDIO_HAIRPIN_IP", Config.hairpin_ip),
                   cleaner_ca=Path(os.environ["STUDIO_CLEANER_CA"]) if os.environ.get("STUDIO_CLEANER_CA") else None,
                   alternate_origin=os.environ.get("STUDIO_ALTERNATE_ORIGIN", "").rstrip("/"),
-                  spark_chat_url=os.environ.get("STUDIO_SPARK_CHAT_URL", "").strip().rstrip("/"))
+                  spark_chat_url=os.environ.get("STUDIO_SPARK_CHAT_URL", "").strip().rstrip("/"),
+                  managed_https=os.environ.get("STUDIO_MANAGED_HTTPS") == "1")

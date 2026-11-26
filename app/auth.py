@@ -393,13 +393,16 @@ def _login_page(error: str = "", status: int = 200, login: str = "") -> HTMLResp
 
 
 def request_origin(request: Request) -> str | None:
-    """В профиле с двумя адресами Apache передаёт исходный Host вместе с портом."""
+    """В профиле с несколькими адресами Apache передаёт исходный Host вместе с портом."""
+    import site_https
+
     primary = state.CFG.origin.rstrip("/")
     alternate = state.CFG.alternate_origin
-    if not alternate:
+    managed = site_https.origin()
+    if not alternate and not managed:
         return primary
     target = "https://" + request.headers.get("host", "").lower()
-    return next((origin for origin in (primary, alternate) if origin.lower() == target), None)
+    return next((origin for origin in (primary, alternate, managed) if origin.lower() == target), None)
 
 
 def foreign_origin(request: Request) -> bool:

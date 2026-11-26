@@ -60,6 +60,7 @@ import { knowledgeBlock } from './knowledge.js';
 import { statsBlock } from './chat-stats.js';
 import { glossaryBlock } from './translate-glossary.js';
 import { smtpSettings } from './smtp-settings.js';
+import { httpsSettings } from './https-settings.js';
 import { SPEECH_LANGUAGES, dictationLanguage, setDictationLanguage } from './mic.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionName, sectionPairs } from './sections-meta.js';
 
@@ -1466,15 +1467,16 @@ function voicesBlock(host) {
 const RAIL_ORDER = RAIL_SECTIONS.filter((s) => s.settings !== false).map((s) => s.id);
 const ACCOUNT_IDS = ['appearance', 'skills', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
-const PERSONAL = new Set(['code', 'appearance', 'skills', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
+const PERSONAL = new Set(['code', 'appearance', 'skills', 'security', 'notifications', 'data', 'smtp', 'https']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null, shared = false, access = null, profiles = false }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
-    skills: tr("Навыки"), security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
+    skills: tr("Навыки"), security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP',
+    https: tr("Домен и HTTPS"), input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
   const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];
-  const accountIds = other ? [...ACCOUNT_IDS, ...(me?.is_admin ? ['smtp'] : [])] : ['input'];
+  const accountIds = other ? [...ACCOUNT_IDS, ...(me?.is_admin ? ['smtp'] : []), ...(me?.managed_https ? ['https'] : [])] : ['input'];
   const ids = [...sectionIds, ...accountIds];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': tr("Разделы настроек") });
   const panel = el('div', { class: 'settings-panel' });
@@ -1857,6 +1859,10 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     if (shown === 'smtp' && other && me?.is_admin) {
       group('smtp', smtpSettings());
+      return;
+    }
+    if (shown === 'https' && other && me?.managed_https) {
+      group('https', httpsSettings());
       return;
     }
     if (shown === 'input') {

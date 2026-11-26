@@ -342,6 +342,8 @@ SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles":
 #: "lock" — запросы самой блокировки, "media" — по разделам файла, раздел — только при его защите.
 #: Новый маршрут без строки здесь роняет тест: решите, к чему он относится, и научите этому lock_policy.blocks.
 ROUTES = {
+    ("GET", "/api/admin/https"): "closed",
+    ("PUT", "/api/admin/https"): "closed",
     ("GET", "/api/admin/smtp"): "closed",
     ("GET", "/api/admin/smtp/status"): "closed",
     ("PUT", "/api/admin/smtp"): "closed",

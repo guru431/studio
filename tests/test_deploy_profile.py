@@ -1,6 +1,7 @@
 """A local deployment profile must preserve code and reject unsafe SSH paths."""
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shlex
@@ -102,6 +103,35 @@ def test_docker_profile_renders_the_alternate_https_origin():
     assert "STUDIO_URL=https://192.0.2.14:8443\n" in host
     assert "STUDIO_ALTERNATE_ORIGIN=https://192.0.2.101:8443\n" in host
     assert "ServerName 192.0.2.14\n    ServerAlias 192.0.2.101\n    ProxyPreserveHost On\n" in apache
+
+
+def test_managed_https_reuses_the_rendered_proxy_routes_with_its_own_certificate():
+    profile = {"STUDIO_RUNTIME": "docker", "STUDIO_MANAGED_HTTPS": "1",
+               "STUDIO_SSH": "deploy@local", "STUDIO_PROXY_SSH": "deploy@local",
+               "STUDIO_URL": "https://192.0.2.14:8443", "STUDIO_ALTERNATE_ORIGIN": "https://192.0.2.101:8443",
+               "STUDIO_BIND_IP": "127.0.0.1", "STUDIO_BACKEND_URL": "http://127.0.0.1:8151"}
+    root = Path(__file__).parents[1]
+    source, destination = io.BytesIO(), io.BytesIO()
+    with tarfile.open(fileobj=source, mode="w") as archive:
+        for name in ("deploy/apache-vhost.conf", "deploy/docker/host.conf", PROFILE.HTTPS_POLICY):
+            archive.add(root / name, arcname=name)
+    source.seek(0)
+    PROFILE.render(source, destination, profile)
+    destination.seek(0)
+    with tarfile.open(fileobj=destination) as archive:
+        policy = json.load(archive.extractfile(PROFILE.HTTPS_POLICY))
+        assert policy == {"probe_ip": "192.0.2.14", "port": 8443, "existing_hosts": ["192.0.2.14", "192.0.2.101"]}
+        assert b"STUDIO_MANAGED_HTTPS=1\n" in archive.extractfile("deploy/docker/host.conf").read()
+        apache = archive.extractfile("deploy/apache-vhost.conf").read().decode()
+    primary, custom = apache.split("<IfDefine STUDIO_HTTPS_DOMAIN>")
+    assert "ServerAlias 192.0.2.101" in primary and "ServerAlias" not in custom
+    assert "SSLCertificateFile ${STUDIO_HTTPS_SLOT}/fullchain.pem" in custom
+    assert "SSLCertificateKeyFile ${STUDIO_HTTPS_SLOT}/key.pem" in custom
+    assert "ProxyPreserveHost On" in custom
+    for config in (primary, custom):
+        assert "http://127.0.0.1:8151/api/agent/link upgrade=websocket timeout=300" in config
+    with pytest.raises(ValueError):
+        PROFILE.managed_https({**profile, "STUDIO_PROXY_SSH": "deploy@remote"})
 
 
 @pytest.mark.parametrize("alternate", [

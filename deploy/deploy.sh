@@ -180,6 +180,9 @@ if [ "$RUNTIME" = docker ]; then
         | "$PYTHON" "$D/deploy/render-profile.py" \
         | tar -xOf - deploy/apache-vhost.conf \
         | "${PROXY_SSH[@]}" "sudo bash /etc/studio/install-proxy.sh $STUDIO_PROXY_VHOST"
+    if [ "${STUDIO_MANAGED_HTTPS:-0}" = 1 ]; then
+        "${PROXY_SSH[@]}" "sudo bash $R/current/deploy/managed-https/install.sh"
+    fi
 fi
 
 echo "==> снаружи через Apache: $URL/health"
