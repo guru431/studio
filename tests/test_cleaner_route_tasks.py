@@ -5,6 +5,7 @@ import json
 import logging
 
 import httpx
+import pytest
 
 import cleaner_route
 import sections
@@ -12,7 +13,9 @@ import state
 import translate_text
 from conftest import add_connection
 from scans import scan_pdf
-from test_cleaner_route_chat import KEY, PROVIDER, allow, cleaner_gw, routed_chat, settings  # noqa: F401 — фикстура
+from test_cleaner_route_chat import KEY, PROVIDER, allow, cleaner_gw, masked_turn, routed_chat, settings  # noqa: F401 — фикстура
+from test_mcp import TOKEN, URL
+from test_mcp_sections import service
 from test_translate import THREE, owner_of, parts_of, send_file, start, wait_row
 
 MODEL = "gpt-x"
@@ -90,6 +93,52 @@ def test_read_refuses_external_speech_for_a_translation_restored_by_cleaner(clea
                                                   "origin": {"kind": "translate", "id": row["id"]}})
     assert response.status_code == 409 and response.json()["detail"]["code"] == "cleaner_translate"
     assert not hits and state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(("kind", "code"), [("chat", "cleaner_dialog"), ("translate", "cleaner_translate")])
+def test_read_of_cleaner_text_uses_only_internal_mcp(cleaner_gw, kind, code):
+    s, gw = cleaner_gw
+    translating(s, gw)
+    if kind == "chat":
+        _, origin_id = masked_turn(s, gw)
+    else:
+        gw.script = [["Привет."]]
+        origin_id = translate(s, gw, "Hello there.")["id"]
+    assert s.c.delete(f"/api/connections/{gw.conn_id}").status_code == 204
+    allow("8.8.8.8:443")
+    external_hits = []
+
+    async def external(request):
+        external_hits.append(request)
+        return httpx.Response(500)
+
+    s.gw.hosts["8.8.8.8:443"] = external
+
+    def add_server(name, url):
+        reply = s.c.post("/api/mcp", json={"name": name, "url": url, "token": TOKEN})
+        assert reply.status_code == 201, reply.text
+        return reply.json()["id"]
+
+    external_id = add_server("External", "https://8.8.8.8/mcp")
+    origin = {"kind": kind, "id": origin_id}
+    text = "Привет."
+    read = {"text": text, "origin": origin}
+    request = {"tool": "speech_synthesize", "arguments": {"text": text}, "origin": origin}
+    reply = s.c.post("/api/speeches/read", json=read)
+    assert reply.status_code == 409 and reply.json()["detail"]["code"] == code
+
+    internal_id = add_server("Internal", URL)
+    calls = service(s.gw)
+    reply = s.c.post("/api/speeches/read", json=read)
+    assert reply.status_code == 409 and reply.json()["detail"]["code"] == "read_mcp_internal"
+    catalog = s.c.get("/api/mcp-tools/speech", params={"internal_only": "true"})
+    assert catalog.status_code == 200 and [item["id"] for item in catalog.json()["items"]] == [internal_id]
+    reply = s.c.post(f"/api/mcp-tools/speech/servers/{external_id}/run", json=request)
+    assert reply.status_code == 409 and reply.json()["detail"]["code"] == code
+    assert external_hits == []
+    reply = s.c.post(f"/api/mcp-tools/speech/servers/{internal_id}/run", json=request)
+    assert reply.status_code == 200, reply.text
+    assert calls == [("speech_synthesize", {"text": text})]
 
 
 def test_cleaner_pdf_uses_local_text_layer_and_refuses_external_ocr(cleaner_gw):

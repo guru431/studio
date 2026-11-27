@@ -37,7 +37,6 @@ THEMES = ("auto", "dark", "light")
 ACCENTS = ("orange", "blue", "violet", "rose")
 VIEWS = ("preview", "tiles", "table")       # views.js
 VIEW_SECTIONS = ("photo", "video")
-PASSWORD_MAX = 1024
 EXA_KEY_MAX = 200                           # ключ Exa — знаков после strip
 
 log = logging.getLogger("studio")
@@ -99,15 +98,8 @@ class ExaKey(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    current: str = Field(max_length=PASSWORD_MAX)
-    new: str = Field(max_length=PASSWORD_MAX)
-
-
-def check_password(password: str) -> None:
-    if len(password) > PASSWORD_MAX:
-        raise HTTPException(422, {"code": "long", "message": f"пароль длиннее {PASSWORD_MAX} символов"})
-    if len(password) < security.PASSWORD_MIN:
-        raise HTTPException(422, {"code": "short", "message": f"пароль короче {security.PASSWORD_MIN} символов"})
+    current: str = Field(max_length=security.PASSWORD_MAX)
+    new: str = Field(max_length=security.PASSWORD_MAX)
 
 
 def _me(request: Request) -> dict:
@@ -211,7 +203,7 @@ async def change_password(body: PasswordChange, request: Request):
         raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
     confirmed = await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен",
                                             digest=request.state.digest)
-    check_password(body.new)
+    auth.validate_new_password(body.new)
     pw_hash = await asyncio.to_thread(security.hash_password, body.new)
     state.DB.execute("BEGIN")
     try:

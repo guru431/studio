@@ -199,7 +199,7 @@ function showResult(host, output, urls, render) {
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
 export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, onHistory, turns, onEmpty, onPhoto, onVideo,
-  key: place = section }) {
+  key: place = section, internalOnly = false }) {
   const base = `/api/mcp-tools/${section}`;
   const suffix = place === section ? '' : `-${place.replace(/[^\w-]/g, '-')}`;
   const controller = new AbortController();
@@ -379,7 +379,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     }
   }
 
-  async function run(values, { files = {}, voiceId, source, photoJobId } = {}) {
+  async function run(values, { files = {}, voiceId, source, photoJobId, origin } = {}) {
     const choice = source ? options.get(source) : picked();
     if (!choice || busy()) return false;
     const { server, tool } = choice;
@@ -399,7 +399,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       const missing = tool.schema.required?.find(key => !supplied.has(key));
       if (missing) throw new Error(tr("Для MCP заполните поле «{0}»", tool.schema.properties[missing].title || (missing === 'model' ? tr("Модель") : missing)));
       const inputs = Object.fromEntries(await Promise.all(sources.map(async ([key, value]) => [key, await fileData(value, limit)])));
-      const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files: inputs,
+      const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files: inputs, origin,
         ...(voiceId ? { voice_id: voiceId } : {}), ...(photoJobId ? { photo_job_id: photoJobId } : {}), ...(place === section ? { record: true } : {}) });
       if (reply.history) {
         const saved = reply.history;
@@ -435,7 +435,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
 
   async function load() {
     let catalog;
-    try { catalog = await api('GET', base, undefined, { signal: controller.signal }); }
+    try { catalog = await api('GET', internalOnly ? base + '?internal_only=true' : base, undefined, { signal: controller.signal }); }
     catch (err) {
       if (!controller.signal.aborted) warn(words(err));
       return;

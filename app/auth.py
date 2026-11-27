@@ -308,6 +308,13 @@ def locked_key(key: tuple) -> bool:
     return len(FAILS.get(key, [])) >= LOCK_FAILS
 
 
+def validate_new_password(password: str) -> None:
+    if len(password) > security.PASSWORD_MAX:
+        raise HTTPException(422, {"code": "long", "message": f"пароль длиннее {security.PASSWORD_MAX} символов"})
+    if len(password) < security.PASSWORD_MIN:
+        raise HTTPException(422, {"code": "short", "message": f"пароль короче {security.PASSWORD_MIN} символов"})
+
+
 def still_valid(uid: int, pw_hash: str) -> bool:
     """Учётка жива, включена и её хеш — тот, что проверяли: пока scrypt считался в потоке, пароль
     могли сбросить (панель, смена с другого устройства), учётку — отключить или удалить."""

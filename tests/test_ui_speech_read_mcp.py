@@ -21,7 +21,7 @@ JOBS = {"job_status": {"properties": {"job_id": TEXT}, "required": ["job_id"]},
         "job_result": {"properties": {"job_id": TEXT}, "required": ["job_id"]}}
 
 
-def chat_with_answers(live, uid) -> str:
+def chat_with_answers(live, uid, *, cleaner=False) -> str:
     import db
     cid, now = uuid.uuid4().hex, time.time()
     conn = db.connect(live.db_path)
@@ -30,9 +30,10 @@ def chat_with_answers(live, uid) -> str:
                      (cid, uid, now, now))
         turns = [("user", "вопрос 1"), ("assistant", ANSWERS[0]), ("user", "вопрос 2"), ("assistant", ANSWERS[1])]
         for n, (role, content) in enumerate(turns):
-            conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-                         " VALUES (?, ?, ?, ?, 'done', 'server', 'local-gemma-abl', ?)",
-                         (uuid.uuid4().hex, cid, role, content, now + n))
+            request_id = uuid.uuid4().hex if cleaner and role == "assistant" else None
+            conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, cleaner_request)"
+                         " VALUES (?, ?, ?, ?, 'done', 'server', 'local-gemma-abl', ?, ?)",
+                         (uuid.uuid4().hex, cid, role, content, now + n, request_id))
     finally:
         conn.close()
     return cid
@@ -101,15 +102,31 @@ def test_each_read_runs_its_own_mcp_job(browser, live, width):
     assert not read_problems(r), read_problems(r)
 
 
-def test_read_mcp_tool_without_voice_field(browser, live):
-    login = "readmcpnovoice"
-    cid = chat_with_answers(live, live.add_user(login))
+@pytest.mark.parametrize("cleaner", [False, True])
+def test_read_mcp_tool_without_voice_field(browser, live, cleaner):
+    login = "readmcpcleaner" if cleaner else "readmcpnovoice"
+    cid = chat_with_answers(live, live.add_user(login), cleaner=cleaner)
     calls = speaker(live.gw, {"speech_synthesize": {"properties": {"text": TEXT}, "required": ["text"]}, **SERVICE})
     r = browser.drive(live.url + "/", [*start(login), *opened(cid),
+        ("eval", "observeRun", """(() => {
+          const fetchStudio = window.fetch;
+          window.fetch = (url, options) => {
+            if (url.startsWith('/api/mcp-tools/speech/servers/') && url.endsWith('/run')) {
+              window.readOrigin = JSON.parse(options.body).origin;
+            }
+            return fetchStudio(url, options);
+          };
+          return true;
+        })()"""),
         ("eval", "first", f"{READ}[0].click(); true"),
-        ("wait", f"{BOX}[0]?.querySelector('.mcp-result pre')?.textContent === 'ok'")], width=1280, timeout=20000)
+        ("wait", f"{BOX}[0]?.querySelector('.mcp-result pre')?.textContent === 'ok'"),
+        ("eval", "origin", "window.readOrigin"),
+        ("eval", "internalCatalog", "performance.getEntriesByType('resource')"
+         ".some(entry => entry.name.endsWith('/api/mcp-tools/speech?internal_only=true'))")], width=1280, timeout=20000)
     assert not r.get("failed"), r
     assert [args for name, args in calls if name == "speech_synthesize"] == [{"text": ANSWERS[0]}]
+    assert r["values"]["internalCatalog"] is cleaner
+    assert r["values"]["origin"]["kind"] == "chat" and len(r["values"]["origin"]["id"]) == 32
     assert not read_problems(r), read_problems(r)
 
 

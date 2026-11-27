@@ -21,7 +21,6 @@ import account_mail
 import auth
 import clock
 import db
-import account_profile as profile
 import security
 import site_https
 import security_log
@@ -65,7 +64,7 @@ class InviteIn(BaseModel):
     comment: str = Field(default="", max_length=1000)
     is_admin: bool = False
     #: пароль администратора — приглашение без письма, ссылка в ответе (почта не настроена или не дошла)
-    password: str | None = Field(default=None, max_length=1024)
+    password: str | None = Field(default=None, max_length=security.PASSWORD_MAX)
 
     _email = field_validator("email")(email_address)
 
@@ -75,19 +74,19 @@ class CommentIn(BaseModel):
 
 
 class PasswordIn(BaseModel):
-    password: str = Field(max_length=1024)
+    password: str = Field(max_length=security.PASSWORD_MAX)
 
 
 class EmailIn(BaseModel):
     email: str = Field(max_length=254)
-    password: str = Field(max_length=1024)
+    password: str = Field(max_length=security.PASSWORD_MAX)
 
     _email = field_validator("email")(email_address)
 
 
 class CodesIn(BaseModel):
     enabled: bool
-    password: str = Field(max_length=1024)
+    password: str = Field(max_length=security.PASSWORD_MAX)
 
 
 class NoticeIn(BaseModel):
@@ -409,7 +408,7 @@ async def accept_invite(request: Request):
     password = data.get("password", "")
     if not re.fullmatch(auth.LOGIN_RE, login):
         raise HTTPException(422, {"code": "login", "message": "Логин — 2–32 знака: латиница, цифры, . _ -"})
-    profile.check_password(password)
+    auth.validate_new_password(password)
     hashed = await asyncio.to_thread(security.hash_password, password)
     state.DB.execute("BEGIN")
     try:
@@ -481,7 +480,7 @@ async def reset(request: Request):
     throttle("reset-ip", auth.client_ip(request), 20, 900)
     token, password = data.get("token", ""), data.get("password", "")
     token_row(token, "reset")
-    profile.check_password(password)
+    auth.validate_new_password(password)
     hashed = await asyncio.to_thread(security.hash_password, password)
     state.DB.execute("BEGIN")
     try:

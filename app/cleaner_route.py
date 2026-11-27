@@ -193,12 +193,15 @@ def is_external(conn: "connections.Connection") -> bool:
     IP-литерал не из публичных. Всё прочее — внешнее: любое имя, публичный IP, `localhost` и частный адрес не из
     списка. Частный адрес не доказывает, что за ним нет прокси в облако: внутренним его делает только запись в
     списке. Флажок s06 и вид srvllm выбирает пользователь — они внутренним не делают."""
-    if conn.cleaner:
-        return False
-    if not upstream.is_allowed(conn.base_url):
+    return not conn.cleaner and is_external_url(conn.base_url)
+
+
+def is_external_url(url: str) -> bool:
+    """Адрес внутреннего сервиса — непубличный IP-литерал из списка администратора."""
+    if not upstream.is_allowed(url):
         return True
     try:
-        return ipaddress.ip_address(httpx.URL(conn.base_url).host).is_global
+        return ipaddress.ip_address(httpx.URL(url).host).is_global
     except ValueError:                    # имя, а не IP-литерал
         return True
 

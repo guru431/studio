@@ -279,10 +279,12 @@ async def ask_chat(uid, sid, model, messages):
 
 
 @router.get("/{section}")
-async def catalog(section: str, request: Request):
+async def catalog(section: str, request: Request, internal_only: bool = False):
     section_tools(section)
     uid = request.state.user.id
     rows = mcp.servers(uid, enabled_only=True)
+    if internal_only:
+        rows = [item for item in rows if not cleaner_route.is_external_url(item["url"])]
 
     async def discover(item):
         session = mcp.Session(item, uid=uid)
@@ -319,6 +321,7 @@ class RunIn(BaseModel):
     voice_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
     record: bool = False
     photo_job_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
+    origin: speeches.Origin | None = None
 
 
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
@@ -629,11 +632,21 @@ async def run(section: str, sid: int, request: Request):
     return await run_tool(section, sid, request.state.user.id, body)
 
 
+def _check_read_source(uid: int, origin: speeches.Origin, url: str) -> None:
+    restriction = speeches.read_restriction(uid, origin)
+    if restriction and cleaner_route.is_external_url(url):
+        raise HTTPException(409, restriction)
+
+
 async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None):
     names = section_tools(section)
     item = mcp.row(uid, sid)
     if stamp is not None and stamp != mcp_sources.stamp(item["secret_enc"]):
         raise mcp.refused("Подключение или права MCP изменились")
+    if body.origin is not None:
+        if section != "speech" or body.record or body.files or body.voice_id:
+            raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422)
+        _check_read_source(uid, body.origin, item["url"])
     long_speech = section == "speech" and body.record and isinstance(body.arguments.get("text"), str)
     parameters = {key: value for key, value in body.arguments.items() if key != "text"} if long_speech else body.arguments
     if long_speech and len(body.arguments["text"]) > speeches.LONG_MAX:
@@ -705,6 +718,8 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
                      "jobs": tool["jobs"]}
             return await record_result(session, section, item["name"], body.tool, args, None, SPEECH_QUEUE, body.files,
                                        speech_batch=batch)
+        if body.origin is not None:
+            _check_read_source(uid, body.origin, session.url)
         result = await call(session, body.tool, args)
         data = result.get("structuredContent")
         jid = data.get("id") if isinstance(data, dict) else None

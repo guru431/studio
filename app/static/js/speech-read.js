@@ -4,7 +4,7 @@ import { message as serverMessage, tr } from './i18n.js';
  * записи чата — части длинного текста — играют по порядку по мере готовности (опрос GET /api/speeches/chats/<id>
  * раз в POLL_MS), «Скачать» — готовые части одним mp3 (GET /api/speeches/chats/<id>/audio), «Отменить» — весь чат
  * (POST /api/speeches/chats/<id>/cancel; повторное «Прочитать» в том же месте отменяет прежний чат). Умолчание раздела —
- * инструмент MCP (409 `read_mcp`): его запускает sectionMcp('speech').run, как раздел «Озвучка», результат — его
+ * инструмент MCP (409 `read_mcp` или `read_mcp_internal`): его запускает sectionMcp('speech').run, результат — его
  * вывод. Проигрыватель и опрос живут, пока узел-хозяин на странице (ушёл — sweep останавливает). */
 import { api } from './api.js';
 import { kick } from './jobs.js';
@@ -145,17 +145,17 @@ export function chatPlayer(chatId, { download = true, cancel = true } = {}) {
 
 /** Инструмент MCP по умолчанию раздела «Озвучка» — тем же путём, что раздел; голос — по умолчанию схемы. Место
  * задания — своё у каждого запуска (`key`): второе чтение и раздел «Озвучка» не делят с ним задание и звук. */
-function readMcp(text, host) {
+function readMcp(text, origin, host, internalOnly) {
   const status = el('p', { class: 'muted small', 'aria-live': 'polite' }, tr("Ищу инструмент озвучки MCP…"));
   let started = false;
   reads += 1;
-  const mcp = sectionMcp('speech', { key: `read:${reads}`, native: false, fields: MCP_FIELDS, async onChange() {
+  const mcp = sectionMcp('speech', { key: `read:${reads}`, native: false, fields: MCP_FIELDS, internalOnly, async onChange() {
     if (started || !mcp.tool) return;
     started = true;
     status.hidden = true;
     const prop = mcp.argument('voice');
     const choices = Array.isArray(prop?.enum) ? prop.enum : [];
-    await mcp.run({ text, voice: choices.includes(prop?.default) ? prop.default : choices[0] });
+    await mcp.run({ text, voice: choices.includes(prop?.default) ? prop.default : choices[0] }, { origin });
   }, onEmpty() {                 // подключения MCP есть, а озвучивать ни один не умеет — не ждать вечно
     status.className = 'error small';
     status.textContent = tr("Нет источника озвучки — выберите его в «Озвучке»");
@@ -184,9 +184,9 @@ export async function readAloud(text, origin, host) {
     host.replaceChildren(player.box);
   } catch (err) {
     if (cancelled) return;
-    if (err.code === 'read_mcp') {
+    if (err.code === 'read_mcp' || err.code === 'read_mcp_internal') {
       clearRead(host);
-      readMcp(text, host);
+      readMcp(text, origin, host, err.code === 'read_mcp_internal');
       return;
     }
     status.className = 'error small';

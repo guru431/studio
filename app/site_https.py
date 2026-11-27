@@ -7,8 +7,8 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-import account_profile
 import auth
+import security
 import state
 
 
@@ -32,7 +32,7 @@ class Upload(BaseModel):
     certificate: str = Field(min_length=1)
     key: str = Field(min_length=1)
     chain: str = ""
-    password: str = Field(max_length=account_profile.PASSWORD_MAX)
+    password: str = Field(max_length=security.PASSWORD_MAX)
 
 
 def status():

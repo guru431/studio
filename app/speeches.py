@@ -22,6 +22,7 @@
    очереди и работе. Готовые записи чата — одним mp3 (`GET /chats/{id}/audio`). «Прочитать» (`POST /read`) — текст
    ответа чата, перевода или скана без разметки (`exports.md_plain`) источником по умолчанию; умолчание раздела —
    инструмент MCP (своей модели нет, подключения MCP есть) — 409 `read_mcp`, его запускает страница.
+   Текст после Cleaner допускается только к внутреннему MCP (`read_mcp_internal`).
 7. Язык озвучки шлюза — `language` записи (`speech.TTS_LANGUAGES`; нет — `speech.TTS_LANGUAGE`).
 8. «Разговор» чата (`POST /api/speech/say`, п. 13 спеки 2026-11-21-studio-source-capabilities-design): фраза до
    SAY_MAX знаков без разметки — звуком в ответе (`no-store`), источником и голосом «Прочитать»; не запись очереди
@@ -624,14 +625,22 @@ def _read_language(conn, text: str) -> "str | None":
     return "en" if len(re.findall("[A-Za-z]", text)) > len(re.findall("[А-Яа-яЁё]", text)) else "ru"
 
 
-def _default_source(uid: int, code: str, message: str):
-    """Умолчание «Озвучки»; своей модели нет, а подключения MCP есть (озвучка — инструментом MCP) — 409 `code`."""
+def _default_source(uid: int, code: str, message: str, *, restriction: dict | None = None):
+    """Умолчание «Озвучки»; если своей модели нет, а подключения MCP есть, сообщить клиенту путь через MCP."""
     try:
         return sections.resolve(uid, "speech", None, None)
     except HTTPException as e:
-        if e.detail.get("code") == "no_model" and mcp_client.servers(uid, enabled_only=True):
-            raise HTTPException(409, {"code": code, "message": message}) from None
-        raise
+        if e.detail.get("code") != "no_model":
+            raise
+        servers = mcp_client.servers(uid, enabled_only=True)
+        if not servers:
+            raise
+        if restriction:
+            if all(cleaner_route.is_external_url(server["url"]) for server in servers):
+                raise HTTPException(409, restriction) from None
+            # Страницы прежней версии не продолжают чтение: они ещё не умеют выбирать внутренний MCP.
+            code = "read_mcp_internal"
+        raise HTTPException(409, {"code": code, "message": message}) from None
 
 
 def _dialog_of(uid: int, origin_id: str) -> "tuple[int | None, bool]":
@@ -677,22 +686,30 @@ def _translation_used_cleaner(uid: int, origin_id: str) -> bool:
     return connection.cleaner or connection.routed
 
 
+def read_restriction(uid: int, origin: Origin) -> dict | None:
+    """Запрет защищённого чата и причина, по которой восстановленный Cleaner текст требует внутренней речи."""
+    if origin.kind == "chat":
+        _unprotected_dialog(uid, origin.id)
+        dialog, routed = _dialog_of(uid, origin.id)
+        if routed or cleaner_route.dialog_routed(uid, dialog):
+            return {"code": "cleaner_dialog", "message": cleaner_route.DIALOG_SPEECH}
+    if origin.kind == "translate" and _translation_used_cleaner(uid, origin.id):
+        return {"code": "cleaner_translate", "message":
+                "перевод сделан через Cleaner, а модель речи внешняя — выберите внутреннюю модель речи"}
+    return None
+
+
 @router.post("/read", status_code=202)
 async def read(body: ReadIn, request: Request):
     """«Прочитать» ответ чата, перевод или скан (п. 6 шапки) — новым чатом озвучки → `{chat_id}`."""
     uid = request.state.user.id
     operations.check(uid)
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
-    if body.origin.kind == "chat":                # до источника: и инструменту MCP «Озвучки» данные не уходят
-        _unprotected_dialog(uid, body.origin.id)
-    conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
-    if body.origin.kind == "chat":                # ответ диалога через Cleaner — восстановленный текст: не мимо Cleaner
-        dialog, routed = _dialog_of(uid, body.origin.id)
-        cleaner_route.refuse_dialog_speech(uid, dialog, conn, routed=routed)
-    if (body.origin.kind == "translate" and cleaner_route.is_external(conn)
-            and _translation_used_cleaner(uid, body.origin.id)):
-        raise HTTPException(409, {"code": "cleaner_translate", "message":
-                            "перевод сделан через Cleaner, а модель речи внешняя — выберите внутреннюю модель речи"})
+    restriction = read_restriction(uid, body.origin)
+    conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»",
+                                  restriction=restriction)
+    if restriction and cleaner_route.is_external(conn):
+        raise HTTPException(409, restriction)
     voice, name = _read_voice(uid, conn, model)
     _room(uid, None)
     sid = _enqueue(uid, conn, model, voice, name, _read_language(conn, text), text)

@@ -41,7 +41,6 @@ import mcp_client
 import mcp_sources
 import media
 import operations
-import account_profile as profile
 import profiles
 import push
 import roles
@@ -64,12 +63,12 @@ class UserPatch(BaseModel):
     name: str | None = Field(None, max_length=NAME_MAX)
     is_admin: bool | None = None
     disabled: bool | None = None
-    password: str | None = Field(None, max_length=profile.PASSWORD_MAX)
+    password: str | None = Field(None, max_length=security.PASSWORD_MAX)
 
 
 class LdapLink(BaseModel):
     login: str = Field(min_length=1, max_length=254)
-    password: str = Field(max_length=profile.PASSWORD_MAX)
+    password: str = Field(max_length=security.PASSWORD_MAX)
 
 
 class Allowlist(BaseModel):
@@ -313,7 +312,7 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User, *, request: Re
     if body.password is not None:
         if user["ldap"]:
             raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
-        profile.check_password(body.password)
+        auth.validate_new_password(body.password)
         changes["pw_hash"] = await asyncio.to_thread(security.hash_password, body.password)
         # владелец после входа увидит совет проверить сессии и сделать аварийный выход (account.py)
         changes["password_reset"] = clock.NOW()

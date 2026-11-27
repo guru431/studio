@@ -12,7 +12,7 @@
   зависимостей; асинхронная `auth.recheck_after_body` — синхронную FastAPI увёл бы в поток к общей базе) и вызов в конце чтения потоком — `auth.small_body`, `forms.read_body`, `documents` и записи
   расшифровки (файл удаляется). GET, открытые входы и WebSocket не затрагивает. Apache ограничивает время тела
   `RequestReadTimeout body=20-1800,MinRate=500` (mod_reqtimeout). Проверки — `test_auth.py`.
-- Пароль учётки — не короче `security.PASSWORD_MIN` (8) знаков: `account_profile.check_password` при смене пароля,
+- Пароль учётки — не короче `security.PASSWORD_MIN` (8) знаков: `auth.validate_new_password` при смене пароля,
   сбросе администратором, принятии приглашения и восстановлении по почте, `manage.py create-admin` — тем же
   пределом; подписи форм («не короче 8 знаков» в `account.js`, `admin.js`) и руководство называют то же число.
 - Защита входа от перебора — паузы (на пару «логин + адрес» и на адрес); растущая задержка ответа на неверный пароль
