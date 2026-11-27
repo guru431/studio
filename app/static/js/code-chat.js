@@ -268,7 +268,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const contextBox = context.button;
   let effectiveModel = '';
   const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage, shared: !!agent?.shared,
-    canReset: agent?.usage_reset,
+    canReset: engine === 'claude' ? agent?.claude_usage_reset : agent?.usage_reset,
     model: () => model.value || effectiveModel || catalog?.defaults?.model || '' });
   const changedFiles = changesView(host, { openFile: (path) => {
     const relative = projectFilePath(path, agent, project);

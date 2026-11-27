@@ -167,6 +167,7 @@ class Agent:
         self.on_pin_locked: Callable[[], None] | None = None  # PIN заблокировала эта проверка (трей — «Снять блок»)
         self._open_lock = asyncio.Lock()
         self._usage = subscription.UsageCache(now=now)
+        self._claude_reset_lock = asyncio.Lock()
         self._file_stats_lock = asyncio.Lock()
         self._files_lock = asyncio.Lock()
         self._mirrors = mirror.Transfers()
@@ -201,7 +202,7 @@ class Agent:
                  "agent_version": agent_version, "platform": host.platform_id(), "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
-                 "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                 "subscription_usage": True, "usage_reset": True, "claude_usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "chat_search_all": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                  "git_compare": True, "file_upload": True, "file_search": True,
@@ -443,7 +444,7 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode", "deepseek"):
             raise Refused("invalid")
-        if op == "usage_reset" and engine != "codex":
+        if op == "usage_reset" and frame.get("engine") not in ("claude", "codex"):
             raise Refused("invalid")
         if op == "models" and engine == "claude" and self.claude_probe is None:
             raise Refused("unsupported")
@@ -1017,15 +1018,22 @@ class Agent:
 
     async def _op_usage(self, frame, after):
         return await self._usage.read(frame.get("engine", "claude"), self.cfg.projects_root,
-                                      self._runner(frame), refresh=frame.get("refresh", False), model=frame.get("model"))
+                                      self._runner(frame), refresh=frame.get("refresh", False), model=frame.get("model"),
+                                      cli_version=self.cc_version)
 
     async def _op_usage_reset(self, frame, after):
+        engine, key = frame["engine"], frame["idempotency_key"]
         try:
-            return await self.codex.reset_usage(self.cfg.projects_root, frame["idempotency_key"])
+            if engine == "claude":
+                if self._claude_reset_lock.locked():
+                    raise Refused("busy")
+                async with self._claude_reset_lock:
+                    return await asyncio.to_thread(subscription.claude_reset, key, self.cc_version, now=self._wall)
+            return await self.codex.reset_usage(self.cfg.projects_root, key)
         finally:
             # Даже при потере ответа списание могло состояться. Старое чтение не вернётся в кэш.
-            self._usage.cached.pop(("codex", None), None)
-            self._usage.pending.pop(("codex", None), None)
+            self._usage.cached.pop((engine, None), None)
+            self._usage.pending.pop((engine, None), None)
 
     async def _op_state(self, frame, after):
         project = await self._project(frame)

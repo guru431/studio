@@ -1,4 +1,4 @@
-"""Счётчик доступных сбросов Codex в Firefox, Chromium и WebKit."""
+"""Лимиты и доступные сбросы подписок в Firefox, Chromium и WebKit."""
 
 import httpx
 import pytest
@@ -10,6 +10,60 @@ from test_ui_chat_focus import focus_browser, pw
 from test_ui_project_access import context, signed
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_claude_fable_usage_and_reset_confirmation(focus_browser, live, width):
+    login = f"claude-resets-{focus_browser.browser_type.name}-{width}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Лимиты Claude")})
+    machine.subscription_usage = machine.claude_usage_reset = True
+    key = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
+    machine.usage_data = {"engine": "claude", "available": True, "source": "Claude OAuth usage",
+        "checked_at": 1767210000, "cache_ttl": 60, "windows": [
+            {"id": "seven_day_fable", "label": "Неделя · Fable", "available": True, "used_percent": 35,
+             "remaining_percent": 65, "window_minutes": 10080, "resets_at": 1767303045},
+            {"id": "seven_day", "label": "Неделя", "available": True, "used_percent": 78,
+             "remaining_percent": 22, "window_minutes": 10080}],
+        "statistics": {"available": False, "source": "Claude", "summary": {}, "daily": []},
+        "claude_resets": [{"kind": "fable", "count": 1, "expires_at": 1767216645, "reset_key": key}]}
+
+    def consume(req, events):
+        assert req["engine"] == "claude" and req["idempotency_key"] == key
+        machine.usage_data["windows"][0].update(used_percent=0, remaining_percent=100)
+        machine.usage_data["claude_resets"] = []
+        return {"outcome": "reset"}
+
+    machine._op_usage_reset = consume
+    aid, channel = code_online(live, login, machine)
+    try:
+        with context(focus_browser, live, signed(live, login), width) as ctx:
+            page = ctx.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+            pw.expect(page.locator("#code-chat")).to_have_attribute("data-loaded", "1", timeout=20000)
+            page.locator("#code-usage").click()
+            dialog = page.locator("#code-usage-dialog")
+            pw.expect(page.locator("#code-usage-remaining")).to_have_text("22%")
+            fable = dialog.locator('[data-window="seven_day_fable"]')
+            pw.expect(fable).to_contain_text("Неделя · Fable")
+            pw.expect(fable).to_contain_text("Использовано 35% · сброс: 02.01.2026, 00:30:45")
+            pw.expect(dialog.locator(".code-reset-credits dd")).to_have_text("До 01.01.2026, 00:30:45")
+            assert dialog.evaluate("node => node.scrollWidth <= node.clientWidth")
+            reset = dialog.get_by_role("button", name="Сброс Fable", exact=True)
+            reset.click()
+            confirm = page.locator("#code-usage-reset-confirm")
+            pw.expect(confirm).to_contain_text("Вернётся недельный расход Fable")
+            confirm.get_by_role("button", name="Отмена", exact=True).click()
+            assert not any(req.get("op") == "usage_reset" for req in machine.requests)
+            reset.click()
+            confirm.get_by_role("button", name="Использовать сброс", exact=True).click()
+            pw.expect(dialog.locator("#code-usage-reset-result")).to_have_text("Сброс Claude применён.")
+            pw.expect(fable).to_contain_text("Осталось 100%")
+            pw.expect(dialog.locator("#code-usage-reset")).to_be_hidden()
+            pw.expect(dialog.locator(".code-reset-credits h3")).to_have_text("Доступные сбросы лимита · 0")
+    finally:
+        channel.stop()
 
 
 @pytest.mark.parametrize("width", [320, 1280])

@@ -251,6 +251,7 @@ async def list_agents(request: Request, refresh: bool = False):
                       "project_mirror": hello.get("project_mirror", False),
                       "subscription_usage": hello.get("subscription_usage", False),
                       "usage_reset": hello.get("usage_reset", False),
+                      "claude_usage_reset": hello.get("claude_usage_reset", False),
                       "opencode_usage": hello.get("opencode_usage", False),
                       "opencode_features": hello.get("opencode_features", False),
                       "deepseek_usage": hello.get("deepseek_usage", False),
@@ -261,7 +262,7 @@ async def list_agents(request: Request, refresh: bool = False):
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
-                             computer_info=False, software_versions=False, self_check=False, agent_log=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False, chat_manage=False)
+                             computer_info=False, software_versions=False, self_check=False, agent_log=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, claude_usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False, chat_manage=False)
             if isinstance(items[-1].get("deepseek"), dict):  # сводка наложения — настройки компьютера владельца
                 items[-1]["deepseek"] = {k: v for k, v in items[-1]["deepseek"].items() if k != "settings"}
     return {"items": items}

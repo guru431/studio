@@ -139,6 +139,103 @@ def test_claude_credentials_stay_local_and_extra_spend_is_separate(tmp_path):
     assert "secret" not in json.dumps(data) and path.read_bytes() == original
 
 
+@pytest.mark.parametrize("source,used", [("scoped", 35), ("seven_day_fable", 20), ("seven_day_overage_included", 0)])
+def test_claude_fable_has_one_weekly_window(tmp_path, source, used):
+    raw = {"seven_day": {"utilization": 78}, "seven_day_sonnet": {"utilization": 10}}
+    reset = "2026-11-30T06:59:00Z"
+    if source == "scoped":
+        raw.update(seven_day_fable={"utilization": 90}, seven_day_overage_included={"utilization": 91}, limits=[
+            {"kind": "weekly_scoped", "percent": 99, "scope": {"model": {"display_name": "Opus"}}},
+            {"kind": "weekly_scoped", "percent": used, "scope": {"model": {"display_name": "Fable"}},
+             "resets_at": reset}])
+    else:
+        raw[source] = {"utilization": used, "resets_at": reset}
+    data = subscription.claude_usage(1000, config=tmp_path, request=Mock(return_value=raw),
+                                    environ={"CLAUDE_CODE_OAUTH_TOKEN": "local-secret"})
+    assert [w["id"] for w in data["windows"]] == ["five_hour", "seven_day", "monthly", "seven_day_fable", "seven_day_sonnet"]
+    assert data["windows"][1]["used_percent"] == 78
+    assert data["windows"][3] == subscription.window("seven_day_fable", "Неделя · Fable", 10080, used, reset)
+    assert "claude_resets" not in data
+
+
+def claude_offer(gid="private-fable", **fields):
+    return {"id": gid, "resets_left": 2, "starts_at": 900, "ends_at": 2000, "paused": False, "usable_now": True,
+            "clears": ["five_hour", "seven_day_overage_included"], "gives_back_weekly": True, **fields}
+
+
+def test_claude_reset_inventory_has_expiry_counts_and_one_action(tmp_path):
+    raw = {"cedar_ember": {"eligible": True, "next_grant_id": "private-fable", "grants": [
+        claude_offer(),
+        claude_offer("private-full", ends_at=1500, resets_left=1, clears=["five_hour", "seven_day"], gives_back_weekly=False),
+        claude_offer("expired", ends_at=1000), claude_offer("future", starts_at=1001),
+        claude_offer("used", resets_left=0), claude_offer("paused", paused=True)]}}
+    request = Mock(return_value=raw)
+
+    def read():
+        return subscription.claude_usage(1000, config=tmp_path, request=request,
+                                         environ={"CLAUDE_CODE_OAUTH_TOKEN": "secret"})
+
+    rows = read()["claude_resets"]
+    assert rows[0] == {"kind": "full", "count": 1, "expires_at": 1500}
+    assert {k: v for k, v in rows[1].items() if k != "reset_key"} == {"kind": "fable", "count": 2, "expires_at": 2000}
+    assert rows[1]["reset_key"] and "private" not in json.dumps(rows)
+    raw["cedar_ember"]["cooldown_until"] = 1100
+    assert all("reset_key" not in row for row in read()["claude_resets"])
+    raw["cedar_ember"].update(grants=[])
+    assert read()["claude_resets"] == []
+
+
+def test_claude_reset_pins_account_and_grant_and_reuses_provider_key(tmp_path, monkeypatch):
+    offer = claude_offer()
+    raw = {"cedar_ember": {"eligible": True, "next_grant_id": offer["id"], "grants": [offer]}}
+    env = {"CLAUDE_CODE_OAUTH_TOKEN": "original-token"}
+    org = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
+    posts = []
+
+    def request(token, path, ua, *, body=None):
+        assert ua == "claude-cli/2.1.322 (external, cli)"
+        if path in ("/api/oauth/usage?cedar_ember=1", "/api/oauth/usage?cedar_ember=1&skip_spend=1"):
+            assert body is None
+            return raw
+        assert token == "original-token"
+        if path == "/api/oauth/profile":
+            return {"organization": {"uuid": org}}
+        assert path == f"/api/organizations/{org}/reset_rate_limits"
+        posts.append(body)
+        if len(posts) == 1:
+            raise TimeoutError()
+        return {"result": "already_used"}
+
+    monkeypatch.setattr(subscription, "_claude_json", request)
+    data = subscription.claude_usage(1000, config=tmp_path, environ=env, cli_version="2.1.322")
+    key = data["claude_resets"][0]["reset_key"]
+
+    def reset():
+        return subscription.claude_reset(key, "2.1.322", now=lambda: 1000, config=tmp_path, environ=env)
+
+    with pytest.raises(TimeoutError):
+        reset()
+    assert reset() == {"outcome": "alreadyRedeemed"}
+    assert len(posts) == 2 and posts[0] == posts[1]
+    assert posts[0]["grant_id"] == offer["id"] and posts[0]["program"] == "cedar_ember"
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = "different-token"
+    assert reset() == {"outcome": "stale"}
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = "original-token"
+    offer["resets_left"] -= 1
+    assert reset() == {"outcome": "stale"}
+    assert len(posts) == 2
+
+
+def test_claude_usage_falls_back_without_offer_query_after_http_rejection(tmp_path, monkeypatch):
+    request = Mock(side_effect=[urllib.error.HTTPError("https://api.anthropic.com", 403, "forbidden", {}, None),
+                                {"seven_day": {"utilization": 78}}])
+    monkeypatch.setattr(subscription, "_claude_json", request)
+    data = subscription.claude_usage(1000, config=tmp_path, cli_version="2.1.322",
+                                    environ={"CLAUDE_CODE_OAUTH_TOKEN": "local-secret"})
+    assert data["available"] and "claude_resets" not in data
+    assert [call.args[1] for call in request.call_args_list] == ["/api/oauth/usage?cedar_ember=1", "/api/oauth/usage"]
+
+
 def test_expired_missing_or_bad_claude_credentials_do_not_query(tmp_path):
     request = Mock(side_effect=AssertionError("network"))
     assert not subscription.claude_usage(1000, config=tmp_path, request=request, environ={})["available"]

@@ -9,6 +9,17 @@ const number = (n) => Number.isFinite(n) ? n.toLocaleString(locale()) : '—';
 const date = (n) => Number.isFinite(n) ? dateTime(n) : tr("Не сообщается");
 const resetAttempts = new Map();
 
+function claudeResetLabel(kind) {
+  return { fable: tr("Сброс Fable"), session: tr("5-часовой сброс"), weekly: tr("Недельный сброс"),
+    full: tr("Полный сброс"), other: tr("Сброс Claude") }[kind];
+}
+
+function claudeResetEffect(kind) {
+  return { fable: tr("Вернётся недельный расход Fable. 5-часовой лимит, если он есть, пополнится полностью."),
+    session: tr("5-часовой лимит пополнится полностью."), weekly: tr("Общий недельный лимит пополнится полностью."),
+    full: tr("5-часовой и общий недельный лимиты пополнятся полностью.") }[kind];
+}
+
 /** shared — компьютер чужой (участник проекта): лимиты подписки видит только владелец, кнопки нет. */
 export function usageView(host, { aid, engine, supported, shared = false, canReset = false, model = () => '' }) {
   let alive = true;
@@ -18,7 +29,11 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
   let paintedModel = null;
   let resetting = false;
   let confirmation = null;
-  const resetStorage = `studio-code-usage-reset:${me.id}:${aid}`;
+  let claudeGrant = null;
+  const isClaude = engine === 'claude';
+  const resetStorage = `studio-code-usage-reset:${me.id}:${aid}${isClaude ? ':claude' : ''}`;
+  const resetLabel = () => resetKey ? tr("Повторить сброс") : isClaude && claudeGrant
+    ? claudeResetLabel(claudeGrant.kind) : tr("Использовать недельный сброс");
   let resetKey = resetAttempts.get(resetStorage) || null;
   try { resetKey ||= sessionStorage.getItem(resetStorage); } catch { /* Повтор живёт в памяти страницы. */ }
   function rememberReset(key) {
@@ -63,8 +78,19 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
         el('p', { class: 'muted small' }, tr("Подарено: {0} · пополнено: {1}", number(item.granted), number(item.topped_up)))))
       : [el('p', { class: 'muted' }, message(balance?.reason || tr("Баланс DeepSeek не сообщается")))]));
   }
+  function paintClaudeResets(grants) {
+    const rows = Array.isArray(grants) ? grants : [];
+    claudeGrant = rows.find((row) => row.reset_key) || null;
+    const count = Array.isArray(grants) ? rows.reduce((total, row) => total + row.count, 0) : null;
+    return el('section', { class: 'code-reset-credits' },
+      el('h3', {}, count === null ? tr("Доступные сбросы лимита") : tr("Доступные сбросы лимита · {0}", number(count))),
+      count ? el('dl', { class: 'code-usage-summary' }, ...rows.flatMap((row) => [
+        el('dt', {}, `${claudeResetLabel(row.kind)} · ${number(row.count)}`),
+        el('dd', {}, Number.isFinite(row.expires_at) ? tr("До {0}", date(row.expires_at)) : tr("Срок действия не сообщается"))
+      ])) : count === null ? el('p', { class: 'muted small' }, tr("Не сообщается")) : null);
+  }
   function paint(data) {
-    const week = (Array.isArray(data.windows) ? data.windows : []).find((w) => w.id === 'seven_day' || w.window_minutes === 10080);
+    const week = (Array.isArray(data.windows) ? data.windows : []).find((w) => w.id === 'seven_day' || !isClaude && w.window_minutes === 10080);
     const remaining = week?.available && Number.isFinite(week.remaining_percent) ? week.remaining_percent : null;
     remainingText.textContent = remaining === null ? '—' : `${number(remaining)}%`;
     button.dataset.level = remaining === null ? 'unknown' : remaining <= 10 ? 'red' : remaining <= 30 ? 'yellow' : 'green';
@@ -83,9 +109,10 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
     });
     const stats = data.statistics || {};
     const summary = stats.summary || {};
-    reset.hidden = engine !== 'codex' || !canReset || !(summary.available_resets > 0 || resetKey);
+    const claudeResets = isClaude ? paintClaudeResets(data.claude_resets) : null;
+    reset.hidden = !canReset || !(isClaude ? claudeGrant || resetKey : engine === 'codex' && (summary.available_resets > 0 || resetKey));
     reset.disabled = resetting;
-    reset.textContent = resetKey ? tr("Повторить сброс") : tr("Использовать недельный сброс");
+    reset.textContent = resetLabel();
     const labels = { ...(engine === 'codex' ? { available_resets: tr("Доступные сбросы лимита") } : {}),
       lifetime_tokens: tr("Токенов за всё время"), peak_daily_tokens: tr("Максимум токенов за день"),
       longest_running_turn_sec: tr("Самый долгий ход, секунд"), current_streak_days: tr("Дней подряд сейчас"),
@@ -108,7 +135,7 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
       try { return new URL(link.url).protocol === 'https:'; } catch { return false; }
     });
     content.replaceChildren(...[
-      el('p', { class: 'muted' }, [data.plan, data.message].filter(Boolean).map(message).join(' · ')), ...windows,
+      el('p', { class: 'muted' }, [data.plan, data.message].filter(Boolean).map(message).join(' · ')), ...windows, claudeResets,
       el('h3', {}, tr("Статистика использования")),
       el('p', { class: 'muted small' }, message(stats.source || data.source || '')),
       entries.length ? el('dl', { class: 'code-usage-summary' }, ...entries.flatMap(([key, label]) =>
@@ -156,6 +183,7 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
       else if (alive) queuedLoad ??= { fresh: false, passive: true };
     } catch (err) {
       if (alive && !controller.signal.aborted && selectedModel === (byModel ? model() : '')) {
+        if (isClaude && !resetKey) reset.hidden = true;
         remainingText.textContent = '—';
         button.dataset.level = 'unknown';
         button.title = tr("Лимиты недоступны: {0}", words(err));
@@ -171,22 +199,30 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
     }
   }
   reset.addEventListener('click', () => {
-    if (loading || resetting || confirmation?.isConnected) return;
+    if (reset.hidden || loading || resetting || confirmation?.isConnected) return;
+    const grant = !resetKey || claudeGrant?.reset_key === resetKey ? claudeGrant : null;
+    const key = resetKey || grant?.reset_key;
     const submit = el('button', { type: 'button', class: 'btn btn-accent' }, tr("Использовать сброс"));
-    confirmation = openDialog(host, { id: 'code-usage-reset-confirm', title: tr("Сбросить лимиты Codex?"),
-      body: [el('p', {}, tr("Будет использован один доступный сброс лимитов Codex. Это действие нельзя отменить."))], actions: [submit] });
+    const title = isClaude ? (grant ? claudeResetLabel(grant.kind) : tr("Повторить сброс Claude?")) : tr("Сбросить лимиты Codex?");
+    const body = isClaude ? [el('p', {}, grant ? claudeResetEffect(grant.kind) : tr("Studio проверит ранее выбранный сброс.")),
+      el('p', {}, tr("Будет использован один сброс Claude. Это действие нельзя отменить."))]
+      : [el('p', {}, tr("Будет использован один доступный сброс лимитов Codex. Это действие нельзя отменить."))];
+    confirmation = openDialog(host, { id: 'code-usage-reset-confirm', title, body, actions: [submit] });
     submit.addEventListener('click', async () => {
-      if (resetting) return;
-      rememberReset(resetKey || crypto.randomUUID());
+      if (resetting || isClaude && !key) return;
+      rememberReset(key || crypto.randomUUID());
       resetting = true;
       refresh.disabled = reset.disabled = true;
       confirmation.close();
       result.textContent = tr("Применяю сброс…");
       try {
-        const data = await api('POST', `/api/code/agents/${aid}/usage/reset`, { idempotency_key: resetKey });
-        const messages = { reset: tr("Лимиты Codex сброшены."), alreadyRedeemed: tr("Этот сброс уже применён."),
+        const data = await api('POST', `/api/code/agents/${aid}/usage/reset`, { engine, idempotency_key: resetKey });
+        const messages = { reset: isClaude ? tr("Сброс Claude применён.") : tr("Лимиты Codex сброшены."),
+          alreadyRedeemed: tr("Этот сброс уже применён."),
           nothingToReset: tr("Сейчас нет лимитов, доступных для сброса. Сброс не использован."),
-          noCredit: tr("Доступных сбросов больше нет.") };
+          noCredit: tr("Доступных сбросов больше нет."),
+          stale: tr("Данные сброса изменились. Проверьте обновлённые лимиты Claude."),
+          blocked: tr("Claude сейчас не разрешает применить этот сброс.") };
         if (!Object.hasOwn(messages, data.outcome)) throw new Error(tr("Не удалось подтвердить сброс. Повторите попытку."));
         rememberReset(null);
         if (alive) result.textContent = messages[data.outcome];
@@ -195,7 +231,7 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
       } finally {
         resetting = false;
         if (alive) {
-          reset.textContent = resetKey ? tr("Повторить сброс") : tr("Использовать недельный сброс");
+          reset.textContent = resetLabel();
           queuedLoad = null;
           await load(true);
         }

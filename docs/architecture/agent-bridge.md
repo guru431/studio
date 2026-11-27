@@ -203,6 +203,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 | 0.34.0 | `project_summary` по флагу `code_size` возвращает размер исходников в байтах | §10.1 |
 | 0.36.0 | Сводка сообщает `code_size_version: 2`, список проектов возвращает последний успешный размер | §10.1 |
 | 0.38.0 | `hello.terminal` (только Linux) — `terminal_info`, команда SSH и веб-консоль ([ниже](#терминал-linux)) | — |
+| 0.50.0 | `hello.claude_usage_reset` — отдельная неделя Fable, предложения сброса Claude и подтверждённое применение | §9 |
 
 ### `hello` по платформам
 

@@ -315,7 +315,7 @@ def test_hello(agent):
                                  "agent_version": VERSION, "platform": host.platform_id(), "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
-                             "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                             "subscription_usage": True, "usage_reset": True, "claude_usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "chat_search_all": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                              "account_disabled": True, "git_compare": True, "file_upload": True, "file_search": True,
@@ -428,7 +428,8 @@ async def test_subscription_usage_requires_open_session_and_valid_refresh(agent)
     await opened(agent)
     assert (await agent.handle(req("usage", refresh="true")))[0]["code"] == "invalid"
     assert (await agent.handle(req("usage", refresh=True)))[0]["data"] == {"available": False}
-    agent._usage.read.assert_awaited_once_with("claude", agent.cfg.projects_root, agent.runner, refresh=True, model=None)
+    agent._usage.read.assert_awaited_once_with("claude", agent.cfg.projects_root, agent.runner,
+                                              refresh=True, model=None, cli_version=agent.cc_version)
     agent.new_link()
     assert (await agent.handle(req("usage")))[0]["code"] == "closed"
 

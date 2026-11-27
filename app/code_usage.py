@@ -43,6 +43,12 @@ class ResetCredit(BaseModel):
     expires_at: float | None = Field(None, ge=0, le=253402300799, allow_inf_nan=False, strict=True)
 
 
+class ClaudeResetGrant(ResetCredit):
+    kind: Literal["session", "weekly", "full", "fable", "other"]
+    count: int = Field(ge=1, le=100, strict=True)
+    reset_key: UUID | None = None
+
+
 class UsageStats(BaseModel):
     available: bool
     source: str = Field(max_length=200)
@@ -77,10 +83,11 @@ class Usage(BaseModel):
     statistics: UsageStats
     message: str | None = Field(None, max_length=300)
     balance: UsageBalance | None = None
+    claude_resets: list[ClaudeResetGrant] | None = Field(None, max_length=50)
 
 
 LINKS = {
-    "claude": [{"label": "Использование Claude", "url": "https://claude.ai/settings/usage"}],
+    "claude": [{"label": "Открыть лимиты и сбросы в Claude", "url": "https://claude.ai/settings/usage"}],
     "codex": [{"label": "Использование Codex", "url": "https://chatgpt.com/codex/settings/usage"}],
     "opencode": [{"label": "Провайдеры OpenCode", "url": "https://opencode.ai/docs/providers/"}],
     "deepseek": [{"label": "Баланс DeepSeek", "url": "https://platform.deepseek.com/usage"},
@@ -92,20 +99,23 @@ MODELS = {"opencode": (bridge.OPENCODE_MODEL_ID, "opencode_usage"), "deepseek": 
 
 class ResetRequest(BaseModel):
     idempotency_key: UUID
+    engine: Literal["claude", "codex"] = "codex"
 
 
 class ResetResult(BaseModel):
-    outcome: Literal["reset", "alreadyRedeemed", "nothingToReset", "noCredit"]
+    outcome: Literal["reset", "alreadyRedeemed", "nothingToReset", "noCredit", "stale", "blocked"]
 
 
 @router.post("/agents/{aid}/usage/reset")
 async def reset_usage(aid: int, body: ResetRequest, request: Request):
     claude_code.own_agent(request, aid)
-    claude_code.require_engine(aid, "codex")
+    if body.engine == "codex":
+        claude_code.require_engine(aid, "codex")
     link = bridge.LINKS.get(aid)
-    if link is not None and not link.hello.get("usage_reset"):
+    capability = "claude_usage_reset" if body.engine == "claude" else "usage_reset"
+    if link is not None and not link.hello.get(capability):
         raise claude_code._refuse(409, "unsupported", "обновите мост для сброса лимита")
-    raw = await claude_code.ask(request, aid, "usage_reset", engine="codex", idempotency_key=str(body.idempotency_key))
+    raw = await claude_code.ask(request, aid, "usage_reset", engine=body.engine, idempotency_key=str(body.idempotency_key))
     try:
         return ResetResult.model_validate(raw).model_dump()
     except ValidationError:
@@ -132,4 +142,5 @@ async def usage(aid: int, request: Request, engine: str = "claude", refresh: boo
             raise ValueError()
     except (ValidationError, ValueError):
         raise claude_code._refuse(502, "bridge", "мост ответил непонятно") from None
-    return {**value.model_dump(exclude_unset=True), "links": LINKS[engine]}
+    return {**value.model_dump(mode="json", exclude_unset=True,
+                               exclude={"claude_resets"} if engine != "claude" else None), "links": LINKS[engine]}

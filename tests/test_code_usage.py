@@ -20,26 +20,31 @@ USAGE = {"engine": "codex", "available": True, "source": "Codex app-server", "ch
 RESET_KEY = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
 
 
-def test_reset_requires_owner_pin_csrf_and_capability(studio):
+@pytest.mark.parametrize("engine,capability", [("codex", "usage_reset"), ("claude", "claude_usage_reset")])
+def test_reset_requires_owner_pin_csrf_and_capability(studio, engine, capability):
     aid, machine, link = prepare(studio, opened=False)
-    link.hello["usage_reset"] = True
+    if engine == "claude":
+        link.hello.pop("codex")
+    link.hello[capability] = True
     machine._op_usage_reset = lambda req, events: {"outcome": "reset", "private": "secret"}
     endpoint = url(aid, "usage/reset")
     body = {"idempotency_key": RESET_KEY}
+    if engine == "claude":
+        body["engine"] = engine
     assert studio.c.post(endpoint, json=body, headers={"x-studio-csrf": "invalid"}).status_code == 403
     assert studio.c.post(endpoint, json=body).json()["detail"]["code"] == "closed"
     assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
     before = len(machine.requests)
     assert studio.c.post(endpoint, json={"idempotency_key": ""}).status_code == 422
-    link.hello["usage_reset"] = False
+    link.hello[capability] = False
     assert studio.c.post(endpoint, json=body).status_code == 409
     assert len(machine.requests) == before
-    link.hello["usage_reset"] = True
+    link.hello[capability] = True
     for _ in range(2):
         response = studio.c.post(endpoint, json=body)
         assert response.status_code == 200 and response.json() == {"outcome": "reset"}
         assert machine.requests[-1]["idempotency_key"] == RESET_KEY
-        assert machine.requests[-1]["engine"] == "codex"
+        assert machine.requests[-1]["engine"] == engine
     make_user(studio, "friend")
     signin(studio, "friend")
     before = len(machine.requests)
@@ -126,6 +131,17 @@ def test_usage_preserves_reset_expiry_and_discards_private_credit_fields(studio)
     assert response.status_code == 200
     assert response.json()["statistics"]["reset_credits"] == [{"expires_at": 2000}, {"expires_at": None}]
     assert "private-id" not in response.text
+
+
+def test_claude_usage_exposes_only_public_grant_details(studio):
+    aid, machine, _ = prepare(studio)
+    grant = {"kind": "fable", "count": 2, "expires_at": 2000, "reset_key": RESET_KEY}
+    machine._op_usage = lambda req, events: {**copy.deepcopy(USAGE), "engine": "claude",
+        "claude_resets": [{**grant, "id": "private-id", "label": "private-label"}]}
+    response = studio.c.get(url(aid, "usage") + "?engine=claude")
+    assert response.status_code == 200
+    assert response.json()["claude_resets"] == [grant]
+    assert response.json()["links"][0]["url"] == "https://claude.ai/settings/usage"
 
 
 @pytest.mark.parametrize("details", [[{"expires_at": -1}], [{"expires_at": True}],
