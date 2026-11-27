@@ -355,6 +355,48 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
 .myfiles-tabs { flex: 1; min-width: 0; }
 .myfiles-switches > a { flex: none; margin-left: auto; white-space: nowrap; }
 .myfiles-switches > a .ico { width: 16px; height: 16px; }
+.page.myfiles-layout { display: grid; grid-template-columns: minmax(132px, 188px) minmax(0, 1fr); align-items: start;
+  gap: var(--space-8); max-width: 1200px; }
+.myfiles-layout .myfiles-switches { flex-direction: column; }
+.myfiles-layout .myfiles-switches > a { margin-left: 0; }
+.myfiles-nav { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; min-width: 0; }
+.myfiles-nav .myfiles-nav-button { justify-content: flex-start; min-width: 0; border-color: transparent;
+  background: transparent; overflow-wrap: anywhere; text-align: left; }
+.myfiles-nav-button .ico { flex: none; width: 16px; height: 16px; }
+.myfiles-nav .myfiles-nav-button[aria-current="page"] { background: var(--surface-2); color: var(--text-1); }
+.myfiles-nav-button:nth-child(4) { margin-top: var(--space-5); }
+.myfiles-pane { min-width: 0; }
+.myfiles-pane > .status { white-space: pre-line; overflow-wrap: anywhere; }
+.myfiles-pane > .status:empty { display: none; }
+.myfiles-project-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+  gap: var(--space-4); margin-bottom: var(--space-7); }
+.myfiles-project-head h2 { margin: 0; font-size: var(--title-font); }
+.myfiles-project-head .row { gap: var(--space-2); }
+.myfiles-new-project.btn { background: var(--text-1); color: var(--surface-1); }
+.myfiles-project-search { margin: 0 0 var(--space-5); }
+.myfiles-project-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-7); padding: 0; margin: 0; list-style: none; }
+.myfiles-project-card { display: flex; align-items: center; gap: var(--space-4); width: 100%; min-width: 0;
+  min-height: 48px; padding: var(--space-3); border: 0; border-radius: var(--r-control);
+  background: transparent; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+.myfiles-project-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px;
+  border-radius: var(--r-control); background: var(--surface-2); color: var(--text-2); }
+.myfiles-project-icon .ico { width: 17px; height: 17px; }
+.myfiles-project-caption { display: grid; min-width: 0; gap: var(--space-1); }
+.myfiles-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.myfiles-selection { margin: var(--space-4) 0; }
+.myfiles-checkbox { flex: none; margin: 0; width: 20px; height: 20px; }
+.myfiles-item[data-selected] { border-color: var(--accent); background: var(--surface-2); }
+@media (hover: hover) {
+  .myfiles-project-card:hover, .myfiles-nav .myfiles-nav-button:hover { background: var(--surface-2); }
+}
+@media (max-width: 680px) {
+  .page.myfiles-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+  .myfiles-layout .myfiles-switches { flex-direction: row; align-items: flex-start; }
+  .myfiles-nav { flex-direction: row; flex-wrap: wrap; }
+  .myfiles-nav-button:nth-child(4) { margin-top: 0; }
+  .myfiles-project-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .myfiles-file-info { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center;
   gap: var(--space-5); width: 100%; min-width: 0; text-align: left; }
 .myfiles-file-info.btn-link { padding: 0; text-decoration: none; }

@@ -18,6 +18,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 TEXT = "Отчёт за ноябрь — строка\n" * 40
 ITEM = "document.querySelector('#myfiles-list .myfiles-item[data-name=\"{0}\"]')"
+MCP_TAB = '#myfiles-tabs [data-storage="mcp"]'
 UPLOAD = f"""(() => {{
   const input = document.querySelector('#myfiles-picker');
   const data = new DataTransfer();
@@ -60,6 +61,7 @@ def test_my_files_upload_folder_and_day_link_opens_in_a_clean_browser(browser, c
             : search.bottom <= files.top && files.bottom <= jobs.top;
         })()"""),
         ("click", "#myfiles-open"),
+        ("click", MCP_TAB),
         ("wait", "document.querySelector('#myfiles-none')"),
         ("eval", "title", "document.querySelector('#view h1').textContent"),
         ("eval", "picked", UPLOAD),
@@ -104,6 +106,7 @@ def test_my_files_trash_switches_between_studio_records_and_server_files(browser
     login = "files-trash-switch"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
+        ("click", MCP_TAB),
         ("wait", "document.querySelector('#myfiles-none')"), ("eval", "upload", UPLOAD),
         ("wait", ITEM.format("отчёт.txt")), ("click", '#myfiles-list button[aria-label="Удалить: отчёт.txt"]'),
         ("wait", "document.querySelector('#myfiles-none')"), ("click", "#myfiles-trash"),
@@ -112,13 +115,13 @@ def test_my_files_trash_switches_between_studio_records_and_server_files(browser
         ("wait", "document.querySelector('.myfiles-trash-item')?.textContent.includes('отчёт.txt')"),
         ("click", ".myfiles-trash-item button"),
         ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent.includes('Возвращено')"),
-        ("click", "#myfiles-back"), ("wait", ITEM.format("отчёт.txt"))], width=320, mobile=True)
+        ("click", "#myfiles-back"), ("click", MCP_TAB), ("wait", ITEM.format("отчёт.txt"))], width=320, mobile=True)
     assert not r.get("failed"), r
     assert not problems(r), problems(r)
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_storage_tabs_align_with_trash_and_show_studio_and_mcp_thumbnails(browser, live, width):
+def test_my_files_sidebar_and_studio_and_mcp_thumbnails(browser, live, width):
     login = f"files-preview-{width}"
     uid = live.add_user(login)
     mid = media.save(uid, PNG_REAL, "image/png", "studio.png", thumb=True)
@@ -135,23 +138,80 @@ def test_storage_tabs_align_with_trash_and_show_studio_and_mcp_thumbnails(browse
       return true;
     }})()"""
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
-        ("wait", "document.querySelector('#myfiles-tabs [data-sid=\"0\"]')"),
-        ("eval", "row", """(() => {
-          const tab = document.querySelector('#myfiles-tabs button').getBoundingClientRect();
-          const trash = document.querySelector('#myfiles-trash').getBoundingClientRect();
-          return tab.right <= trash.left && Math.abs(tab.top - trash.top) < 2;
+        ("wait", "document.querySelector('#myfiles-projects button')"),
+        ("eval", "sections", """(() => {
+          const nav = document.querySelector('#myfiles-tabs');
+          const pane = document.querySelector('.myfiles-pane');
+          const first = Array.from(nav.children).slice(0, 3).map(item => item.dataset.sid);
+          return first.join(',') === 'projects,photo,video' && (innerWidth <= 680
+            ? nav.getBoundingClientRect().bottom <= pane.getBoundingClientRect().top
+            : nav.getBoundingClientRect().right <= pane.getBoundingClientRect().left);
         })()"""),
+        ("click", MCP_TAB),
         ("eval", "upload", upload),
         ("wait", f"{ITEM.format('server.png')}?.querySelector('.myfiles-thumb.has-preview img')?.naturalWidth > 0"),
-        ("click", "#myfiles-tabs [data-sid='0']"),
+        ("click", "#myfiles-tabs [data-sid='photo']"),
         ("wait", f"{ITEM.format('studio.png')}?.querySelector('.myfiles-thumb.has-preview img')?.naturalWidth > 0"),
         ("eval", "thumb", f"{ITEM.format('studio.png')}.querySelector('.myfiles-thumb img').src"),
         ("click", "#myfiles-list .myfiles-item[data-name='studio.png'] button.myfiles-file-info"),
         ("wait", "document.querySelector('#myfiles-preview[open] img')?.naturalWidth > 0"),
         ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth")], width=width, mobile=width == 320)
     assert not r.get("failed"), r
-    assert r["values"]["row"] and r["values"]["fits"]
+    assert r["values"]["sections"] and r["values"]["fits"]
     assert r["values"]["thumb"].endswith(f"/api/media/{mid}?thumb=1")
+    assert not problems(r), problems(r)
+
+
+def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_factory):
+    login = "files-project-tree"
+    live.add_user(login)
+    tree = """(() => {
+      const input = document.querySelector('#project-files-directory');
+      const transfer = new DataTransfer();
+      for (const path of ['Отчёты/Sub/2026/notes.txt', 'Отчёты/notes.txt']) {
+        const file = new File([path], 'notes.txt', { type: 'text/plain' });
+        Object.defineProperty(file, 'webkitRelativePath', { value: path });
+        transfer.items.add(file);
+      }
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change'));
+      return input.webkitdirectory;
+    })()"""
+    single = UPLOAD.replace('#myfiles-picker', '#project-files-picker')
+    folder = '#myfiles-list li[data-name="Отчёты"]'
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
+        ("click", ".myfiles-new-project:not(:disabled)"),
+        ("type", "#chat-project-editor input[required]", "Алгебра"), ("click", "#chat-project-editor .btn-accent"),
+        ("wait", "document.querySelector('#myfiles-none')"),
+        ("click", '#myfiles-tabs [data-sid="projects"]'),
+        ("wait", "document.querySelectorAll('#myfiles-projects button').length === 2"),
+        ("eval", "columns", "getComputedStyle(document.querySelector('#myfiles-projects')).gridTemplateColumns.split(' ').length"),
+        ("screenshot", str(tmp_path_factory.getbasetemp() / "my-files-projects.png")),
+        ("click", '#myfiles-project-gallery button[aria-label="Сортировка проектов"]'),
+        ("click", '#myfiles-project-gallery button[aria-label="Поиск проектов"]'),
+        ("type", ".myfiles-project-search", "Алгебра"),
+        ("wait", "document.querySelectorAll('#myfiles-projects button').length === 1"),
+        ("click", '#myfiles-projects button[title="Алгебра"]'),
+        ("wait", "document.querySelector('#myfiles-none')"),
+        ("eval", "directoryPicker", tree), ("wait", ITEM.format("Отчёты")),
+        ("click", f"{folder} .myfiles-folder"),
+        ("wait", f"{ITEM.format('notes.txt')} && {ITEM.format('Sub')}"),
+        ("click", '#myfiles-list li[data-name="Sub"] .myfiles-folder'),
+        ("wait", ITEM.format("2026")), ("click", '#myfiles-list li[data-name="2026"] .myfiles-folder'),
+        ("wait", ITEM.format("notes.txt")),
+        ("click", "#myfiles-path button:nth-child(2)"),
+        ("wait", ITEM.format("Отчёты")), ("eval", "picked", single), ("wait", ITEM.format("отчёт.txt")),
+        ("click", "#myfiles-select"), ("click", f"{folder} input[type=checkbox]"),
+        ("click", '#myfiles-list li[data-name="отчёт.txt"] input[type=checkbox]'),
+        ("eval", "selected", "document.querySelectorAll('#myfiles-list input:checked').length"),
+        ("eval", "skipDownload", NO_DOWNLOAD), ("click", "#myfiles-selection-zip"),
+        ("eval", "ids", "new URL(document.documentElement.dataset.clicked, location.href).searchParams.getAll('item').length"),
+        ("click", "#myfiles-selection-delete"), ("click", "#myfiles-confirm-selection"),
+        ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent === 'Готово'")],
+        width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["columns"] == r["values"]["selected"] == r["values"]["ids"] == 2
+    assert r["values"]["directoryPicker"] and r["values"]["picked"] == 1
     assert not problems(r), problems(r)
 
 

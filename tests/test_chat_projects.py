@@ -115,6 +115,7 @@ def test_project_grant_roles_protect_private_data_and_revoke_access(studio):
     assert downloaded.content == b"notes" and downloaded.headers["cache-control"] == "no-store"
     assert studio.c.get(entry["preview"]["url"]).status_code == 200
     assert studio.c.delete(f"{base}/files/{file_id}").status_code == 403
+    assert studio.c.post(f"{base}/files/delete-selection", json={"ids": [file_id]}).status_code == 403
     assert studio.c.post(f"{base}/files/folders", json={"name": "No"}).status_code == 403
     assert studio.c.post("/api/chats", json={"project_id": pid}).status_code == 403
 
@@ -214,9 +215,38 @@ def test_project_files_follow_chats_and_zip_nested_storage(studio):
         assert archive.read("Файлы диалогов/old.png") == png()
 
     linked = next(entry for entry in studio.c.get(files).json()["entries"] if entry.get("name") == "photo.png")
-    assert studio.c.delete(f"{files}/{linked['id']}").status_code == 204
+    assert studio.c.post(f"{files}/delete-selection", json={"ids": [linked['id']]}).status_code == 204
     assert studio.c.get(f"/api/media/{photo}").status_code == 200
     state.DB.execute("UPDATE chats SET protected_used = 1 WHERE id = ?", (chat,))
     assert studio.c.get(f"{files}/zip").status_code == 409
     assert erase_history(studio).status_code in (200, 204)
     assert [item["id"] for item in studio.c.get(BASE).json()["items"]] == [inbox]
+
+
+def test_project_folder_import_reuses_only_folders_and_bulk_actions_keep_the_tree(studio):
+    add_gateway(studio)
+    files = f"{BASE}/{project(studio, 'Import')}/files"
+    other = f"{BASE}/{project(studio, 'Other')}/files"
+    root = studio.c.post(f"{files}/folders", json={"name": "Import"}).json()["id"]
+    reused = studio.c.post(f"{files}/folders", json={"name": "Import", "reuse": True})
+    assert reused.status_code == 201 and reused.json()["id"] == root
+    assert studio.c.post(f"{files}/folders", json={"name": "Import"}).status_code == 409
+    child = studio.c.post(f"{files}/folders", json={"name": "Sub", "parent": root}).json()["id"]
+    nested = {"x-studio-folder": child, "x-studio-name": "same.txt"}
+    assert studio.c.post(f"{files}/upload", headers=nested, content=b"Nested").status_code == 201
+    sibling = studio.c.post(f"{files}/upload", headers={"x-studio-name": "same.txt"}, content=b"Root").json()["id"]
+    foreign = studio.c.post(f"{other}/folders", json={"name": "Foreign"}).json()["id"]
+    assert studio.c.post(f"{files}/folders", json={"name": "same.txt", "reuse": True}).status_code == 409
+
+    response = studio.c.get(f"{files}/zip", params={"item": [root, sibling]})
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["Import/", "Import/Sub/", "Import/Sub/same.txt", "same.txt"]
+        assert archive.read("Import/Sub/same.txt") == b"Nested" and archive.read("same.txt") == b"Root"
+    assert studio.c.get(f"{files}/zip", params={"item": [root, foreign]}).status_code == 404
+    assert studio.c.post(f"{files}/delete-selection", json={"ids": [root, foreign]}).status_code == 404
+    assert len(studio.c.get(files).json()["entries"]) == 2
+
+    content = studio.c.get(files, params={"parent": child}).json()["entries"][0]["download"]
+    assert studio.c.post(f"{files}/delete-selection", json={"ids": [root, sibling]}).status_code == 204
+    assert studio.c.get(files).json()["entries"] == []
+    assert studio.c.get(content).status_code == 404

@@ -34,6 +34,8 @@ export const ICONS = {
   backspace: '<path d="M9 5h11v14H9l-6-7z"/><path d="M12 9l5 6M17 9l-5 6"/>',
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  sort: '<path d="M8 19V5L4 9m4-4 4 4m4-4v14l4-4m-4 4-4-4"/>',
+  project: '<rect x="5" y="9" width="14" height="11" rx="2"/><path d="M7 5h10m-7 8h4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M6 12.5l4 4 8-9"/>',
   pick: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',

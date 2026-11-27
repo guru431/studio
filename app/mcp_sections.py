@@ -9,6 +9,7 @@ import asyncio
 import base64
 import binascii
 from contextlib import AsyncExitStack
+import hashlib
 import json
 import math
 import re
@@ -52,6 +53,8 @@ FILE_FIELDS = {"photo": {"artifact_id": "image"}, "video": {"artifact_id": "imag
                "ocr": {"artifact_id": "image"}, "speech": {"reference_artifact_id": "audio"},
                "transcribe": {"artifact_id": "audio"}}
 UPLOAD_MAX = 12 << 20
+ASR_UPLOAD_CHUNK = 1 << 20
+ASR_PREPARE_UPLOAD = "artifact_prepare_upload"
 PARAMS_MAX = 128 << 10
 MODEL_CHOICES_MAX = 256
 MODEL_ID_MAX = 128
@@ -475,7 +478,7 @@ async def shown(session, section, result):
     return out
 
 
-async def upload_artifact(session, data, mime, name=None):
+async def upload_artifact(session, data, mime, name=None, *, transfer=None):
     """Файл на сервер MCP (`artifact_upload`) → `{id, path}`; `path` — путь файла на сервере, если сервер его
     сообщил (иначе пусто), `name` — имя файла для сервера (файлы чата)."""
     args = {"data_base64": base64.b64encode(data).decode(), "mime_type": mime}
@@ -483,7 +486,20 @@ async def upload_artifact(session, data, mime, name=None):
         args["name"] = name
     # Keep the normal response budget and allow for sending the encoded body at 512 KiB/s.
     timeout = mcp.TIMEOUT + math.ceil(len(args["data_base64"]) / (512 << 10))
-    reply = await call(session, "artifact_upload", args, timeout=timeout)
+    try:
+        reply = await call(session, "artifact_upload", args, timeout=timeout)
+    except HTTPException as exc:
+        if exc.status_code != 413:
+            raise
+        if transfer is None:
+            raise mcp.refused("Файл больше предела сервера MCP", "too_big", 413) from None
+    else:
+        return uploaded_artifact(reply)
+    name = name if accepts_name([transfer], ASR_PREPARE_UPLOAD) else None
+    return await upload_audio_chunks(session, data, mime, name)
+
+
+def uploaded_artifact(reply):
     item = reply.get("structuredContent")
     aid = item.get("id") if isinstance(item, dict) else None
     if not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid):
@@ -493,12 +509,44 @@ async def upload_artifact(session, data, mime, name=None):
     return {"id": aid, "path": path}
 
 
-def accepts_name(tools) -> bool:
+def accepts_name(tools, tool_name="artifact_upload") -> bool:
     """Схема `artifact_upload` сервера принимает `name` — как у файлов чата (`mcp_files.sync`): имя файла уходит только
     такому серверу. По нему сервер называет итоги («Совещание — протокол.docx»), а не по номеру загрузки."""
-    upload_tool = next((t for t in tools if isinstance(t, dict) and t.get("name") == "artifact_upload"), None)
+    upload_tool = next((t for t in tools if isinstance(t, dict) and t.get("name") == tool_name), None)
     schema = upload_tool.get("inputSchema") if upload_tool else None
     return isinstance(schema, dict) and isinstance(schema.get("properties"), dict) and "name" in schema["properties"]
+
+
+async def upload_audio_chunks(session, data, mime, name):
+    from mcp_contracts import _failed, call as http_call
+
+    total = len(data)
+    args = {"size": total, "mime_type": mime, "storage": "local"}
+    if name:
+        args["name"] = name
+    plan = await call(session, ASR_PREPARE_UPLOAD, args)
+    aid = uploaded_artifact(plan)["id"]
+    offered = plan["structuredContent"].get("chunk_size")
+    if type(offered) is not int or offered < (64 << 10):
+        raise mcp.refused("MCP вернул неверные параметры загрузки")
+    chunk = min(offered, ASR_UPLOAD_CHUNK)
+    for start in range(0, total, chunk):
+        end = min(start + chunk, total)
+        code, part = await http_call(session, "PATCH", f"/artifacts/{aid}/content", content=data[start:end],
+                                     headers={"Content-Range": f"bytes {start}-{end - 1}/{total}"},
+                                     timeout=mcp.TIMEOUT + math.ceil((end - start) / (512 << 10)))
+        if code != 200:
+            raise _failed(code, part)
+        if not isinstance(part, dict) or part.get("id") != aid or part.get("received") != end:
+            raise mcp.refused("MCP не подтвердил загрузку записи")
+    checksum = json.dumps({"sha256": hashlib.sha256(data).hexdigest()}).encode("ascii")
+    code, done = await http_call(session, "POST", f"/artifacts/{aid}/complete", content=checksum,
+                                 content_type="application/json")
+    if code != 200:
+        raise _failed(code, done)
+    if not isinstance(done, dict) or done.get("id") != aid or done.get("ready") is not True:
+        raise mcp.refused("MCP не подтвердил загрузку записи")
+    return {"id": aid, "path": ""}
 
 
 async def prepare_upload(session, kind, file, *, named=False, original_size=False):
@@ -538,9 +586,9 @@ async def prepare_upload(session, kind, file, *, named=False, original_size=Fals
     return data, mime, name
 
 
-async def upload(session, kind, file, *, named=False, original_size=False):
+async def upload(session, kind, file, *, named=False, original_size=False, transfer=None):
     data, mime, name = await prepare_upload(session, kind, file, named=named, original_size=original_size)
-    return (await upload_artifact(session, data, mime, name))["id"]
+    return (await upload_artifact(session, data, mime, name, transfer=transfer))["id"]
 
 
 async def voice_arguments(session, section, tool, voice_id, files, args):
@@ -669,6 +717,7 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
             listed = await session.tools()
         tools = list(supported(section, listed, uid=uid, sid=sid, item=item))
         named = accepts_name(listed)
+        transfer = next((entry for entry in listed if entry.get("name") == ASR_PREPARE_UPLOAD), None) if section == "transcribe" else None
         tool = next((item for item in tools if item["name"] == body.tool), None)
         if tool is None:
             raise mcp.refused("Инструмент недоступен в этом разделе MCP")
@@ -707,7 +756,7 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
                         new_source = video_source = await media.save_async(uid, image, mime, "studio-video-source.png", thumb=True)
                 else:
                     args[key] = await upload(session, tool["files"][key], file, named=named,
-                                             original_size=body.tool == "upscale_image")
+                                             original_size=body.tool == "upscale_image", transfer=transfer)
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)

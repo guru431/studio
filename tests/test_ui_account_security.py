@@ -165,7 +165,7 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
         pw.expect(shares).to_have_count(2)
         pw.expect(shares.first).to_contain_text('Отчёт за неделю')
         pw.expect(page.locator('#access-file-links')).to_contain_text('Действующих ссылок на файлы: 1.')
-        pw.expect(page.locator('#access-file-links-open')).to_have_attribute('href', '#/myfiles')
+        pw.expect(page.locator('#access-file-links-open')).to_have_attribute('href', '#/myfiles?links=1')
         pw.expect(shares.first).to_contain_text('Чат · бессрочная · открыта 3 раза')
         # FINDINGS 06:F15: из списка — к чату (обычному и на компьютере) и «Копировать ссылку»
         pw.expect(shares.first.locator('.access-open')).to_have_attribute('href', f'#/chat/{chat}')

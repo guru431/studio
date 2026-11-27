@@ -391,6 +391,8 @@ class Session:
             async with asyncio.timeout(timeout):
                 async with upstream.stream(SimpleNamespace(id=self.sid), "POST", self.url, keyless=True,
                                            headers=self.headers(), json=payload, timeout=timeout) as response:
+                    if response.status_code == 413:
+                        raise refused("Запрос больше предела сервера MCP", "too_big", 413)
                     if response.status_code not in (200, 202, 204):
                         raise refused(f"MCP ответил HTTP {response.status_code}")
                     if method == "initialize":

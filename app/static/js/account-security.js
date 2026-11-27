@@ -296,7 +296,7 @@ export function accessBlock(host) {
         : [el('li', { class: 'muted small' }, tr("Ссылок нет."))]));
       // ссылки на файлы — только счёт: список с «Отозвать» — в «Моих файлах»
       files.replaceChildren(data.file_links ? tr("Действующих ссылок на файлы: {0}.", data.file_links) : tr("Ссылок на файлы нет."),
-        ...(data.file_links ? [' ', el('a', { class: 'btn btn-sm access-open', id: 'access-file-links-open', href: '#/myfiles' },
+        ...(data.file_links ? [' ', el('a', { class: 'btn btn-sm access-open', id: 'access-file-links-open', href: '#/myfiles?links=1' },
           sectionName('myfiles'))] : []));
       all.hidden = !data.members.length && !data.shares.length && !data.file_links;
       return true;

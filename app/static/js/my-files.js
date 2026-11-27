@@ -1,21 +1,22 @@
-import { tr } from './i18n.js';
-/* «Мои файлы» (#/myfiles, кнопка рельса; my_files.py): личная папка учётки на серверах MCP с контрактом `studio/files`.
- * Вкладка на сервер (GET /api/my-files/servers), папки и путь, загрузка кусками (PUT .../upload: кусок — `chunk` сервера,
+import { locale, tr } from './i18n.js';
+/* «Мои файлы» (#/myfiles): проекты, результаты разделов и личные папки серверов MCP с контрактом `studio/files`.
+ * Папки MCP: загрузка кусками (PUT .../upload: кусок — `chunk` сервера,
  * не больше my_files.CHUNK; отказ связи — повтор куска, 409 `gap` — продолжить с принятого `size`), скачивание и ZIP
  * по адресу с ticket (докачка браузером — Range), удаление — в корзину сервера, «Корзина сервера» с «Вернуть».
  * «Ссылка на сутки» — POST .../links: адрес `/f#<token>` показывается один раз (в базе — только хеш); «Мои ссылки» —
  * действующие ссылки с «Отозвать». Каждый видит только свою папку, администратор — тоже свою. */
 import { api } from './api.js';
-import { chooseProject, projectName, PROJECTS_API } from './chat-projects.js';
+import { chooseProject, projectEditor, projectName, PROJECTS_API } from './chat-projects.js';
 import { icon } from './icons.js';
 import { sectionName } from './sections-meta.js';
 import { sizeText } from './settings.js';
-import { dateTime } from './time.js';
+import { dateOnly, dateTime } from './time.js';
 import { renderTrash } from './trash.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const RETRIES = 3;                           // попыток одного куска при обрыве связи
 const RETRY_STATUS = [0, 502, 503, 504];
+const SELECTION_MAX = 100;
 const PROTECTED = tr("Сервер MCP — защищённый источник: ссылкой на его файл поделиться нельзя");   // как my_files.PROTECTED
 let controller = null;
 
@@ -36,24 +37,116 @@ export function mount(view, ctx) {
   const host = view;
   const trash = ctx.query.has('trash');
   const studio = { sid: 0, name: tr("Записи Studio"), local: true };
-  const state = { servers: trash ? [studio] : [], sid: trash ? 0 : null, path: '', folders: [], projects: [] };
+  const projectsSection = { key: 'projects', name: tr("Проекты"), glyph: 'project' };
+  const mediaSection = (section) => ({ sid: 0, key: section, local: true, section, name: sectionName(section), glyph: section });
+  const mainSections = [projectsSection, mediaSection('photo'), mediaSection('video')];
+  const linksSection = { key: 'links', name: tr("Мои ссылки"), glyph: 'share' };
+  const state = { servers: trash ? [studio] : [...mainSections, linksSection],
+    sid: trash ? 0 : ctx.query.has('links') ? 'links' : 'projects', project: null, path: '', folders: [], projects: [] };
   const note = el('p', { id: 'myfiles-status', class: 'status', role: 'status', 'aria-live': 'polite' });
-  const tabs = el('div', { class: 'row myfiles-tabs', id: 'myfiles-tabs', role: 'tablist', 'aria-label': tr("Хранилища") });
+  const tabs = el(trash ? 'div' : 'nav', { class: trash ? 'row myfiles-tabs' : 'myfiles-nav', id: 'myfiles-tabs',
+    role: trash ? 'tablist' : null, 'aria-label': tr("Хранилища") });
   const crumbs = el('nav', { class: 'row myfiles-path', id: 'myfiles-path', 'aria-label': tr("Путь") });
   const picker = el('input', { type: 'file', multiple: true, hidden: true, id: 'myfiles-picker' });
-  const toolbar = el('div', { class: 'row myfiles-actions' },
-    button(tr("Загрузить"), { class: 'btn btn-accent', id: 'myfiles-upload' }, () => picker.click()),
+  const dirPicker = el('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true, id: 'myfiles-directory' });
+  const uploadFiles = button(tr("Загрузить"), { class: 'btn btn-accent', id: 'myfiles-upload' }, () => picker.click());
+  const uploadFolder = button(tr("Импортировать папку"), { class: 'btn', id: 'myfiles-import' }, () => dirPicker.click());
+  const toolbar = el('div', { class: 'row myfiles-actions' }, uploadFiles, uploadFolder,
     button(tr("Новая папка"), { class: 'btn', id: 'myfiles-mkdir' }, () => mkdirDialog()),
-    button(tr("ZIP папки"), { class: 'btn', id: 'myfiles-zip' }, () => zip(state.path)), picker);
+    button(tr("ZIP папки"), { class: 'btn', id: 'myfiles-zip' }, () => zip(state.path)), picker, dirPicker);
   const projectPicker = el('input', { type: 'file', multiple: true, hidden: true, id: 'project-files-picker' });
+  const projectDirPicker = el('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true,
+    id: 'project-files-directory' });
   const projectUpload = button(tr("Загрузить"), { class: 'btn btn-accent' }, () => projectPicker.click());
+  const projectImport = button(tr("Импортировать папку"), { class: 'btn', id: 'project-files-import' }, () => projectDirPicker.click());
   const projectMkdir = button(tr("Новая папка"), { class: 'btn' }, () => projectFolderDialog());
-  const projectToolbar = el('div', { class: 'row myfiles-actions', hidden: true }, projectUpload, projectMkdir,
+  const projectToolbar = el('div', { class: 'row myfiles-actions', hidden: true }, projectUpload, projectImport, projectMkdir,
     button(tr("Скачать ZIP"), { class: 'btn' }, () => {
       const parent = folder();
       fetchFile(`${projectBase()}/zip${parent ? `?parent=${parent}` : ''}`, '');
-    }), projectPicker);
+    }), projectPicker, projectDirPicker);
+  const projectSearch = el('input', { type: 'search', class: 'input myfiles-project-search', placeholder: tr("Поиск проектов"),
+    'aria-label': tr("Поиск проектов"), hidden: true });
+  const searchProjects = iconButton('search', tr("Поиск проектов"), () => {
+    projectSearch.hidden = !projectSearch.hidden;
+    searchProjects.setAttribute('aria-expanded', String(!projectSearch.hidden));
+    if (!projectSearch.hidden) projectSearch.focus();
+    else {
+      projectSearch.value = '';
+      paintProjects();
+    }
+  });
+  searchProjects.setAttribute('aria-expanded', 'false');
+  let alphabetical = false;
+  const sortProjects = iconButton('sort', tr("Сортировка проектов"), () => {
+    alphabetical = !alphabetical;
+    sortProjects.setAttribute('aria-pressed', String(alphabetical));
+    paintProjects();
+  });
+  sortProjects.setAttribute('aria-pressed', 'false');
+  const createProject = button(tr("Новый проект"), { class: 'btn btn-sm myfiles-new-project', disabled: true }, () => {
+    projectEditor(host, null, (item) => {
+      if (signal.aborted) return;
+      const made = { ...item, role: 'owner' };
+      state.projects.push(made);
+      openProject(made);
+    });
+  });
+  const projectGrid = el('ul', { class: 'myfiles-project-grid', id: 'myfiles-projects' });
+  const projectGallery = el('section', { id: 'myfiles-project-gallery', hidden: trash },
+    el('div', { class: 'myfiles-project-head' }, el('h2', {}, tr("Проекты")),
+      el('div', { class: 'row' }, searchProjects, sortProjects, createProject)), projectSearch, projectGrid);
   const list = el('ul', { class: 'agents myfiles-list', id: 'myfiles-list' });
+  const choices = new Map();
+  let selecting = false;
+  let working = false;
+  const selectCount = el('span', { class: 'small', 'aria-live': 'polite', id: 'myfiles-selected' });
+  const selectToggle = button(tr("Выбрать"), { class: 'btn btn-sm', id: 'myfiles-select', 'aria-pressed': 'false' }, () => {
+    selecting = !selecting;
+    if (!selecting) selectAll(false);
+    else paintSelection();
+  });
+  const chooseAll = button(tr("Выбрать все показанные"), { class: 'btn btn-sm' }, () => selectAll(true));
+  const clearSelection = button(tr("Снять выделение"), { class: 'btn btn-sm' }, () => selectAll(false));
+  const downloadSelection = button(tr("Скачать ZIP"), { class: 'btn btn-sm', id: 'myfiles-selection-zip' }, () => {
+    const items = selected();
+    if (state.project) {
+      const query = new URLSearchParams(items.map((item) => ['item', item.id]));
+      fetchFile(`${projectBase()}/zip?${query}`, '');
+    } else {
+      batch(async () => {
+        const { id } = await api('POST', '/api/media/archives', { media_ids: items.map((item) => item.id) }, { signal });
+        fetchFile(`/api/media/archives/${encodeURIComponent(id)}`, '');
+        return [];
+      });
+    }
+  });
+  const addSelection = button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () => {
+    const items = selected();
+    chooseProject(host, tr("Добавить в проект"), editableProjects(), (pid) => batch(() => each(items, (entry) =>
+      api('POST', `${PROJECTS_API}/${pid}/files/from-section`, { media_id: entry.id, section: entry.section }, { signal }))));
+  });
+  const deleteSelection = button(tr("Удалить"), { class: 'btn btn-sm btn-danger', id: 'myfiles-selection-delete' }, () => {
+    const items = selected();
+    const project = Boolean(state.project);
+    const url = project ? `${projectBase()}/delete-selection` : `${base()}/delete`;
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger', id: 'myfiles-confirm-selection' });
+    const dialog = openDialog(host, { id: 'myfiles-delete-selection', title: tr("Удалить выбранное?"),
+      body: [el('p', {}, tr("Выбрано: {0}", items.length)), el('p', {}, project
+        ? tr("Папки будут удалены из проекта вместе с содержимым.") : tr("Файлы и папки будут перемещены в корзину сервера."))],
+      actions: [confirm] });
+    confirm.addEventListener('click', () => {
+      dialog.close();
+      batch(async () => {
+        if (!project) return each(items, (item) => api('POST', url, { path: item.path }, { signal }));
+        await api('POST', url, { ids: items.map((item) => item.id) }, { signal });
+        return [];
+      }, true);
+    });
+  });
+  const batchTools = el('div', { class: 'row', hidden: true }, selectCount, chooseAll, clearSelection,
+    downloadSelection, addSelection, deleteSelection);
+  const selectionBar = el('div', { class: 'row myfiles-selection', hidden: true }, selectToggle, batchTools);
   const more = button(tr("Ещё"), { class: 'btn btn-sm', hidden: true });
   let loadVersion = 0;
   let next = null;
@@ -65,12 +158,14 @@ export function mount(view, ctx) {
   const linksBox = el('section', { hidden: trash },
     el('h2', {}, tr("Мои ссылки")),
     el('p', { class: 'muted small' }, tr("Ссылка открывает один файл без входа в Студию и действует сутки.")), links);
-  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, crumbs, toolbar, projectToolbar, fresh, studioTrash, list, more, linksBox);
+  const browser = el('div', { id: 'myfiles-browser', hidden: !trash }, crumbs, toolbar, projectToolbar, selectionBar,
+    fresh, studioTrash, list, more, linksBox);
   const trashLink = el('a', { class: 'btn btn-sm', id: trash ? 'myfiles-back' : 'myfiles-trash',
     href: trash ? '#/myfiles' : '#/myfiles?trash=1' }, icon(trash ? 'prev' : 'trash'),
   trash ? tr("Вернуться к файлам") : tr("Корзина"));
   view.append(el('header', { class: 'head' }, el('h1', {}, sectionName(trash ? 'trash' : 'myfiles'))),
-    el('div', { class: 'page myfiles-page' }, el('div', { class: 'myfiles-switches' }, tabs, trashLink), note, browser));
+    el('div', { class: `page myfiles-page${trash ? '' : ' myfiles-layout'}` },
+      el('div', { class: 'myfiles-switches' }, tabs, trashLink), el('div', { class: 'myfiles-pane' }, note, projectGallery, browser)));
 
   const thumbs = new WeakMap();
   const visible = new IntersectionObserver((entries) => {
@@ -92,8 +187,89 @@ export function mount(view, ctx) {
   const keyOf = (s) => s.key ?? s.sid;
   const server = () => state.servers.find((s) => keyOf(s) === state.sid);
   const base = () => `/api/my-files/${server()?.sid}`;
-  const projectBase = () => `${PROJECTS_API}/${server().project.id}/files`;
+  const projectBase = () => `${PROJECTS_API}/${state.project.id}/files`;
   const folder = () => state.folders.at(-1)?.id || null;
+  const writable = () => state.project?.role !== 'viewer' && folder() !== 'chats';
+  const editableProjects = () => state.projects.filter((project) => project.role !== 'viewer');
+  const place = () => JSON.stringify([state.sid, state.project?.id, folder(), state.path]);
+
+  function selected() {
+    return [...choices].filter(([input]) => input.checked).map(([, item]) => item);
+  }
+
+  function selectAll(checked) {
+    let count = selected().length;
+    for (const input of choices.keys()) {
+      if (!checked) input.checked = false;
+      else if (!input.checked && count < SELECTION_MAX) {
+        input.checked = true;
+        count += 1;
+      }
+    }
+    paintSelection();
+  }
+
+  function paintSelection() {
+    const count = selected().length;
+    selectionBar.hidden = !choices.size;
+    selectToggle.setAttribute('aria-pressed', String(selecting));
+    selectToggle.disabled = working;
+    batchTools.hidden = !selecting;
+    selectCount.textContent = tr("Выбрано: {0}", count);
+    chooseAll.disabled = working || count >= Math.min(choices.size, SELECTION_MAX);
+    chooseAll.title = choices.size > SELECTION_MAX ? tr("Не больше {0} за раз", SELECTION_MAX) : '';
+    clearSelection.disabled = working || !count;
+    downloadSelection.hidden = !state.project && !server()?.local;
+    addSelection.hidden = !server()?.local || !editableProjects().length;
+    deleteSelection.hidden = state.project ? !writable() : Boolean(server()?.local);
+    for (const action of [downloadSelection, addSelection, deleteSelection]) action.disabled = working || !count;
+    for (const input of choices.keys()) {
+      input.hidden = !selecting;
+      input.disabled = working || (!input.checked && count >= SELECTION_MAX);
+      input.closest('li').toggleAttribute('data-selected', input.checked);
+    }
+  }
+
+  function selectable(row, item) {
+    const input = el('input', { type: 'checkbox', class: 'myfiles-checkbox', hidden: true,
+      'aria-label': tr("Выбрать: {0}", item.name) });
+    input.addEventListener('change', paintSelection);
+    row.prepend(input);
+    choices.set(input, item);
+    return row;
+  }
+
+  async function each(items, operation) {
+    const failed = [];
+    for (const item of items) {
+      if (signal.aborted) break;
+      try {
+        await operation(item);
+      } catch (err) {
+        failed.push(`${item.name} — ${words(err)}`);
+      }
+    }
+    return failed;
+  }
+
+  async function batch(operation, refresh = false) {
+    if (working) return;
+    const target = place();
+    working = true;
+    paintSelection();
+    say('');
+    try {
+      const failures = await operation();
+      if (signal.aborted || target !== place()) return;
+      if (refresh) await load();
+      if (target === place()) say(failures.length ? failures.join('\n') : tr("Готово"), failures.length ? 'error' : 'ok');
+    } catch (err) {
+      if (!signal.aborted && target === place()) say(words(err), 'error');
+    } finally {
+      working = false;
+      paintSelection();
+    }
+  }
 
   async function act(work, done) {
     say('');
@@ -108,24 +284,65 @@ export function mount(view, ctx) {
   function paintTabs() {
     tabs.replaceChildren(...state.servers.map((s) => {
       const key = keyOf(s);
-      const tab = button(s.name, { class: `btn btn-sm${key === state.sid ? ' btn-accent' : ''}`, role: 'tab',
-        'aria-selected': String(key === state.sid), 'data-sid': String(key) }, () => {
-        state.sid = key;
-        state.path = '';
-        state.folders = [];
-        say('');
-        load();
-        tabs.querySelector(`[data-sid="${key}"]`)?.focus();
+      const active = key === state.sid;
+      const tab = button(s.name, { class: `btn btn-sm${trash ? (active ? ' btn-accent' : '') : ' myfiles-nav-button'}`,
+        role: trash ? 'tab' : null, 'aria-selected': trash ? String(active) : null,
+        'aria-current': !trash && active ? 'page' : null, 'data-sid': String(key), 'data-storage': s.sid > 0 ? 'mcp' : null }, () => {
+        selectSection(key);
+        [...tabs.children].find((item) => item.dataset.sid === String(key))?.focus();
       });
+      if (!trash) tab.prepend(icon(s.glyph || 'folder'));
       return tab;
     }));
-    tabs.hidden = !state.servers.length;
   }
 
+  function selectSection(key) {
+    state.sid = key;
+    state.project = null;
+    state.path = '';
+    state.folders = [];
+    say('');
+    load();
+  }
+
+  function openProject(project) {
+    state.sid = 'projects';
+    state.project = project;
+    state.folders = [];
+    say('');
+    load();
+  }
+
+  function iconButton(glyph, label, action) {
+    const control = button('', { class: 'icon-btn', 'aria-label': label, title: label }, action);
+    control.append(icon(glyph));
+    return control;
+  }
+
+  function paintProjects() {
+    const lang = locale();
+    const query = projectSearch.value.trim().toLocaleLowerCase(lang);
+    const byName = (left, right) => projectName(left).localeCompare(projectName(right), lang, { numeric: true });
+    const items = state.projects.filter((item) => projectName(item).toLocaleLowerCase(lang).includes(query))
+      .sort((left, right) => Number(right.inbox) - Number(left.inbox)
+        || (alphabetical ? 0 : right.created - left.created) || byName(left, right));
+    projectGrid.replaceChildren(...items.map((item) => {
+      const name = projectName(item);
+      const card = button('', { class: 'myfiles-project-card', 'data-project': item.id, title: name }, () => openProject(item));
+      card.append(el('span', { class: 'myfiles-project-icon' }, icon('project')),
+        el('span', { class: 'myfiles-project-caption' }, el('span', { class: 'myfiles-project-name' }, name),
+          !item.inbox && item.created ? el('span', { class: 'muted small' }, dateOnly(item.created, { day: 'numeric', month: 'short' })) : null));
+      return el('li', {}, card);
+    }));
+    if (!items.length && !createProject.disabled) projectGrid.append(el('li', { class: 'muted' }, tr("Проекты не найдены")));
+  }
+  projectSearch.addEventListener('input', paintProjects);
+
   function paintCrumbs() {
-    if (server()?.project) {
-      const names = [server().name, ...state.folders.map((entry) => entry.name)];
-      crumbs.replaceChildren(...names.map((name, index) => button(name, { class: 'btn btn-sm',
+    if (state.project) {
+      const names = [projectName(state.project), ...state.folders.map((entry) => entry.name)];
+      crumbs.replaceChildren(button(tr("Проекты"), { class: 'btn btn-sm' }, () => selectSection('projects')),
+        ...names.map((name, index) => button(name, { class: 'btn btn-sm',
         'aria-current': index === names.length - 1 ? 'location' : null }, () => {
         state.folders = state.folders.slice(0, index);
         load();
@@ -212,8 +429,8 @@ export function mount(view, ctx) {
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': 'false' },
       fileInfo(entry, facts, entry.preview ? () => entry.preview : null),
       el('div', { class: 'session-actions' },
-        state.projects.length && entry.section !== 'chat' ? button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () =>
-          chooseProject(host, tr("Добавить в проект"), state.projects, async (pid) => {
+        editableProjects().length && entry.section !== 'chat' ? button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () =>
+          chooseProject(host, tr("Добавить в проект"), editableProjects(), async (pid) => {
             await api('POST', `${PROJECTS_API}/${pid}/files/from-section`, { media_id: entry.id, section: entry.section }, { signal });
             say(tr("Файл добавлен в проект"), 'ok');
           })) : null,
@@ -225,7 +442,7 @@ export function mount(view, ctx) {
     const name = entry.dir && entry.from_chat ? tr("Файлы диалогов") : entry.name;
     const actions = el('div', { class: 'session-actions' });
     if (!entry.dir) actions.append(button(tr("Скачать"), { class: 'btn btn-sm' }, () => fetchFile(entry.download, name)));
-    if (!entry.from_chat && server()?.project?.role !== 'viewer') actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger' }, () => {
+    if (!entry.from_chat && writable()) actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger' }, () => {
       const remove = button(tr("Удалить"), { class: 'btn btn-danger' });
       const dialog = openDialog(host, { id: 'project-file-delete', title: tr("Удалить из проекта?"),
         body: [el('p', {}, name)], actions: [remove] });
@@ -268,34 +485,6 @@ export function mount(view, ctx) {
       }
     });
   }
-
-  projectPicker.addEventListener('change', async () => {
-    const files = [...projectPicker.files];
-    projectPicker.value = '';
-    if (!files.length) return;
-    const url = `${projectBase()}/upload`;
-    const sid = state.sid;
-    const parent = folder();
-    const failed = [];
-    projectUpload.disabled = true;
-    try {
-      for (const file of files) {
-        if (signal.aborted) break;
-        try {
-          await api('POST', url, file, { signal, headers: { 'x-studio-name': encodeURIComponent(file.name),
-            ...(parent ? { 'x-studio-folder': parent } : {}) } });
-        } catch (err) {
-          failed.push(`${file.name} — ${words(err)}`);
-        }
-      }
-      if (!signal.aborted && state.sid === sid) {
-        await load();
-        say(failed.length ? failed.join('\n') : tr("Загружено файлов: {0}", files.length), failed.length ? 'error' : 'ok');
-      }
-    } finally {
-      projectUpload.disabled = false;
-    }
-  });
 
   function entryRow(entry) {
     const path = join(state.path, entry.name);
@@ -343,22 +532,36 @@ export function mount(view, ctx) {
   async function load(after = null) {
     const version = ++loadVersion;
     const local = Boolean(server()?.local);
-    const project = server()?.project;
+    const project = state.project;
+    const gallery = state.sid === 'projects' && !project;
+    const linkList = state.sid === 'links';
+    const remote = !local && !project && !gallery && !linkList;
     if (!after) {
       visible.disconnect();
       list.replaceChildren();
       more.hidden = true;
+      choices.clear();
+      selecting = false;
+      paintSelection();
     }
     stopTrash?.();
     stopTrash = null;
-    toolbar.hidden = local || trash || !!project;
+    browser.hidden = gallery;
+    projectGallery.hidden = !gallery;
+    toolbar.hidden = !remote || trash;
     projectToolbar.hidden = !project;
-    projectMkdir.hidden = project?.role === 'viewer' || folder() === 'chats';
-    projectUpload.hidden = projectMkdir.hidden;
-    crumbs.hidden = trash;
+    projectUpload.hidden = projectImport.hidden = projectMkdir.hidden = !writable();
+    crumbs.hidden = trash || linkList;
     studioTrash.hidden = !(trash && local);
-    list.hidden = trash && local;
+    list.hidden = linkList || (trash && local);
+    linksBox.hidden = !(linkList || (remote && !trash));
+    if (!remote) fresh.hidden = true;
     paintTabs();
+    if (gallery) {
+      paintProjects();
+      return;
+    }
+    if (linkList) return;
     paintCrumbs();
     if (!studioTrash.hidden) {
       stopTrash = renderTrash(studioTrash);
@@ -377,12 +580,16 @@ export function mount(view, ctx) {
       return;
     }
     if (signal.aborted || version !== loadVersion) return;
-    const rows = result.entries.map(project ? projectRow : local ? studioRow : trash ? trashRow : entryRow);
+    const rows = result.entries.map((entry) => {
+      const row = project ? projectRow(entry) : local ? studioRow(entry) : trash ? trashRow(entry) : entryRow(entry);
+      return trash || entry.from_chat ? row : selectable(row, remote ? { ...entry, path: join(state.path, entry.name) } : entry);
+    });
     if (after) list.append(...rows);
     else list.replaceChildren(...(rows.length ? rows
       : [el('li', { class: 'muted', id: 'myfiles-none' }, trash ? tr("Корзина сервера пуста") : tr("Папка пуста"))]));
     next = result.next;
     more.hidden = !next;
+    paintSelection();
   }
 
   more.addEventListener('click', async () => {
@@ -443,11 +650,9 @@ export function mount(view, ctx) {
     });
   }
 
-  async function uploadOne(file) {
-    const { chunk, max_upload: limit } = server();
+  async function uploadOne(file, path, url, { chunk, max_upload: limit }, target) {
     if (file.size > limit) throw new Error(tr("Файл «{0}» больше предела сервера ({1})", file.name, sizeText(limit)));
-    const path = join(state.path, file.name);
-    const send = (body, range) => api('PUT', `${base()}/upload`, body, { signal, headers: {
+    const send = (body, range) => api('PUT', `${url}/upload`, body, { signal, headers: {
       'content-type': 'application/octet-stream', 'x-studio-name': encodeURIComponent(path), 'content-range': range } });
     if (!file.size) {
       await send(new Blob([]), 'bytes */0');
@@ -471,26 +676,62 @@ export function mount(view, ctx) {
           if (tries >= RETRIES || !(RETRY_STATUS.includes(err.status) || err.name === 'TimeoutError')) throw err;
         }
       }
-      say(tr("Загрузка «{0}»: {1}%", file.name, Math.floor((start * 100) / file.size)));
+      if (target === place()) say(tr("Загрузка «{0}»: {1}%", file.name, Math.floor((start * 100) / file.size)));
     }
   }
 
-  picker.addEventListener('change', async () => {
-    const files = [...picker.files];
-    picker.value = '';
-    for (const file of files) {
-      try {
-        await uploadOne(file);
-      } catch (err) {
-        if (!signal.aborted) say(words(err), 'error');
-        await load();
-        return;
-      }
+  let uploading = false;
+  const uploadButtons = [uploadFiles, uploadFolder, projectUpload, projectImport];
+  async function receive(input, project, directory) {
+    const files = [...input.files];
+    input.value = '';
+    if (!files.length || uploading || (project && (!state.project || !writable()))) return;
+    const target = place();
+    const source = server();
+    const url = project ? projectBase() : base();
+    const root = project ? folder() : state.path;
+    const folders = new Map();
+    const items = files.map((file) => ({ file, name: directory ? file.webkitRelativePath || file.name : file.name }));
+    uploading = true;
+    uploadButtons.forEach((control) => { control.disabled = true; });
+    say('');
+    try {
+      const failures = await each(items, async ({ file, name }) => {
+        const parts = name.split('/');
+        if (directory && parts.length < 2) throw new Error(tr("Браузер не передал путь к файлу в папке"));
+        const filename = parts.pop();
+        let parent = root;
+        let prefix = '';
+        for (const part of parts) {
+          prefix = join(prefix, part);
+          if (!folders.has(prefix)) {
+            const path = project ? null : join(parent, part);
+            folders.set(prefix, project
+              ? api('POST', `${url}/folders`, { name: part, parent, reuse: true }, { signal }).then((made) => made.id)
+              : api('POST', `${url}/mkdir`, { path }, { signal }).then(() => path));
+          }
+          parent = await folders.get(prefix);
+        }
+        if (project) {
+          await api('POST', `${url}/upload`, file, { signal, headers: { 'x-studio-name': encodeURIComponent(filename),
+            ...(parent ? { 'x-studio-folder': parent } : {}) } });
+        } else {
+          await uploadOne(file, join(parent, filename), url, source, target);
+        }
+      });
+      if (signal.aborted || target !== place()) return;
+      await load();
+      if (target === place()) say([tr("Загружено файлов: {0}", files.length - failures.length), ...failures].join('\n'),
+        failures.length ? 'error' : 'ok');
+    } finally {
+      uploading = false;
+      uploadButtons.forEach((control) => { control.disabled = false; });
     }
-    if (!files.length || signal.aborted) return;
-    say(tr("Загружено: {0}", files.map((f) => f.name).join(', ')), 'ok');
-    await load();
-  });
+  }
+  picker.addEventListener('change', () => receive(picker, false, false));
+  dirPicker.addEventListener('change', () => receive(dirPicker, false, true));
+  projectPicker.addEventListener('change', () => receive(projectPicker, true, false));
+  projectDirPicker.addEventListener('change', () => receive(projectDirPicker, true, true));
 
   function mkdirDialog() {
     const input = el('input', { class: 'input', id: 'myfiles-folder-name', maxlength: '255', autocomplete: 'off' });
@@ -528,22 +769,20 @@ export function mount(view, ctx) {
   (async () => {
     if (trash) load();
     try {
-      const available = await api('GET', '/api/my-files/servers?sections=true', undefined, { signal, unlock: !trash });
+      const [available, projects] = await Promise.all([
+        api('GET', '/api/my-files/servers?sections=true', undefined, { signal, unlock: !trash }),
+        trash ? null : api('GET', PROJECTS_API, undefined, { signal }),
+      ]);
       if (signal.aborted) return;
       if (trash) {
         state.servers = [studio, ...available.filter(server => !server.local)];
       } else {
-        const { items } = await api('GET', PROJECTS_API, undefined, { signal });
-        if (signal.aborted) return;
-        state.projects = items.filter((project) => project.role !== 'viewer');
-        const projects = items.map((project) => ({ key: project.id, project, name: projectName(project) }));
-        const sections = available.flatMap((s) => s.local
-          ? (s.sections || []).map((section, index) => ({ ...s, key: index ? `0-${section}` : 0, section, name: sectionName(section) }))
-          : [s]);
-        state.servers = [...projects, ...sections];
-        const requested = projects.find((p) => p.key === ctx.query.get('p'));
-        const initial = requested || sections[0] || projects[0];
-        if (initial) state.sid = keyOf(initial);
+        state.projects = projects.items;
+        createProject.disabled = false;
+        const extra = available.flatMap((s) => s.local
+          ? (s.sections || []).filter((section) => !['photo', 'video'].includes(section)).map(mediaSection) : [s]);
+        state.servers = [...mainSections, ...extra, linksSection];
+        if (state.sid === 'projects') state.project = state.projects.find((item) => item.id === ctx.query.get('p')) || null;
       }
     } catch (err) {
       if (!signal.aborted && (!trash || err.status !== 423)) say(words(err), 'error');
@@ -553,11 +792,6 @@ export function mount(view, ctx) {
       paintTabs();
       return;
     }
-    if (!state.servers.length) {
-      say(tr("Нет серверов MCP с «Моими файлами». Их подключают в «Настройки → Чат → MCP»."));
-      return;
-    }
-    browser.hidden = false;
     await Promise.all([load(), loadLinks()]);
   })();
 }

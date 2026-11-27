@@ -5,7 +5,7 @@ import unicodedata
 import uuid
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,8 @@ UPLOAD_MAX = 20 * 1024**2  # Shared request limit on the web entry points.
 DEPTH_MAX = 20
 NAME_MAX = 180
 PAGE = 100
+SELECTION_MAX = 100
+_ID = re.compile(r"[0-9a-f]{32}")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f-\x9f]')
 _RESERVED = re.compile(r"(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)", re.IGNORECASE)
 
@@ -30,6 +32,11 @@ _RESERVED = re.compile(r"(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|
 class FolderIn(BaseModel):
     name: str = Field(max_length=NAME_MAX)
     parent: str | None = Field(None, max_length=64)
+    reuse: bool = False
+
+
+class SelectionIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=SELECTION_MAX)
 
 
 class SourceIn(BaseModel):
@@ -55,7 +62,8 @@ def _source_name(raw: str) -> str:
 
 
 def _entry(pid: str, item_id: str):
-    row = state.DB.execute("SELECT * FROM chat_project_files WHERE project_id = ? AND id = ?",
+    row = state.DB.execute("SELECT f.*, m.rel_path FROM chat_project_files f LEFT JOIN media m ON m.id = f.media_id"
+                           " AND m.user_id = f.user_id WHERE f.project_id = ? AND f.id = ?",
                            (pid, item_id)).fetchone()
     if row is None:
         raise _error(404, "gone", "файл или папка не найдены")
@@ -164,7 +172,13 @@ async def mkdir(pid: str, body: FolderIn, request: Request):
     operations.check(uid)
     chat_projects.access(uid, pid, write=True)
     _folder(pid, body.parent, mkdir=True)
-    return _insert(uid, pid, body.parent, _name(body.name))
+    name = _name(body.name)
+    if body.reuse:
+        row = state.DB.execute("SELECT id FROM chat_project_files WHERE project_id = ? AND parent_id IS ?"
+                               " AND name_key = ? AND media_id IS NULL", (pid, body.parent, name.casefold())).fetchone()
+        if row is not None:
+            return {"id": row["id"]}
+    return _insert(uid, pid, body.parent, name)
 
 
 @router.post("/upload", status_code=201)
@@ -209,16 +223,58 @@ async def add_from_section(pid: str, body: SourceIn, request: Request):
     return _insert(uid, pid, body.parent, _source_name(rows[0]["download_name"]), body.media_id, body.section)
 
 
+def _require_deletable(uid, row):
+    mid = row["media_id"]
+    if mid and not _readable(uid, row["user_id"], mid):
+        lock_policy.require_media(row["user_id"], mid)
+        raise _error(404, "gone", "файл не найден")
+
+
+def _selection(pid, ids):
+    if not 0 < len(ids) <= SELECTION_MAX or not all(_ID.fullmatch(item_id) for item_id in ids):
+        raise _error(422, "invalid", "неверный список файлов проекта")
+    rows = [_entry(pid, item_id) for item_id in dict.fromkeys(ids)]
+    if len({row["parent_id"] for row in rows}) != 1:
+        raise _error(422, "invalid", "выберите файлы и папки на одном уровне")
+    return rows
+
+
+@router.post("/delete-selection", status_code=204)
+async def remove_selection(pid: str, body: SelectionIn, request: Request):
+    uid = request.state.user.id
+    operations.check(uid)
+    chat_projects.access(uid, pid, write=True)
+    ids = [row["id"] for row in _selection(pid, body.ids)]
+    marks = ",".join("?" * len(ids))
+    state.DB.execute("BEGIN")
+    try:
+        rows = state.DB.execute(
+            "WITH RECURSIVE tree(id, user_id, media_id) AS ("
+            f" SELECT id, user_id, media_id FROM chat_project_files WHERE project_id = ? AND id IN ({marks})"
+            " UNION ALL SELECT f.id, f.user_id, f.media_id FROM chat_project_files f JOIN tree ON f.parent_id = tree.id"
+            " WHERE f.project_id = ?) SELECT tree.user_id, tree.media_id, m.rel_path FROM tree JOIN media m"
+            " ON m.id = tree.media_id AND m.user_id = tree.user_id", (pid, *ids, pid)).fetchall()
+        for row in rows:
+            _require_deletable(uid, row)
+        state.DB.execute(f"DELETE FROM chat_project_files WHERE project_id = ? AND id IN ({marks})", (pid, *ids))
+        for author, mid, path in {tuple(row) for row in rows}:
+            if not media.referenced(author, mid):
+                media.queue(author, [(mid, path)])
+                state.DB.execute("DELETE FROM media WHERE user_id = ? AND id = ?", (author, mid))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+
+
 @router.delete("/{item_id}", status_code=204)
 async def remove(pid: str, item_id: str, request: Request):
     uid = request.state.user.id
     operations.check(uid)
     chat_projects.access(uid, pid, write=True)
     row = _entry(pid, item_id)
+    _require_deletable(uid, row)
     mid = row["media_id"]
-    if mid and not _readable(uid, row["user_id"], mid):
-        lock_policy.require_media(row["user_id"], mid)
-        raise _error(404, "gone", "файл не найден")
     if mid is None and state.DB.execute("SELECT 1 FROM chat_project_files WHERE parent_id = ? LIMIT 1",
                                         (item_id,)).fetchone():
         raise _error(409, "not_empty", "сначала удалите содержимое папки")
@@ -257,22 +313,24 @@ async def content(pid: str, item_id: str, request: Request):
     return await media.serve(author, mid, request, filename=name, cache="no-store")
 
 
+def _append_archive_rows(uid, pid, entries, rows, prefix=""):
+    for row in rows:
+        name = prefix + row["name"]
+        mid = row["media_id"]
+        if mid is None:
+            entries.append((name + "/", None, row["created"]))
+            _append_archive_rows(uid, pid, entries, _children(pid, row["id"]), name + "/")
+        else:
+            lock_policy.require_media(row["user_id"], mid)
+            if _readable(uid, row["user_id"], mid):
+                entries.append((name, state.CFG.media_dir / row["rel_path"], row["created"]))
+
+
 def _archive_entries(uid, pid, parent):
     entries = []
     if parent != CHAT_FILES:
         _folder(pid, parent)
-        stack = [(parent, "")]
-        while stack:
-            folder, prefix = stack.pop()
-            for row in _children(pid, folder):
-                name = prefix + row["name"]
-                if row["media_id"] is None:
-                    entries.append((name + "/", None, row["created"]))
-                    stack.append((row["id"], name + "/"))
-                else:
-                    lock_policy.require_media(row["user_id"], row["media_id"])
-                    if _readable(uid, row["user_id"], row["media_id"]):
-                        entries.append((name, state.CFG.media_dir / row["rel_path"], row["created"]))
+        _append_archive_rows(uid, pid, entries, _children(pid, parent))
     if parent is None or parent == CHAT_FILES:
         rows = _chat_files(uid, pid, limit=-1)
         if any(row["protected"] for row in rows):
@@ -290,11 +348,16 @@ def _archive_entries(uid, pid, parent):
 
 
 @router.get("/zip")
-async def download_zip(pid: str, request: Request, parent: str | None = None):
+async def download_zip(pid: str, request: Request, parent: str | None = None, item: list[str] | None = Query(default=None)):
     uid = request.state.user.id
     project = chat_projects.access(uid, pid)
-    entries = _archive_entries(uid, pid, parent)
-    title = _entry(pid, parent)["name"] if parent and parent != CHAT_FILES else project["name"]
+    if item:
+        entries = []
+        _append_archive_rows(uid, pid, entries, _selection(pid, item))
+        title = project["name"]
+    else:
+        entries = _archive_entries(uid, pid, parent)
+        title = _entry(pid, parent)["name"] if parent and parent != CHAT_FILES else project["name"]
     return StreamingResponse(media._zip(entries, media.user_zone(uid)), media_type="application/zip",
                              headers={"Content-Disposition": media.disposition(_source_name(title) + ".zip"),
                                       "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

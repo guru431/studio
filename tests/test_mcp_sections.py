@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 from urllib.parse import urlsplit
 
@@ -22,7 +23,8 @@ PATH = f"/artifacts/{ARTIFACT}/content"
 
 
 def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
-            named_upload=False, catalogs=False, monkeypatch=None, photo_job=False, catalog_results=None, chat_model=None):
+            named_upload=False, catalogs=False, monkeypatch=None, photo_job=False, catalog_results=None, chat_model=None,
+            upload_rejected=False, upload_transfer=False):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -45,6 +47,9 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
     if named_upload:
         tools["artifact_upload"] = (params(data_base64="string", mime_type="string", name="string"),
                                     ["data_base64", "mime_type"])
+    if upload_transfer:
+        tools["artifact_prepare_upload"] = (params(size="integer", mime_type="string", name="string", storage="string"),
+                                            ["size", "mime_type"])
     if clone_models:
         tools["speech_synthesize"][0]["model"] = {"type": "string", "enum": ["qwen3-tts", "f5-tts"], "default": "qwen3-tts"}
     if limits:
@@ -87,7 +92,11 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
                 elif name == "llm_ask":
                     data = {"text": "Reply from MCP"}
                 elif name == "artifact_upload":
+                    if upload_rejected:
+                        return httpx.Response(413, text="Request Entity Too Large")
                     data = {"id": ARTIFACT}
+                elif name == "artifact_prepare_upload":
+                    data = {"id": ARTIFACT, "chunk_size": 1 << 20, "upload_path": "https://example.net/ignored"}
                 elif name == "video_estimate":
                     data = {"text": "Estimated time"}
                 elif name == "text_translate":
@@ -157,6 +166,43 @@ def test_section_upload_sends_the_file_name_only_to_a_server_that_takes_it(studi
     calls = service(studio.gw, uploads=True)
     assert studio.c.post(route, json=payload).status_code == 200
     assert calls[0][0] == "artifact_upload" and "name" not in calls[0][1]
+
+
+@pytest.mark.parametrize("advertised", [True, False])
+def test_transcription_uses_chunk_transfer_only_when_mcp_advertises_it(studio, monkeypatch, advertised):
+    sid = add(studio)
+    route = f"/api/mcp-tools/transcribe/servers/{sid}/run"
+    raw = WAV_FAKE
+    payload = {"tool": "audio_transcribe", "files": {"artifact_id": {
+        "data": base64.b64encode(raw).decode(), "mime_type": "audio/wav", "name": "Audio.wav"}}}
+    calls = service(studio.gw, uploads=True, named_upload=True, upload_rejected=True, upload_transfer=advertised)
+    monkeypatch.setattr(mcp_sections, "ASR_UPLOAD_CHUNK", 16, raising=False)
+    chunks = bytearray()
+    complete_path = f"/artifacts/{ARTIFACT}/complete"
+
+    async def transfer(request):
+        assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        if request.method == "PATCH":
+            end = len(chunks) + len(request.content) - 1
+            assert request.headers["content-range"] == f"bytes {len(chunks)}-{end}/{len(raw)}"
+            assert 0 < len(request.content) <= 16
+            chunks.extend(request.content)
+            return httpx.Response(200, json={"id": ARTIFACT, "received": len(chunks)})
+        assert request.url.path == complete_path and request.method == "POST"
+        assert json.loads(request.content) == {"sha256": hashlib.sha256(raw).hexdigest()}
+        assert bytes(chunks) == raw
+        return httpx.Response(200, json={"id": ARTIFACT, "ready": True})
+
+    studio.gw.on.update({PATH: transfer, complete_path: transfer})
+    result = studio.c.post(route, json=payload)
+    if advertised:
+        assert result.status_code == 200, result.text
+        assert calls[1:] == [("artifact_prepare_upload", {"size": len(raw), "mime_type": "audio/wav",
+                                                           "name": "Audio.wav", "storage": "local"}),
+                             ("audio_transcribe", {"artifact_id": ARTIFACT})]
+    else:
+        assert result.status_code == 413 and result.json()["detail"]["code"] == "too_big"
+        assert [name for name, _ in calls] == ["artifact_upload"] and not chunks
 
 
 def test_video_job_upload_status_and_private_range_download(studio):
