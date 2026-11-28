@@ -1665,7 +1665,7 @@ async def visualization(aid: int, pid: str, body: VisualizationBody, request: Re
     agent = own_agent(request, aid)
     check_pid(pid)
     require_capability(aid, "visualizations")
-    raster = body.source.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif'))
+    raster = body.source.lower().endswith(code_visualizations.IMAGE_SUFFIXES)
     if raster:
         require_capability(aid, 'visualization_images')
     # Мост до `hello.visualization_scope` открывает участнику и общий каталог визуализаций Codex с HTML всех
@@ -1694,7 +1694,8 @@ async def visualization(aid: int, pid: str, body: VisualizationBody, request: Re
             raise _refuse(502, "bridge", ODD) from None
         if size > code_visualizations.MAX_BYTES:
             raise _refuse(413, "too_large", "Визуализация больше 10 МиБ")
-    token = code_visualizations.keep(request.state.user.id, bridge.tag(request.state.digest), aid, pid, text)
+    token = code_visualizations.keep(request.state.user.id, bridge.tag(request.state.digest), aid, pid, text,
+                                     source='' if raster else body.source)
     return {"token": token}
 
 
@@ -1708,8 +1709,36 @@ async def visualization_frame(aid: int, pid: str, token: str, request: Request):
     if not kept or kept[:4] != (token, session, aid, pid):
         raise _refuse(404, "not_found", "Визуализация закрыта — откройте её заново")
     # Cached HTML must not bypass the computer's PIN or a lost link.
-    await ask(request, aid, "projects")
-    return Response(code_visualizations.document(kept[4]), media_type="text/html", headers={
+    projects = await ask(request, aid, "projects")
+    fragment, source = kept[4:6]
+    images = []
+    if source:
+        project_dir = next((row['dir'] for row in projects.get('items', []) if isinstance(row, dict)
+                            and row.get('pid') == pid and isinstance(row.get('dir'), str)), '')
+        fragment, references = await asyncio.to_thread(code_visualizations.relative_images, fragment, source,
+                                                       project_dir, PATH_MAX)
+        remaining = code_visualizations.MAX_IMAGE_BYTES
+        for path, urls in references.items():
+            try:
+                data = await ask(request, aid, 'raw', project=pid, path=check_path(path), quiet=True, passive=True)
+                raw, mime = await asyncio.to_thread(_image_bytes, data, max_bytes=min(IMAGE_MAX, remaining))
+            except HTTPException as error:
+                if error.detail['code'] not in ('not_found', 'outside', 'invalid', 'path', 'too_large', 'not_image'):
+                    raise
+                continue
+            remaining -= len(raw)
+            images.append((urls, f'data:{mime};base64,{data["data"]}'))
+            if not remaining:
+                break
+        if images:
+            await ask(request, aid, 'projects', passive=True)
+    document = await asyncio.to_thread(code_visualizations.document, fragment, images)
+    own_agent(request, aid)
+    if not _session_open(request.state.digest):
+        raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
+    if code_visualizations.VIEWS.get(request.state.user.id) is not kept:
+        raise _refuse(404, 'not_found', 'Визуализация закрыта — откройте её заново')
+    return Response(document, media_type="text/html", headers={
         "Content-Security-Policy": code_visualizations.CSP, "Referrer-Policy": "no-referrer",
         "Cache-Control": "no-store"})
 

@@ -1,4 +1,8 @@
 """Private HTML previews: session-bound tickets, expiry and the sandbox response contract."""
+import base64
+
+import pytest
+
 import bridge
 import claude_code
 import code_visualizations
@@ -59,6 +63,50 @@ def test_lucide_comes_from_the_studio_and_only_when_the_fragment_uses_it(studio)
     studio.c.post('/logout')
     script = studio.c.get(code_visualizations.LUCIDE)            # статика открыта и фрейму без cookie
     assert script.status_code == 200 and b'lucide 1.17.0' in script.content[:100]
+
+
+@pytest.mark.parametrize('source', ['renders/gallery.html', 'c:/Work/projects/alpha/renders/gallery.html'])
+def test_relative_raster_references_use_project_files(studio, caplog, source):
+    aid, machine, endpoint = ready(studio)
+    images = {'renders/обзор 1.png': png(160, 100), 'full.png': png(320, 200)}
+    machine.projects['alpha']['files'].update(images)
+    machine.projects['alpha']['files'][source] = '''
+        <a href="../full.png"><img src="обзор%201.png?rev=1"></a>
+        <img src="./обзор%201.png"><img src="broken.png"><img src="missing.png">
+        <img src="../../outside.png"><img src="%2e%2e/%2e%2e/outside.png">
+        <img src="/absolute.png"><img src="https://example.invalid/remote.png">
+        <img src="../other.html"><script>const fake = '<img src="script.png">';</script>
+        <textarea><img src="literal.png"></textarea>
+    '''.encode()
+    machine.projects['alpha']['files']['renders/broken.png'] = b'not a raster image'
+    token = studio.c.post(endpoint, json={'source': source}).json()['token']
+    frame = studio.c.get(endpoint + '/' + token)
+    assert frame.status_code == 200
+    for data in images.values():
+        assert frame.content.count(b'data:image/png;base64,' + base64.b64encode(data)) == 1
+    assert '<textarea><img src="literal.png"></textarea>' in frame.text
+    assert [r['path'] for r in machine.requests if r['op'] == 'raw'] == [
+        'full.png', 'renders/обзор 1.png', 'renders/broken.png', 'renders/missing.png']
+    assert 'gallery.html' not in caplog.text and 'full.png' not in caplog.text
+    assert "'self'" not in frame.headers['content-security-policy'].split('img-src ')[1].split(';')[0]
+
+
+def test_relative_raster_preview_rechecks_pin_after_loading_images(studio, monkeypatch):
+    aid, machine, endpoint = ready(studio, pin='2468', opened=False)
+    studio.c.post(url(aid, 'open'), json={'pin': '2468'})
+    machine.projects['alpha']['files'].update({'view.html': b'<img src="render.png">', 'render.png': png(160, 100)})
+    read = machine._op_raw
+
+    def read_and_close(req, events):
+        result = read(req, events)
+        machine.open_sessions.clear()
+        return result
+
+    monkeypatch.setattr(machine, '_op_raw', read_and_close)
+    token = studio.c.post(endpoint, json={'source': 'view.html'}).json()['token']
+    frame = studio.c.get(endpoint + '/' + token)
+    assert frame.status_code == 409 and detail(frame)['code'] == 'closed'
+    assert b'data:image' not in frame.content
 
 
 def test_ticket_expires_is_bound_to_session_and_rechecks_computer(studio):

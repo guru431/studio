@@ -201,7 +201,11 @@ HTML через op `visualization` и создаёт случайный токе
 общая CSP оболочки остаётся прежней. `code_visualizations.py` держит один HTML до `code_visualizations.MAX_BYTES` (10 МиБ; для картинки — обёртку с base64 исходника до 10 МиБ) на
 пользователя в памяти на 5 минут, очищается при `bridge.forget` и по сроку, без диска/журнала.
 В iframe нет same-origin, форм, вложенных страниц и сетевых API; разрешены inline-скрипты
-и библиотеки из фиксированных CDN. Пути машин не попадают в URL. Проверки:
+и библиотеки из фиксированных CDN. В HTML из проекта относительные `img src` и ссылки `a href` на PNG, JPEG, WebP
+и GIF разрешаются от папки HTML внутри проекта. Мост читает их обычным `raw`, сервер проверяет формат и размер и
+встраивает проверенные данные в ответ iframe. Ссылка показывает исходное изображение поверх галереи. До
+`code_visualizations.MAX_IMAGES` (24) изображений и `code_visualizations.MAX_IMAGE_BYTES` (20 МиБ) исходных данных
+на окно. Недоступные файлы пропускаются. Пути машин не попадают в URL. Проверки:
 `test_code_visualizations.py`, `test_ui_visualizations.py`, `agent/tests/test_visualizations.py`.
 
 `code_visualizations`: lucide 1.17.0 (ISC + MIT Feather) — копией `app/static/vendor/lucide.min.js`, подключается только

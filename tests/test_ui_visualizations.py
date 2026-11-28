@@ -12,6 +12,7 @@ from test_media import png
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 SOURCE = 'C:/Users/owner/.codex/visualizations/2026/11/08/thread/dashboard.html'
 IMAGE_SOURCE = 'C:/Users/owner/.codex/generated_images/thread/view.png'
+GALLERY_SOURCE = 'renders/gallery.html'
 MARKER = 'visualize' + json.dumps({'path': SOURCE, 'mode': 'wide', 'title': 'Панель'}) + ''
 FRAGMENT = '''<button id="increment" onclick="this.textContent=Number(this.textContent)+1">0</button>
 <i data-lucide="check" id="icon"></i>
@@ -26,12 +27,17 @@ try { document.cookie; document.querySelector('#isolation').textContent = 'cooki
 def test_visualizations_in_history_and_stream_are_interactive_and_isolated(desktop_browser, live, width, tmp_path):
     login = f'visualization-{desktop_browser.browser_type.name}-{width}'
     live.add_user(login)
-    text = MARKER + '\n\n[Открыть HTML](' + SOURCE + ')\n\n[Открыть фотовизуализацию](' + IMAGE_SOURCE + ')\n\n```text\n' + MARKER + '\n```\n\n' + 'Paragraph.\n\n' * 800
+    text = (MARKER + f'\n\n[Открыть HTML]({SOURCE})\n\n[Открыть фотовизуализацию]({IMAGE_SOURCE})'
+            + f'\n\n[Открыть галерею]({GALLERY_SOURCE})\n\n```text\n{MARKER}\n```\n\n' + 'Paragraph.\n\n' * 800)
     message = {'id': 'answer', 'role': 'assistant', 'text': text, 'steps': [], 'time': T0}
     session = code_session('Панель', messages=[message])
     # HTML с вложенными данными превышает прежний предел редактора 2 МиБ.
     fragment = FRAGMENT.encode() + b'<!--' + b'x' * (2 * 1024 * 1024) + b'-->'
-    machine = FakeMachine({'alpha': {'files': {SOURCE: fragment, IMAGE_SOURCE: png(160, 100)}, 'chats': {CODE_CHAT_A: session}}})
+    gallery = (b'<!doctype html><html><body><a href="full.png"><img src="preview.png" alt="Render"></a>'
+               b'</body></html>')
+    files = {SOURCE: fragment, IMAGE_SOURCE: png(160, 100), GALLERY_SOURCE: gallery,
+             'renders/preview.png': png(160, 100), 'renders/full.png': png(1920, 1080)}
+    machine = FakeMachine({'alpha': {'files': files, 'chats': {CODE_CHAT_A: session}}})
     machine.visualizations = machine.visualization_images = True
     aid, channel = code_online(live, login, machine)
     signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
@@ -82,6 +88,16 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             image.wait_for()
             assert image.evaluate('node => node.naturalWidth === 160')
             close.click()
+            page.get_by_role('link', name='Открыть галерею', exact=True).click()
+            thumbnail = frame.locator('a img[alt="Render"][src^="data:"]')
+            assert thumbnail.evaluate('img => img.decode().then(() => img.naturalWidth)') == 160
+            thumbnail.click()
+            full = frame.locator('dialog[open] img')
+            assert full.evaluate('img => img.decode().then(() => img.naturalWidth)') == 1920
+            frame.locator('dialog[open] button').click()
+            assert frame.locator('dialog[open]').count() == 0
+            assert thumbnail.is_visible()
+            close.click()
             machine.script = [{'k': 'text', 'text': MARKER[:30]}, {'k': 'text', 'text': MARKER[30:]}]
             page.locator('#code-text').fill('Покажи панель')
             page.locator('#code-send').click()
@@ -94,6 +110,7 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             page.locator('#code-chat[data-loaded="1"]').wait_for()
             page.locator('.code-visualization-open').last.wait_for()
             assert not any('/Users/owner/' in request or 'dashboard.html' in request for request in requests)
+            assert not any(request.endswith(('/gallery.html', '/full.png', '/preview.png')) for request in requests)
             assert '/static/vendor/lucide.min.js' in ' '.join(requests)
             assert all(request.startswith((live.url, 'data:', 'blob:', 'about:')) for request in requests), requests
             assert len(context.pages) == 1 and not errors
