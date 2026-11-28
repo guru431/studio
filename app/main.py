@@ -5,6 +5,7 @@
 `/manifest.en.webmanifest`, `/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
 `/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
 Почтовые `/account/*` имеют собственные проверки Origin, тела, токенов и пауз (`email_accounts`).
+OIDC для Cleaner (`cleaner_oidc`) проверяет регистрацию клиента, сессию Studio и код с PKCE.
 Публичные `/share/unlock`, `/share/check`, `/share/file` проверяют отдельные PIN/read-токены;
 доступа к API учётки они не дают, секреты несут только телом запроса, ответы не кэшируются.
 Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
@@ -53,6 +54,7 @@ import my_files
 import chat_exports
 import chat_shares
 import cleaner_client as cleaner
+import cleaner_oidc
 import cleaner_route
 import checks
 import claude_code
@@ -210,6 +212,7 @@ app.middleware("http")(headers)
 app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), name="static-versioned")
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
+app.include_router(cleaner_oidc.router)
 app.include_router(email_accounts.router)
 app.include_router(totp.router)
 app.include_router(profile.router)

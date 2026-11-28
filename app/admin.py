@@ -176,6 +176,7 @@ async def check_cleaner_settings():
 
 
 USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email, u.ldap_guid, u.last_activity,"
+             " (SELECT subject FROM cleaner_oidc_subjects WHERE user_id = u.id) AS cleaner_oidc_subject,"
              " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections,"
              " (SELECT json_group_array(json_array(id, name)) FROM (SELECT g.id, g.name FROM access_group_members m"
              "   JOIN access_groups g ON g.id = m.group_id WHERE m.user_id = u.id ORDER BY g.id))"
@@ -237,7 +238,10 @@ async def list_users():
                 status = "working"
             elif last is not None and now - last < RECENT_SEC:
                 status = "recent"
-        items.append({**_user_doc(row), "activity": status, "last_activity": last, "online": online})
+        item = {**_user_doc(row), "activity": status, "last_activity": last, "online": online}
+        if state.CFG.cleaner_oidc is not None:
+            item["cleaner_oidc_subject"] = row["cleaner_oidc_subject"]
+        items.append(item)
     return {"items": items, "ldap_configured": ldap_auth.configured()}
 
 

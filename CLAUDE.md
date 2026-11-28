@@ -119,7 +119,7 @@ minor для возможностей, major для несовместимых �
 |---|---|---|
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `i18n_words` (слова сервера по-английски для выгрузок, как `StudioI18n.message`), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Проекты | `chat_projects` (проекты, настройки и память), `chat_project_files` (хранилище проекта и ZIP) | [chat](docs/architecture/chat.md#проекты) |
-| Вход и защита | `auth`, `ldap_auth` (Active Directory), `totp` (приложение-аутентификатор и резервные коды), `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md), [ldap](docs/architecture/ldap.md) |
+| Вход и защита | `auth`, `ldap_auth` (Active Directory), `totp` (приложение-аутентификатор и резервные коды), `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin`, `cleaner_oidc` (вход в Cleaner) | [security-lock](docs/architecture/security-lock.md), [ldap](docs/architecture/ldap.md), [Cleaner](docs/cleaner-integration.md#вход-в-cleaner-через-studio) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Домен и HTTPS | `site_https`: настройки для администратора, применение сертификата через Unix-сокет хоста, адрес в письмах | [deploy-docker](docs/architecture/deploy-docker.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему), `cleaner_route` (внешние модели через шлюз Cleaner: настройки администратора, служебный ключ шифром), `profiles` (профиль подключения: системный текст, параметры запроса, подсказки) | [connections](docs/architecture/connections.md) |
@@ -262,6 +262,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 86 | `mcp_source` у расшифровок, сканов, озвучек и переводов, `transcript_files` — файлы протокола и субтитров, `mcp_gallery_trash` — корзина фото и роликов MCP | Готовые записи видны в прежней истории. Дополнительные файлы расшифровки скрыты. Фото и ролики MCP, убранные в корзину, снова видны в ленте. | Перед откатом дождаться завершения очередей. Схему и файлы сохраняют. |
 | 87 | `chat_project_files.mtime` — время изменения исходного файла или содержимого папки | Прежний код работает с прежними полями. Новые загрузки при откате получают `NULL` в `mtime`. | Не нужен |
 | 88 | `users.last_activity`, `sessions.present` и индекс сессий по учётке | Прежний код игнорирует отметки активности. | Не нужен |
+| 89 | Постоянные идентификаторы OIDC для Cleaner и временные коды и токены сессий | Прежний код игнорирует новые таблицы. | Не нужен. Идентификаторы сохраняются в SQLite. |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.

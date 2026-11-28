@@ -48,7 +48,8 @@ if [ "$SECRET" = 1 ]; then
     (umask 077
      printf '%s\n' "$line" > "$ENV_FILE.part"
      if [ -f "$ENV_FILE" ]; then
-         grep -m1 '^STUDIO_CLEANER_CA=' "$ENV_FILE" >> "$ENV_FILE.part" || true
+         grep -E '^STUDIO_CLEANER_(CA|OIDC_REDIRECT_URI|OIDC_CLIENT_SECRET|OIDC_SIGNING_KEY)=' \
+             "$ENV_FILE" >> "$ENV_FILE.part" || true
      fi)
     mv -f "$ENV_FILE.part" "$ENV_FILE"
     unset line
@@ -58,15 +59,22 @@ if [ "$ADMIN" = 1 ]; then
     admin_lines=$(cat)
     [ -n "$admin_lines" ] || { echo "ОШИБКА: --admin-stdin без строк на stdin" >&2; exit 1; }
 fi
-# Only the data key and an optional absolute path to the public Cleaner certificate are accepted.
+# Only the data key and optional Cleaner CA and login settings are accepted.
 # The CA file lives outside /etc/studio: that secrets directory is intentionally root-only.
+oidc_entries='STUDIO_CLEANER_OIDC_(REDIRECT_URI=https://[][A-Za-z0-9.:-]+/login/studio/callback|CLIENT_SECRET=[A-Za-z0-9_-]{43,128}|SIGNING_KEY=[A-Za-z0-9+/]+=*)'
 if ! grep -qE '^STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=$' "$ENV_FILE" 2>/dev/null \
         || [ "$(grep -c '^STUDIO_DATA_KEY=' "$ENV_FILE")" -ne 1 ] \
         || [ "$(grep -c '^STUDIO_CLEANER_CA=' "$ENV_FILE" || true)" -gt 1 ] \
-        || grep -qvE '^STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=$|^STUDIO_CLEANER_CA=/[A-Za-z0-9_./-]+$' "$ENV_FILE"; then
-    echo "ОШИБКА: $ENV_FILE — одна STUDIO_DATA_KEY=… и необязательная STUDIO_CLEANER_CA=/путь/к/сертификату" >&2
+        || grep -qvE "^(STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=|STUDIO_CLEANER_CA=/[A-Za-z0-9_./-]+|$oidc_entries)$" "$ENV_FILE"; then
+    echo "ОШИБКА: $ENV_FILE — одна STUDIO_DATA_KEY и необязательные настройки STUDIO_CLEANER_*" >&2
     exit 1
 fi
+for name in REDIRECT_URI CLIENT_SECRET SIGNING_KEY; do
+    if [ "$(grep -c "^STUDIO_CLEANER_OIDC_$name=" "$ENV_FILE" || true)" -gt 1 ]; then
+        echo "ОШИБКА: $ENV_FILE — повторяется STUDIO_CLEANER_OIDC_$name" >&2
+        exit 1
+    fi
+done
 # Файлы истории — на шаре storage. Не смонтирована или нет прав — до подмены кода, прежний работает.
 # Проверка — настоящей записью: у cifs с noperm `test -w` (access(2)) верен при любых правах на
 # сервере, а каталог с тем же путём на диске debian прошёл бы его и без шары.

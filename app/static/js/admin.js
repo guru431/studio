@@ -261,6 +261,17 @@ function usersBlock(host) {
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
         button(tr("Изменить"), { class: 'btn btn-sm user-edit' }, () => edit(user)),
         button(tr("Подключения"), { class: 'btn btn-sm user-conns' }, () => connections(user)),
+        user.cleaner_oidc_subject
+          ? button(tr("ID для Cleaner"), { class: 'btn btn-sm' }, () => {
+            const value = el('input', { class: 'input', readonly: true, value: user.cleaner_oidc_subject,
+              'aria-label': tr("ID для Cleaner") });
+            const copy = button(tr("Копировать"), { class: 'btn' }, async () => {
+              try { await navigator.clipboard.writeText(value.value); copy.textContent = tr("Скопировано"); }
+              catch { value.focus(); value.select(); }
+            });
+            openDialog(host, { id: 'cleaner-subject-dialog', title: tr("ID для Cleaner"), body: [value], actions: [copy] });
+          })
+          : null,
         !self && !user.ldap && user.email && !user.disabled
           ? button(tr("Отправить ссылку для нового пароля"), { class: 'btn btn-sm user-password-link' }, () => sendPasswordLink(user))
           : null,

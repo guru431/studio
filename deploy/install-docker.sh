@@ -46,7 +46,8 @@ if [ "$SECRET" = 1 ]; then
     # Explicit --new-secret is the only path that rotates an existing key.
     (umask 077; printf '%s\n' "$line" > /etc/studio/studio.env.next)
     if [ -f /etc/studio/studio.env ]; then
-        grep '^STUDIO_CLEANER_CA=' /etc/studio/studio.env >> /etc/studio/studio.env.next || true
+        grep -E '^STUDIO_CLEANER_(CA|OIDC_REDIRECT_URI|OIDC_CLIENT_SECRET|OIDC_SIGNING_KEY)=' \
+            /etc/studio/studio.env >> /etc/studio/studio.env.next || true
     fi
     mv /etc/studio/studio.env.next /etc/studio/studio.env
 fi

@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 88
+VERSION = 89
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1255,6 +1255,31 @@ CREATE INDEX sessions_user ON sessions(user_id);
 UPDATE users SET last_activity = (SELECT MAX(active) FROM sessions WHERE user_id = users.id);"""
 SCHEMA += USER_ACTIVITY_88
 
+CLEANER_OIDC_89 = """CREATE TABLE cleaner_oidc_subjects(
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    subject TEXT NOT NULL UNIQUE CHECK(length(subject) = 32));
+INSERT INTO cleaner_oidc_subjects(user_id, subject) SELECT id, lower(hex(randomblob(16))) FROM users;
+CREATE TRIGGER cleaner_oidc_new_subject AFTER INSERT ON users BEGIN
+    INSERT INTO cleaner_oidc_subjects(user_id, subject) VALUES (NEW.id, lower(hex(randomblob(16))));
+END;
+CREATE TABLE cleaner_oidc_codes(
+    digest TEXT PRIMARY KEY,
+    session_digest TEXT NOT NULL REFERENCES sessions(digest) ON DELETE CASCADE,
+    client_binding TEXT NOT NULL,
+    challenge TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    expires REAL NOT NULL);
+CREATE INDEX cleaner_oidc_codes_expiry ON cleaner_oidc_codes(expires);
+CREATE INDEX cleaner_oidc_codes_session ON cleaner_oidc_codes(session_digest);
+CREATE TABLE cleaner_oidc_tokens(
+    digest TEXT PRIMARY KEY,
+    session_digest TEXT NOT NULL REFERENCES sessions(digest) ON DELETE CASCADE,
+    client_binding TEXT NOT NULL,
+    expires REAL NOT NULL);
+CREATE INDEX cleaner_oidc_tokens_expiry ON cleaner_oidc_tokens(expires);
+CREATE INDEX cleaner_oidc_tokens_session ON cleaner_oidc_tokens(session_digest);"""
+SCHEMA += CLEANER_OIDC_89
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1422,6 +1447,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     86: MCP_MEDIA_86,
     87: PROJECT_FILE_DATES_87,
     88: USER_ACTIVITY_88,
+    89: CLEANER_OIDC_89,
 }
 
 

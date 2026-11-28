@@ -775,6 +775,7 @@ globalThis.StudioEnglish = Object.freeze({
   "себя удалить нельзя": "you cannot delete yourself",
   "себя разжаловать нельзя": "you cannot remove your own administrator rights",
   "Пользователи": "Users",
+  "ID для Cleaner": "Cleaner ID",
   "Ожидает регистрации до {0}": "Awaiting registration until {0}",
   "Зарегистрирован": "Registered",
   "Учётка удалена": "Account deleted",

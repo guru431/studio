@@ -17,12 +17,13 @@
 
 - История — в базе (`/var/lib/studio/studio.db`) и на шаре (`/mnt/storage/SharedData/studio`), в
   журнал — ничего: промпты, ключи, пароли, тексты, картинки и имена файлов не пишутся.
-- Анонимны `/health`, `/login`, `/logout`, `/robots.txt`, оболочка PWA и три класса входов со своей защитой:
+- Анонимны `/health`, `/login`, `/logout`, `/robots.txt`, оболочка PWA и входы со своей защитой:
   публичная ссылка `/share` и `/share/unlock|check|file` (`chat_shares.py`: секреты только телом JSON ≤ 4096 байт,
   чужой `Origin` — 403, PIN с паузами и общим пределом, read-токен без прав учётки), почтовые действия `/account/*`
   (одноразовые токены, Origin, предел тела и паузы — [email-accounts](docs/architecture/email-accounts.md)) и `auth.OPEN_API`:
   `/api/agent/enroll` (логин и пароль с паузами `/login`) и `/api/agent/package` (Bearer-ключ действующего
   устройства активной учётки), `/api/agent/linux-installer` (временный Bearer-пропуск сессии на Linux-установщик).
+  OIDC для Cleaner (`cleaner_oidc`): постоянная регистрация клиента, сессия Studio, одноразовый код с PKCE.
   Остальное `/api/*` — через сессию и CSRF (`auth.guard`); WebSocket
   `/api/agent/link` проверяет ключ сам. Пользователь видит своё и явно выданные проекты «Агентов»
   (`project_access.py`, [совместная работа](docs/architecture/project-collaboration.md)). Запертой сессии (блокировка на всех

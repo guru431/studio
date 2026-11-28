@@ -847,10 +847,13 @@ def _install_environment(tmp_path, contents, replacement=None):
 @pytest.mark.integration  # Bash с файловыми процессами под xdist: > 1 с на Windows
 @pytest.mark.parametrize("extra,valid", [
     ("", True), ("STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n", True),
+    ("STUDIO_CLEANER_OIDC_REDIRECT_URI=https://cleaner.example.com:8443/login/studio/callback\n", True),
+    ("STUDIO_CLEANER_OIDC_REDIRECT_URI=https://[::1]/login/studio/callback\n", True),
+    ("STUDIO_CLEANER_OIDC_REDIRECT_URI=http://cleaner.example.com/login/studio/callback\n", False),
     ("STUDIO_CLEANER_CA=/one.pem\nSTUDIO_CLEANER_CA=/two.pem\n", False),
     ("UNKNOWN_SETTING=1\n", False), ("STUDIO_CLEANER_CA=$(touch unsafe)\n", False),
 ])
-def test_install_accepts_only_the_optional_public_ca_setting(tmp_path, extra, valid):
+def test_install_accepts_only_recognized_environment_entries(tmp_path, extra, valid):
     from cryptography.fernet import Fernet
     key = Fernet.generate_key().decode()
     result, _ = _install_environment(tmp_path, f"STUDIO_DATA_KEY={key}\n" + extra)
@@ -859,13 +862,16 @@ def test_install_accepts_only_the_optional_public_ca_setting(tmp_path, extra, va
 
 
 @pytest.mark.integration  # настоящий bash и несколько файловых процессов: > 1 с на Windows
-def test_data_key_rotation_preserves_the_public_cleaner_ca(tmp_path):
+def test_data_key_rotation_preserves_cleaner_settings(tmp_path):
     from cryptography.fernet import Fernet
     old, new = Fernet.generate_key().decode(), Fernet.generate_key().decode()
-    ca = "STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n"
-    result, path = _install_environment(tmp_path, f"STUDIO_DATA_KEY={old}\n" + ca, f"STUDIO_DATA_KEY={new}\n")
+    cleaner = ("STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n"
+               "STUDIO_CLEANER_OIDC_REDIRECT_URI=https://cleaner.example.com/login/studio/callback\n"
+               f"STUDIO_CLEANER_OIDC_CLIENT_SECRET={'s' * 43}\n"
+               "STUDIO_CLEANER_OIDC_SIGNING_KEY=c3ludGhldGljCg==\n")
+    result, path = _install_environment(tmp_path, f"STUDIO_DATA_KEY={old}\n" + cleaner, f"STUDIO_DATA_KEY={new}\n")
     assert result.returncode == 0, result.stderr
-    assert path.read_text() == f"STUDIO_DATA_KEY={new}\n" + ca
+    assert path.read_text() == f"STUDIO_DATA_KEY={new}\n" + cleaner
     assert old not in result.stdout + result.stderr and new not in result.stdout + result.stderr
 
 

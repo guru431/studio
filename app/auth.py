@@ -394,14 +394,18 @@ def page(name: str, error: str = "") -> str:
 
 
 def login_target(value: str) -> str:
-    """Адрес 303 после входа: `/` и проверенный фрагмент (`NEXT_RE`), с которого пришли, или `/`. Всегда путь этого
-    сайта: открытого перенаправления нет, фрагмент на сервер больше не уходит и в журнал не пишется."""
+    """Внутренний путь после входа: продолжение для Cleaner, проверенный фрагмент раздела или главная."""
+    import cleaner_oidc
+    if value == cleaner_oidc.LOGIN_NEXT:
+        return cleaner_oidc.RESUME_PATH
     return "/" + value if len(value) <= NEXT_MAX and NEXT_RE.fullmatch(value) else "/"
 
 
-def _login_page(error: str = "", status: int = 200, login: str = "") -> HTMLResponse:
+def _login_page(error: str = "", status: int = 200, login: str = "", *, sso: bool = False) -> HTMLResponse:
     """`login` — набранное в поле логина: после отказа его не набирать заново (пароль — заново)."""
-    body = page("login.html", error).replace("{{login}}", html.escape(login[:254], quote=True))
+    import cleaner_oidc
+    body = (page("login.html", error).replace("{{login}}", html.escape(login[:254], quote=True))
+            .replace("{{next}}", cleaner_oidc.LOGIN_NEXT if sso else ""))
     return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
 
 
@@ -437,13 +441,18 @@ async def small_body(request: Request, limit: int) -> bytes | None:
 
 @router.api_route("/login", methods=["GET", "HEAD"])
 async def login_page(request: Request):
+    import cleaner_oidc
+    sso = request.query_params.get("continue") == "cleaner" and cleaner_oidc.pending(request) is not None
     if session_user(request.cookies.get(COOKIE), renew=False):
+        if sso:
+            return RedirectResponse(cleaner_oidc.RESUME_PATH, status_code=303, headers=cleaner_oidc.HEADERS)
         return RedirectResponse("/", status_code=303)
-    return _login_page()
+    return _login_page(sso=sso)
 
 
 @router.post("/login")
 async def login(request: Request):
+    import cleaner_oidc
     ip = client_ip(request)
     if foreign_origin(request):
         log.warning("вход с %s: чужой Origin", ip)
@@ -453,23 +462,26 @@ async def login(request: Request):
         log.warning("вход с %s: тело длиннее %d байт", ip, LOGIN_BODY_MAX)
         return _login_page("Слишком длинный запрос", 413)
     form = parse_qs(body.decode("utf-8", "replace"))
+    next_ = (form.get("next") or [""])[0]
+    sso = next_ == cleaner_oidc.LOGIN_NEXT and cleaner_oidc.pending(request) is not None
+    if next_ == cleaner_oidc.LOGIN_NEXT and not sso:
+        next_ = ""
     typed = (form.get("login") or [""])[0].strip()
     name = identity_name(typed.lower())
     password = (form.get("password") or [""])[0]
     if locked(name, ip):
         log.warning("вход с %s: пауза", ip)
-        return _login_page("Слишком много попыток — подождите 15 минут", 429, typed)
+        return _login_page("Слишком много попыток — подождите 15 минут", 429, typed, sso=sso)
     uid = await check_password(name, password, ip)
     if uid is not None:               # сессия — без await после сверки
         import email_accounts
         import totp
         row = state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()
-        next_ = (form.get("next") or [""])[0]
         if totp.enabled(uid):            # приложение — вместо письма: вход не зависит от SMTP
             try:
                 token = totp.challenge(uid, request, next_)
             except HTTPException as err:
-                return _login_page(err.detail["message"], err.status_code, typed)
+                return _login_page(err.detail["message"], err.status_code, typed, sso=sso)
             response = RedirectResponse("/account/totp", status_code=303)
             email_accounts.challenge_cookie(response, token)
             response.headers["Cache-Control"] = "no-store"
@@ -478,14 +490,14 @@ async def login(request: Request):
             try:
                 token = await email_accounts.login_code(uid, request, next_)
             except HTTPException as err:
-                return _login_page(err.detail["message"], err.status_code, typed)
+                return _login_page(err.detail["message"], err.status_code, typed, sso=sso)
             response = RedirectResponse("/account/code", status_code=303)
             email_accounts.challenge_cookie(response, token)
             response.headers["Cache-Control"] = "no-store"
             return response
         return finish_login(uid, request, next_)
     log.warning("вход с %s: неверно", ip)
-    return _login_page("Неверный логин или пароль", 401, typed)
+    return _login_page("Неверный логин или пароль", 401, typed, sso=sso)
 
 
 def identity_name(value: str) -> str:
