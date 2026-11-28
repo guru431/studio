@@ -143,6 +143,37 @@ def test_real_cleaner_preview_send_restore_and_delete(studio, cleaner_server, cl
 
 
 CANARY = "ivan@contoso.ru"         # заглушка провайдера Cleaner отвечает 500, если увидит её неочищенной
+MANUAL_KEY = "ck_" + "M" * 43
+
+
+@pytest.mark.parametrize("cleaner_server", [True], indirect=True)
+def test_real_cleaner_manual_access_and_deletion(studio, cleaner_server, cleaner_ca_client):
+    url, real, _ = cleaner_server
+    port = httpx.URL(url).port
+    make_user(studio, "owner")
+    make_user(studio, "other")
+    signin(studio, "owner")
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (f'["127.0.0.1:{port}"]',))
+    base = "/api/cleaner/manual"
+    saved = studio.c.put(base + "/access", json={"base_url": url, "key": MANUAL_KEY})
+    assert saved.json() == {"configured": True, "base_url": url}
+    assert state.DB.execute("SELECT token_enc FROM cleaner_manual_access").fetchone()[0] != MANUAL_KEY
+    chat_id = studio.c.post(base + "/chats").json()["id"]
+    chat = f"{base}/chats/{chat_id}"
+
+    signin(studio, "other")
+    assert studio.c.get(base + "/chats").json()["items"] == []
+    assert studio.c.get(chat).status_code == 404
+    assert studio.c.delete(chat).status_code == 404
+    signin(studio, "owner")
+    assert studio.c.get(chat).json()["items"] == []
+    assert studio.c.get(chat).headers["cache-control"] == "no-store"
+
+    assert studio.c.request("DELETE", "/api/history", json={"password": "password-123"}).status_code == 200
+    assert studio.c.get(chat).status_code == 404
+    studio.c.portal.call(cleaner_client.purge)
+    assert state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions").fetchone()[0] == 0
+    assert real.get(f"{url}/api/v1/manual/chats/{chat_id}", headers={"Authorization": f"Bearer {MANUAL_KEY}"}).status_code == 404
 
 
 def echo_mcp(studio) -> list:

@@ -785,7 +785,7 @@ export function installLock() {
     const view = document.getElementById('view');
     view.style.visibility = 'hidden';
     view.inert = true;
-    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'owui', 'code'].find((s) => !guarded(s)) || 'settings';
+    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'cleaner', 'owui', 'code'].find((s) => !guarded(s)) || 'settings';
     location.hash = `#/${next}`;
     screen.close();
     cover(false);

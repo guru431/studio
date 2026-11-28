@@ -7,7 +7,7 @@ from fastapi import HTTPException
 import clock
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "code", "owui")
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "cleaner", "code", "owui")
 #: допуск доставки отметки: больше интервала отметок видимой вкладки (lock.js ALIVE_SEC = 15) и срока её
 #: ответа (MARK_SEC = 8) — иначе таймер 0 («при возвращении») запирал бы работающую вкладку от опоздания на мгновение
 HEARTBEAT_GRACE = 30
@@ -143,7 +143,9 @@ def blocks(request, uid: int, digest: str) -> bool:
     section = {"chats": "chat", "chat-projects": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat",
                "images": "photo", "presets": "photo", "videos": "video", "transcripts": "transcribe", "transcribe": "transcribe",
                "voices": "speech", "speeches": "speech", "speech": "speech", "ocr": "ocr",
-               "translate": "translate", "code": "code", "agents": "code", "owui": "owui"}.get(head)
+               "translate": "translate", "cleaner": "cleaner", "code": "code", "agents": "code", "owui": "owui"}.get(head)
+    if path == "/api/cleaner/manual/access" and request.method != "GET":
+        return True
     if section == "ocr" and not protected(row, section) and len(pieces) > 3:
         return bool(scan_sections(uid, pieces[3]) & hidden(digest))     # документ закрытого чата или перевода
     if section is not None:

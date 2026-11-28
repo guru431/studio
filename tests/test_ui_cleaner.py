@@ -7,10 +7,62 @@ import pytest
 import db
 import security
 import state
-from test_cleaner_contract import cleaner_server
+from test_cleaner_contract import MANUAL_KEY, cleaner_server
 from test_ui_browser import READY, browser, live, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_manual_cleaner_copy_and_restore_across_reload(browser, live, cleaner_server, monkeypatch, width, tmp_path):
+    url, real, _ = cleaner_server
+    port = httpx.URL(url).port
+    fallback = live.gw.handler
+
+    def forward(request):
+        if request.url.port != port:
+            return fallback(request)
+        response = real.request(request.method, str(request.url), headers=request.headers, content=request.content)
+        return httpx.Response(response.status_code, headers=response.headers, content=response.content)
+
+    monkeypatch.setattr(state.HTTP._transport, "handler", forward)
+    login = f"manual-cleaner-{width}"
+    live.add_user(login)
+    conn = db.connect(live.db_path)
+    try:
+        conn.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (json.dumps([f"127.0.0.1:{port}"]),))
+    finally:
+        conn.close()
+    result = browser.drive(live.url + "/#/settings/cleaner", [*signin(login), ("wait", READY),
+        ("wait", "document.querySelector('.cleaner-manual-form button[type=submit]')?.disabled === false"),
+        set_value("#cleaner-manual-address", url), set_value("#cleaner-manual-key", MANUAL_KEY),
+        ("click", ".cleaner-manual-form button[type=submit]"),
+        ("wait", "document.querySelector('.cleaner-manual-form [role=status]')?.textContent === 'Ручная очистка подключена'"),
+        ("click", '.settings-panel a[href="#/cleaner"]'),
+        ("wait", "document.querySelector('#cleaner-manual-new')?.disabled === false"),
+        ("click", "#cleaner-manual-new"),
+        ("wait", "document.querySelector('#cleaner-manual-prompt')"),
+        set_value("#cleaner-manual-prompt", "Почта test@example.org"),
+        ("click", ".manual-cleaner-form button[type=submit]"),
+        ("wait", "document.querySelector('#cleaner-manual-copy')"),
+        ("eval", "preview", "document.querySelector('#cleaner-manual-result').value"),
+        ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
+        ("screenshot", str(tmp_path / f"manual-cleaner-{width}.png")),
+        ("click", "#cleaner-manual-copy"),
+        ("wait", "document.querySelector('#cleaner-manual-reply')"),
+        ("eval", "reload", "location.reload()"),
+        ("wait", "document.querySelector('#cleaner-manual-reply')"),
+        set_value("#cleaner-manual-reply", "Ответ для <EMAIL_1>"),
+        ("click", ".manual-cleaner-form button[type=submit]"),
+        ("wait", "document.querySelector('.manual-cleaner-answer textarea')"),
+        ("eval", "restored", "document.querySelector('.manual-cleaner-answer textarea').value"),
+        ("eval", "continue", "Boolean(document.querySelector('#cleaner-manual-prompt'))"),
+    ], width=width, mobile=width == 320)
+    assert not result.get("failed"), result
+    assert result["values"]["fits"] and result["values"]["continue"]
+    assert "<EMAIL_1>" in result["values"]["preview"] and "test@example.org" not in result["values"]["preview"]
+    assert result["values"]["restored"] == "Ответ для test@example.org"
+    assert not problems(result), problems(result)
 
 
 @pytest.mark.parametrize("width", [320, 1280])

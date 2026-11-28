@@ -79,7 +79,7 @@ ENCRYPTED_BACKUP_FIELDS = (
      " SELECT state_a FROM mirror_pairs WHERE state_a IS NOT NULL UNION ALL"
      " SELECT state_b FROM mirror_pairs WHERE state_b IS NOT NULL"),
     ("cleaner", "токены Cleaner", "SELECT token_enc FROM cleaner_contexts UNION ALL"
-     " SELECT token_enc FROM cleaner_deletions"),
+     " SELECT token_enc FROM cleaner_deletions UNION ALL SELECT token_enc FROM cleaner_manual_access"),
     ("notifications", "ключи уведомлений", "SELECT value FROM settings WHERE key = 'vapid' UNION ALL"
      " SELECT token_enc FROM ntfy_devices WHERE token_enc IS NOT NULL UNION ALL"
      " SELECT token_enc FROM ntfy_settings WHERE token_enc IS NOT NULL"),

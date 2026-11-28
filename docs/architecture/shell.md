@@ -185,9 +185,9 @@ Studio, с которой открыта страница; версию пере
 Редактор, открытый из «Оформления», после «Сохранить» и «Отмена» закрывается целиком (фокус — на открывшую кнопку),
 из листа — возвращается в лист. Лист «Ещё» и панель «В работе» лежат вне раздела и закрываются на `hashchange`
 (жест «назад» на iPhone меняет раздел под открытым окном).
-Настольные девять вкладок сохраняются.
-Клавиши разделов — один обработчик `app.js::sectionKey`: Alt+1…9 (`event.code` `Digit1`…`Digit9`, любая раскладка) —
-вкладки `#rail` по порядку реестра, Alt+/ (`Slash`) — «Поиск»; на macOS — Control+Option (Option+цифра вводит символы).
+На компьютере видны все вкладки разделов.
+Клавиши разделов обрабатывает `app.js::sectionKey`. Alt+1…9 открывают прежние разделы, Alt+0 — «Очистку»,
+Alt+/ — «Поиск». На macOS вместо Alt используется Control+Option. Обработчик читает `event.code` независимо от раскладки.
 Не срабатывает при открытом `dialog`, `isComposing`, повторе, Shift/Meta, Ctrl+Alt вне macOS (AltGr) и в
 `contenteditable`; в обычном поле срабатывает — Alt+цифра текста не вводит, а поле задания держит фокус. У вкладок
 рельса и `#search-open` — `aria-keyshortcuts` и подсказка. С `code.js::shortcut` (Ctrl+Alt+←/→, Ctrl+K) не пересекается.
@@ -200,8 +200,8 @@ Studio, с которой открыта страница; версию пере
 - `sections-meta.js` (`SECTIONS`, `NAMES`, `sectionName`, `sectionPairs`) — **единственный источник** имён, групп,
   подсказок и порядка разделов: рельс (`app.js::buildRail`; статических вкладок в `index.html` нет), нижняя панель,
   заголовок вкладки, «Поиск», «В работе», `code-activity.js`, `connection-form.js` `SECTION_NAMES`, списки
-  `settings.js` (`LOCK_SECTIONS`, `EXPORT_SECTIONS`, `RAIL_ORDER`). Порядок с группами: Чат · Фото, Видео ·
-  Озвучка, Расшифровка · Сканы, Перевод · Агенты (`.tab.group-start::before` — разделитель). Сервер: `sections.NAMES`
+  `settings.js` (`LOCK_SECTIONS`, `EXPORT_SECTIONS`, `RAIL_ORDER`). Порядок с группами: Проекты · Фото, Видео ·
+  Озвучка, Расшифровка · Сканы, Перевод, Очистка · Open WebUI, Агенты (`.tab.group-start::before` — разделитель). Сервер: `sections.NAMES`
   (`speech` — «Озвучка»; адрес `#/speech` и id прежние), `push.TITLE` = «Агенты»; сверка — `tests/test_sections_meta.py`.
   Названия — [глоссарий](../glossary.md).
 - `icons.js` (`icon`, `svg`, `iconButton`) — **единственный набор SVG**: локальные таблицы `ICONS` и разметка

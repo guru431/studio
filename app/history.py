@@ -65,6 +65,7 @@ async def _delete_all(user_id: int) -> int:
         media.queue(user_id, failed)
         state.DB.execute("DELETE FROM attachments WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))      # сообщения — каскадом
+        state.DB.execute("DELETE FROM cleaner_contexts WHERE resource = 'manual' AND user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chat_project_files WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chat_projects WHERE user_id = ? AND inbox = 0", (user_id,))
         state.DB.execute("UPDATE chat_projects SET description = '', context = '' WHERE user_id = ? AND inbox = 1", (user_id,))

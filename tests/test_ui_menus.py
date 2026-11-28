@@ -86,7 +86,7 @@ def test_model_menu_is_a_radio_menu(engine, live, cookie, width):
 def test_rail_groups_title_and_heading_focus(engine, live, cookie, width, scheme, tmp_path):
     context, page = shell(engine, live, cookie, width=width, touch=width < 760, scheme=scheme)
     with context:
-        assert page.title() == 'Чат — Студия'
+        assert page.title() == 'Проекты — Студия'
         assert page.locator('#view .view-loading').count() == 0
         tabs = page.evaluate("[...document.querySelectorAll('#rail a.tab')].map(t => [t.dataset.section,"
                              " t.getAttribute('aria-label').split(' · ')[0], t.classList.contains('group-start')])")
@@ -102,8 +102,9 @@ def test_rail_groups_title_and_heading_focus(engine, live, cookie, width, scheme
         pw.expect(page.locator('#view h1')).to_be_focused()
         heading = page.evaluate("document.activeElement.textContent")
         page.screenshot(path=str(tmp_path / f'rail-{width}-{scheme}.png'))
-    assert tabs == [['chat', 'Чат', False], ['photo', 'Фото', True], ['video', 'Видео', False],
+    assert tabs == [['chat', 'Проекты', False], ['photo', 'Фото', True], ['video', 'Видео', False],
                     ['speech', 'Озвучка', True], ['transcribe', 'Расшифровка', False], ['ocr', 'Сканы', True],
-                    ['translate', 'Перевод', False], ['owui', 'Open WebUI', True], ['code', 'Агенты', False]]
+                    ['translate', 'Перевод', False], ['cleaner', 'Очистка', False],
+                    ['owui', 'Open WebUI', True], ['code', 'Агенты', False]]
     assert all(display == ('none' if width < 760 else 'block') for display in separators), separators
     assert heading == 'Видео'

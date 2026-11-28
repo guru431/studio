@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 89
+VERSION = 90
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1280,6 +1280,22 @@ CREATE INDEX cleaner_oidc_tokens_expiry ON cleaner_oidc_tokens(expires);
 CREATE INDEX cleaner_oidc_tokens_session ON cleaner_oidc_tokens(session_digest);"""
 SCHEMA += CLEANER_OIDC_89
 
+#: Personal credentials for manual Cleaner dialogs. Their context rows use the negative connection ID
+#: so that the existing deletion queue can serve them independently of model connections.
+CLEANER_MANUAL_90 = """
+CREATE TABLE cleaner_manual_access (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    base_url TEXT NOT NULL,
+    remote_owner TEXT NOT NULL,
+    token_enc BLOB NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(user_id, base_url, remote_owner)
+);
+CREATE UNIQUE INDEX cleaner_manual_active ON cleaner_manual_access(user_id) WHERE active = 1;
+"""
+SCHEMA += CLEANER_MANUAL_90
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1448,6 +1464,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     87: PROJECT_FILE_DATES_87,
     88: USER_ACTIVITY_88,
     89: CLEANER_OIDC_89,
+    90: CLEANER_MANUAL_90,
 }
 
 

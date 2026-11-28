@@ -75,7 +75,7 @@ class ScreenLock(BaseModel):
     def valid_sections(cls, value):
         if value is None or not value or ("*" in value and value != ["*"]) or any(
                 section not in (*lock_policy.SECTIONS, "*") for section in value):
-            raise ValueError("выберите всё приложение или хотя бы один из девяти разделов")
+            raise ValueError("выберите всё приложение или хотя бы один раздел")
         return list(dict.fromkeys(value))
 
     @field_validator("timeout")

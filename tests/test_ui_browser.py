@@ -3131,15 +3131,16 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     })()"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
       - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#refresh-app').getBoundingClientRect().left - end; })()"""
-    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("photo"),
+                                       ("wait", "document.querySelector('#view .head')"),
                                        ("eval", "fits", fits), ("eval", "spacing", spacing),
                                        ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
                       width=width, mobile=width < 760)
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    expected = (["Чат", "Фото", "Агенты", "Ещё"] if width < 760 else
-                ["Чат", "Фото", "Видео", "Озвучка", "Расшифровка", "Сканы", "Перевод", "Open WebUI", "Агенты"])
+    expected = (["Проекты", "Фото", "Агенты", "Ещё"] if width < 760 else
+                ["Проекты", "Фото", "Видео", "Озвучка", "Расшифровка", "Сканы", "Перевод", "Очистка", "Open WebUI", "Агенты"])
     assert [name for name, _, _ in r["values"]["fits"]] == expected
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
@@ -8877,7 +8878,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui", "code"]
+    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "cleaner", "owui", "code"]
     assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)

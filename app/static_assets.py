@@ -45,7 +45,7 @@ def module_preloads(directory: Path) -> dict[str, list[str]]:
 
     shell = graph(['app', 'lock-start'])
     result = {'shell': sorted(shell)}
-    for section in ('chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'owui',
+    for section in ('chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'cleaner', 'owui',
                     'code', 'code-chat', 'search', 'settings', 'admin'):
         result[section] = sorted(graph([section]) - shell)
     result['markdown'] = ['vendor/marked.min.js', 'vendor/purify.min.js', 'vendor/highlight.min.js']

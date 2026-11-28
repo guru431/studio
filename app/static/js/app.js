@@ -55,6 +55,7 @@ const LOADERS = {
   transcribe: () => import('./transcribe.js'),
   ocr: () => import('./ocr.js'),
   translate: () => import('./translate.js'),
+  cleaner: () => import('./cleaner.js'),
   owui: () => import('./owui.js'),
   code: () => import('./code.js'),
   search: () => import('./search.js'),
@@ -67,6 +68,7 @@ const LOADERS = {
 const SECTIONS = Object.fromEntries(Object.entries(LOADERS).map(([id, load]) =>
   [id, { title: sectionName(id), admin: id === 'admin', load }]));
 const HINTS = Object.fromEntries(SECTION_LIST.filter((s) => s.hint).map((s) => [s.id, s.hint]));
+const DEFAULT_SHORTCUTS = SECTION_LIST.filter((s) => s.shortcut === undefined);
 /** Клавиши разделов (sectionKey): на macOS Option+цифра вводит символы — там Control+Option. */
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 const HOTKEY = MAC ? 'Control+Alt+' : 'Alt+';
@@ -129,7 +131,7 @@ function allowed({ section, id }) {
   const def = SECTIONS[section];
   return def && !(def.admin && !me.is_admin)
     && (id === null || section === 'chat' || section === 'settings' || section === 'code'
-      || section === 'owui' || section === 'help');
+      || section === 'cleaner' || section === 'owui' || section === 'help');
 }
 
 function revealView() {
@@ -265,9 +267,10 @@ function buildRail() {
         el('span', { id: 'code-inbox-dot', class: 'tab-dot', 'aria-hidden': 'true', hidden: '' }))
       : el('span', { class: 'tab-icon' }, svgIcon(s.id),
         el('span', { class: 'tab-count section-running-count', 'aria-hidden': 'true', hidden: '' }));
-    const keys = `${HOTKEY}${SECTION_LIST.indexOf(s) + 1}`;
+    const digit = s.shortcut ?? DEFAULT_SHORTCUTS.indexOf(s) + 1;
+    const keys = `${HOTKEY}${digit}`;
     const tab = el('a', { class: group !== null && s.group !== group ? 'tab group-start' : 'tab', href: `#/${s.id}`,
-      'data-section': s.id, 'aria-label': s.name, 'aria-keyshortcuts': keys, title: `${s.name} · ${keys}` },
+      'data-section': s.id, 'data-shortcut': digit, 'aria-label': s.name, 'aria-keyshortcuts': keys, title: `${s.name} · ${keys}` },
       glyph, el('span', {}, s.name));
     group = s.group;
     rail.insertBefore(tab, spacer);
@@ -295,7 +298,7 @@ function meetingDot(rail, before) {
   });
 }
 
-/** Клавиши разделов на компьютере: Alt+1…9 — разделы в порядке рельса (реестр sections-meta.js), Alt+/ — «Поиск»;
+/** Клавиши разделов на компьютере: Alt+1…9 — прежние разделы, Alt+0 — «Очистка», Alt+/ — «Поиск»;
  * на macOS — Control+Option (Option+цифра там вводит символы). По event.code — работают и в русской раскладке.
  * Не срабатывают в открытом окне (dialog), при наборе IME, с Shift/Meta (и Ctrl вне macOS: Ctrl+Alt — это AltGr) и в
  * contenteditable. В обычном поле работают: Alt+цифра текста не вводит, а поле задания «Агентов» и «Чата» держит фокус.
@@ -311,9 +314,9 @@ function sectionKey(event) {
     lockImmediately();
     return;
   }
-  const digit = /^Digit([1-9])$/.exec(event.code);
+  const digit = /^Digit([0-9])$/.exec(event.code);
   const target = event.code === 'Slash' ? document.getElementById('search-open')
-    : digit ? document.querySelectorAll('#rail a.tab[data-section]')[Number(digit[1]) - 1] : null;
+    : digit ? document.querySelector(`#rail a.tab[data-shortcut="${digit[1]}"]`) : null;
   if (!target) return;
   event.preventDefault();
   location.hash = target.getAttribute('href');

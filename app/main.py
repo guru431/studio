@@ -54,6 +54,7 @@ import my_files
 import chat_exports
 import chat_shares
 import cleaner_client as cleaner
+import cleaner_manual
 import cleaner_oidc
 import cleaner_route
 import checks
@@ -213,6 +214,7 @@ app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), na
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
 app.include_router(cleaner_oidc.router)
+app.include_router(cleaner_manual.router)
 app.include_router(email_accounts.router)
 app.include_router(totp.router)
 app.include_router(profile.router)

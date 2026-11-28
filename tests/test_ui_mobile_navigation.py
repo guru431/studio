@@ -181,15 +181,20 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'savedCompact', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')")], width=width, mobile=True)
     assert not r.get('failed'), (r.get('failed'), list(r.get('values', {})), r.get('log'))
     values = r['values']
-    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'owui', 'code']
+    assert values['allTabs'] == values['kept'] == [
+        'chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'cleaner', 'owui', 'code',
+    ]
     assert values['mode'] == 'all' and values['moreHidden'] and not values['overflow'], values
     geometry = values['geometry']
     assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels']), geometry
-    assert [name for name, _ in values['names']] == ['Чат', 'Фото', 'Видео', 'Озвучка', 'Расшифровка', 'Сканы', 'Перевод', 'Open WebUI', 'Агенты']
+    assert [name for name, _ in values['names']] == [
+        'Проекты', 'Фото', 'Видео', 'Озвучка', 'Расшифровка', 'Сканы', 'Перевод', 'Очистка', 'Open WebUI', 'Агенты',
+    ]
     assert all(shown for _, shown in values['names']), values['names']
     assert len({round(button['top']) for button in values['buttonRow']}) == 1
     assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
-    assert all(button['width'] >= width / 9 - 1 and button['height'] >= 44 for button in values['buttonRow'])
+    assert all(button['width'] >= width / len(values['allTabs']) - 1 and button['height'] >= 44
+               for button in values['buttonRow'])
     assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
     assert values['focusBack'] == 'appearance-mobile-nav-open'
     assert values['moreActive'] == 'Ещё: Перевод'

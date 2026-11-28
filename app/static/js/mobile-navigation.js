@@ -41,7 +41,7 @@ export function setupMobileNavigation(me) {
   const all = el('input', { id: 'mobile-nav-mode-all', type: 'radio', name: 'mobile-nav-mode', value: 'all' });
   const modes = el('fieldset', {}, el('legend', {}, tr("Нижняя панель")),
     el('label', {}, compact, tr("3–4 раздела и «Ещё»")),
-    el('label', {}, all, tr("Все разделы · 9 иконок")));
+    el('label', {}, all, tr("Все разделы")));
   const choices = el('fieldset', {}, el('legend', {}, tr("Выберите 3–4 основных раздела")));
   const count = el('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
   const save = el('button', { id: 'mobile-nav-save', class: 'btn btn-accent', type: 'submit' }, tr("Сохранить"));

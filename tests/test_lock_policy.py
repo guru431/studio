@@ -336,12 +336,13 @@ def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
 SECTION_HEADS = {"chats": "chat", "chat-projects": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat", "images": "photo", "presets": "photo", "videos": "video",
                  "transcripts": "transcribe", "transcribe": "transcribe", "voices": "speech", "speeches": "speech",
                  "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code",
-                 "owui": "owui"}
+                 "owui": "owui", "cleaner": "cleaner"}
 #: прочие маршруты /api/* — явно. "closed" — закрыт любой частичной защитой (управление защитой, уведомлениями,
 #: ключами, общие выгрузки), "open" — открыт (данные без истории или отфильтрованные по закрытым разделам),
 #: "lock" — запросы самой блокировки, "media" — по разделам файла, раздел — только при его защите.
 #: Новый маршрут без строки здесь роняет тест: решите, к чему он относится, и научите этому lock_policy.blocks.
 ROUTES = {
+    ("PUT", "/api/cleaner/manual/access"): "closed",
     ("GET", "/api/admin/https"): "closed",
     ("PUT", "/api/admin/https"): "closed",
     ("GET", "/api/admin/smtp"): "closed",
@@ -487,7 +488,7 @@ def test_every_api_route_is_classified_for_partial_protection(studio):
                          (f'["{selected}"]', uid))
         state.DB.execute("UPDATE sessions SET seen = NULL WHERE digest = ?", (digest,))
         for method, path in routes:
-            kind = SECTION_HEADS.get(path.split("/")[2]) or ROUTES[(method, path)]
+            kind = ROUTES.get((method, path)) or SECTION_HEADS[path.split("/")[2]]
             if kind == "lock":
                 assert path in auth.SCREEN_LOCK_PATHS
                 continue

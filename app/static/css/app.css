@@ -2936,3 +2936,33 @@ details.owui-tool[open] { flex-basis: 100%; }
 }
 .chat-history .owui-feed-list { padding-right: calc(30px + var(--space-6)); }
 @media (prefers-reduced-motion: reduce) { .owui-panel { transition: none !important; } }
+
+/* Ручной перенос текста Cleaner. */
+.manual-cleaner { padding: var(--space-6); min-width: 0; }
+.manual-cleaner .head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.manual-cleaner-layout { display: flex; align-items: start; gap: var(--space-6); }
+.manual-cleaner-list { flex: 0 0 12rem; display: grid; gap: var(--space-2); }
+.manual-cleaner-list[hidden] { display: none; }
+.manual-cleaner-list a { padding: var(--space-3); border-radius: var(--r-control); color: var(--text-1); }
+.manual-cleaner-list a[aria-current] { background: var(--accent-soft); color: var(--accent); }
+.manual-cleaner-content { flex: 1; min-width: 0; }
+.manual-cleaner-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
+.manual-cleaner-panel, .manual-cleaner-form, .cleaner-manual-form { display: grid; gap: var(--space-3); align-content: start; }
+.manual-cleaner-panel .btn, .manual-cleaner-form .btn { justify-self: start; }
+.manual-cleaner-panel textarea { display: block; width: 100%; min-width: 0; resize: vertical; }
+.manual-cleaner-source { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit;
+  padding: var(--space-4); background: var(--surface-2); border-radius: var(--r-control); }
+.manual-cleaner-mark { color: var(--accent); background: var(--accent-soft); border: 0; border-radius: var(--r-sm);
+  padding: 0 .15em; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; cursor: pointer; }
+.manual-cleaner-answer { display: grid; gap: var(--space-2); }
+.manual-cleaner-actions { justify-content: end; margin-bottom: var(--space-3); }
+.manual-cleaner-rules .manual-cleaner-form { padding-top: var(--space-3); }
+@media (max-width: 860px) {
+  .manual-cleaner-layout { display: block; }
+  .manual-cleaner-list { display: flex; overflow: auto; margin-bottom: var(--space-4); }
+  .manual-cleaner-list a { flex: 0 0 auto; }
+}
+@media (max-width: 640px) {
+  .manual-cleaner { padding: var(--space-4); }
+  .manual-cleaner-columns { grid-template-columns: minmax(0, 1fr); }
+}

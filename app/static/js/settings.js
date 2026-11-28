@@ -61,6 +61,7 @@ import { statsBlock } from './chat-stats.js';
 import { glossaryBlock } from './translate-glossary.js';
 import { smtpSettings } from './smtp-settings.js';
 import { httpsSettings } from './https-settings.js';
+import { cleanerAccessBlock } from './cleaner-access.js';
 import { SPEECH_LANGUAGES, dictationLanguage, setDictationLanguage } from './mic.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionName, sectionPairs } from './sections-meta.js';
 
@@ -1238,7 +1239,7 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
  * с их файлами, образцы голосов, ссылки «Поделиться», личные базы знаний (общие остаются) и рабочее место «Агентов». */
 function wipeWhat() {
   // «Агенты» и «Open WebUI» истории в Studio не держат (`history: false` реестра)
-  const sections = RAIL_SECTIONS.filter((s) => s.history !== false).map((s) => `«${s.name}»`).join(', ');
+  const sections = RAIL_SECTIONS.filter((s) => s.history !== false || s.eraseRemote).map((s) => `«${s.name}»`).join(', ');
   return tr("Удалятся безвозвратно: вся история разделов {0} вместе с файлами, образцы голосов, все ссылки ", sections)
     + tr("«Поделиться», личные базы знаний с документами (и из корзины), а в разделе «{0}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, ", NAMES.code)
     + tr("Codex, OpenCode и DeepSeek Harness хранятся на компьютерах и останутся.");
@@ -1842,6 +1843,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       el('div', { class: 'section-panel', 'data-section': id }, ...blocks));
     if (shown === 'cleaner') {
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'cleaner' },
+        cleanerAccessBlock(),
         el('section', { class: 'block' }, el('h2', {}, tr("Очистка данных · Cleaner")),
           el('p', {}, tr("Личные подключения и модели по умолчанию для чата и перевода.")),
           el('details', { class: 'small' }, el('summary', {}, tr("Как подключить и использовать")),
