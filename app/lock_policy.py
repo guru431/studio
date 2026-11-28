@@ -86,7 +86,8 @@ MEDIA_SOURCES = {
     "chat": (("attachments", ("media_id",)), ("chat_media", ("media_id",)), ("chat_project_files", ("media_id",))),
     "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
     "video": (("videos", ("media_id", "source_media_id")),),
-    "transcribe": (("transcripts", ("source_media_id", "result_media_id", "listen_media_id")),),
+    "transcribe": (("transcripts", ("source_media_id", "result_media_id", "listen_media_id")),
+                   ("transcript_files", ("media_id",))),
     "speech": (("voices", ("media_id",)), ("voice_samples", ("media_id",)), ("speeches", ("media_id", "previous_media_id"))),
     "translate": (("translations", ("source_media_id",)),),
 }
@@ -98,7 +99,9 @@ def media_sections(uid: int, media_id: str) -> set[str]:
     «Поделиться» — раздела снимка: «Чат», «Агенты» или раздел записи."""
     found = {row[0] for row in state.DB.execute(
         "SELECT j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id"
-        " WHERE f.user_id = ? AND f.media_id = ?", (uid, media_id))}
+        " WHERE f.user_id = ? AND f.media_id = ?"
+        " UNION SELECT section FROM mcp_gallery_trash WHERE user_id = ? AND ? IN (media_id, source_media_id)",
+        (uid, media_id, uid, media_id))}
     found.update(row[0] for row in state.DB.execute(
         "SELECT source_section FROM chat_project_files WHERE user_id = ? AND media_id = ? AND source_section IS NOT NULL",
         (uid, media_id)))

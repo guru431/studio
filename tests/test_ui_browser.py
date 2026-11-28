@@ -784,7 +784,7 @@ def test_friend_sees_no_owner_history(browser, live):
         *go("admin"), ("wait", "document.querySelector('#user-add') && document.querySelector('#users tbody tr')"),
         ("eval", "head", "[...document.querySelectorAll('#users thead th')].map(t => t.textContent)"),
         ("wait", "document.querySelector('#users tr[data-login=friend]')"),
-        ("eval", "row", "[...document.querySelectorAll('#users tr[data-login=friend] td')].slice(0, 6).map(t => t.textContent)"),
+        ("eval", "row", "[...document.querySelectorAll('#users tr[data-login=friend] td')].slice(0, 7).map(t => t.textContent)"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         ("click", "#avatar"), ("click", "#menu-logout"),
         ("wait", "location.pathname === '/login' && document.querySelector('#login')"),
@@ -794,8 +794,8 @@ def test_friend_sees_no_owner_history(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["made"] is True and v["owner"][0] >= 1 and v["owner"][1] >= 1
-    assert v["head"][:6] == ["Логин", "Email", "Имя", "Админ", "Отключён", "Подключений"]
-    assert v["row"] == ["friend", "friend@example.com", "friend", "нет", "нет", "0"]
+    assert v["head"][:7] == ["Логин", "Email", "Имя", "Админ", "Отключён", "Активность", "Подключений"]
+    assert v["row"] == ["friend", "friend@example.com", "friend", "нет", "нет", "Нет данных об активности", "0"]
     assert v["friend"] == [0, 0] and v["menuAdmin"] is True
     assert not problems(r), problems(r)
 
@@ -805,10 +805,13 @@ def test_admin_renames_a_user_in_the_panel(browser, live):
     dialog = "#user-edit-dialog"
     r = browser.drive(live.url + "/", [*signin("chief"), ("wait", READY), *go("admin"),
         ("wait", "document.querySelector('tr[data-login=olduser] .user-edit')"),
+        ("eval", "activity", "!!document.querySelector('tr[data-login=chief] [data-activity=recent]') && "
+         "document.querySelector('tr[data-login=chief] .user-activity time')?.dateTime"),
         ("click", "tr[data-login=olduser] .user-edit"), ("wait", is_open(dialog)),
         set_value(f"{dialog} [name=login]", "newuser"), ("click", "#user-edit-save"),
         ("wait", "document.querySelector('tr[data-login=newuser]')")])
     assert not r.get("failed"), r
+    assert r["values"]["activity"]
     assert not problems(r), problems(r)
 
 

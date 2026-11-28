@@ -479,7 +479,8 @@ def section_out(user_id: int | None, section: str, passport: bool = True) -> dic
 
 
 def all_out(user_id: int | None, passport: bool = True) -> dict:
-    return {"sections": [section_out(user_id, s, passport) for s in SECTIONS]}
+    return {"sections": [section_out(user_id, s, passport) for s in SECTIONS],
+            "cleaner_sections": list(CLEANER) if cleaner_route.configured() else []}
 
 
 async def found(user_id: int | None, section: str, conn_id: int) -> dict:

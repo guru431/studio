@@ -10,8 +10,8 @@
   (`_live(…, renew=False)`) и блокировку после тела и кладёт свежую учётку в `request.state.user` (роль для
   `auth.require_admin` — из базы): зависимость всего приложения (`main.app`, FastAPI читает объявленное тело до
   зависимостей; асинхронная `auth.recheck_after_body` — синхронную FastAPI увёл бы в поток к общей базе) и вызов в конце чтения потоком — `auth.small_body`, `forms.read_body`, `documents` и записи
-  расшифровки (файл удаляется). GET, открытые входы и WebSocket не затрагивает. Apache ограничивает время тела
-  `RequestReadTimeout body=20-1800,MinRate=500` (mod_reqtimeout). Проверки — `test_auth.py`.
+  расшифровки и файлы проектов (файл удаляется). GET, открытые входы и WebSocket не затрагивает. Apache ограничивает
+  время тела `RequestReadTimeout body=20-9000,MinRate=500` (mod_reqtimeout). Проверки — `test_auth.py`.
 - Пароль учётки — не короче `security.PASSWORD_MIN` (8) знаков: `auth.validate_new_password` при смене пароля,
   сбросе администратором, принятии приглашения и восстановлении по почте, `manage.py create-admin` — тем же
   пределом; подписи форм («не короче 8 знаков» в `account.js`, `admin.js`) и руководство называют то же число.

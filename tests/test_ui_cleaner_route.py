@@ -48,6 +48,40 @@ def press(card, selector):
 DIALOG = "document.querySelector('#cleaner-sent-dialog[open]')"
 
 
+@pytest.mark.parametrize(("section", "width"), [("chat", 320), ("translate", 1280)])
+def test_add_connection_via_cleaner(browser, live, cleaner, section, width):
+    name = f"Облачный API ({section})"
+    checkbox = '#link-dialog [name="via_cleaner"]'
+    control = f"document.querySelector({checkbox!r})"
+    visible = f"Boolean({control}?.getClientRects().length)"
+    kind = '#link-dialog [name="kind"]'
+    result = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        call("configure", f"'PUT', '/api/admin/cleaner', {{ base_url: {ADDRESS!r}, key: {KEY!r}, forced: false }}"),
+        *go(f"settings/{section}"), ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", visible),
+        ("eval", "unchecked", f"!{control}.checked"),
+        ("click", checkbox), set_value(kind, "srvllm"),
+        ("eval", "hiddenOnGateway", f"!{visible}"), set_value(kind, "openai"),
+        set_value('#link-dialog [name="name"]', name), set_value('#link-dialog [name="base_url"]', PROVIDER),
+        set_value('#link-dialog [name="token"]', 'cloud-key'), ("eval", "fits", NO_OVERFLOW),
+        ("click", "#link-save"), ("wait", "!document.querySelector('#link-dialog[open]') && document.querySelector('.link-routed')"),
+        ("eval", "saved", f"""(async () => {{ const m = {API};
+          const c = (await m.api('GET', '/api/connections')).items.find(item => item.name === {name!r});
+          await m.api('DELETE', '/api/connections/' + c.id);
+          return [c.via_cleaner, c.routed, c.sections]; }})()"""),
+        *go("settings/photo"), ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", "document.querySelector('#link-dialog [name=kind]')"),
+        set_value('#link-dialog [name="existing"]', "new"),
+        ("eval", "hiddenInPhoto", f"!{visible}"),
+        call("unset", "'PUT', '/api/admin/cleaner', { base_url: '', key: null, forced: false }"),
+    ], width=width, mobile=width == 320)
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["unchecked"] and values["hiddenOnGateway"] and values["fits"] and values["hiddenInPhoto"]
+    assert values["saved"] == [True, True, [section]]
+    assert not problems(result), problems(result)
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_cleaner_gateway_page(browser, live, cleaner, width):
     masked = cleaner._masked

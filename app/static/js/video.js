@@ -20,6 +20,7 @@ import { message as serverMessage, tr } from './i18n.js';
  * движение и параметры ролика в поле и чипы. Чип модели в шапке — отбор ленты GET /api/videos?model=;
  * «Неудачные» режима выделения — select.js. Текст сервера — только textContent. */
 import { api } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { chainList } from './chain.js';
@@ -468,7 +469,6 @@ function build(view, ctx) {
   }
 
   function cancelButton(item, cls) {
-    if (item.mcp_job_id) return null;
     return button(tr("Отменить"), { class: `${cls} card-cancel` }, (event) => cancel(item, event.currentTarget));
   }
 
@@ -804,7 +804,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
     const dialog = openDialog(root, { id: 'video-delete-dialog', title: tr("Удалить ролик?"),
-      body: [el('p', {}, item.mcp_job_id ? tr("Ролик и его ссылка будут удалены.") : RUNNING.has(item.state)
+      body: [el('p', {}, RUNNING.has(item.state)
         ? tr("Генерация остановится. Запись уйдёт в корзину на 14 дней и вернётся со статусом «Отменено».")
         : tr("Ролик уйдёт в корзину на 14 дней вместе с файлом — оттуда его можно вернуть.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
@@ -888,7 +888,12 @@ function build(view, ctx) {
     chipSmooth.setAttribute('aria-pressed', String(smooth));
   });
   function attachSource(f) {
-    if (f) setSource({ file: f, url: URL.createObjectURL(f) });
+    if (!f) return;
+    if (!f.size || !ACCEPT.split(',').includes(f.type)) {
+      error.textContent = tr("Выберите фото PNG, JPEG или WebP");
+      return;
+    }
+    setSource({ file: f, url: URL.createObjectURL(f) });
   }
   file.addEventListener('change', () => {
     const selected = file.files[0];
@@ -896,6 +901,7 @@ function build(view, ctx) {
     attachSource(selected);
   });
   const unbindImagePaste = imagePaste(file, attachSource);
+  dropFiles(root, ([selected]) => attachSource(selected), () => !form.hidden && !pick.hidden && !file.disabled);
   sourceClear.addEventListener('click', () => {
     setSource(null);
   });

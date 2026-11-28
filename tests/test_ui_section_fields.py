@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 ARTIFACT = "art_" + "5" * 32
 RESULT = {"text": "Speaker 1: Добрый день.\nSpeaker 2: Начнём.", "artifacts": [
     {"id": ARTIFACT, "mime_type": "text/markdown", "name": "protocol.md", "download_path": f"/artifacts/{ARTIFACT}/content"}]}
-STATUS = "document.querySelector('.mcp-run .status').textContent"
+STATUS = "document.querySelector('.transcribe .tr-error').textContent"
 UPLOAD = put_files("#transcribe-add input", [("talk.wav", WAV_FAKE)], mime="audio/wav")
 LANGUAGE = "document.querySelector('#tr-language-pick').textContent"
 BOTTOM = """(() => {
@@ -66,8 +66,8 @@ def test_tool_schema_fields_appear_and_reach_the_call(browser, live, width):
         ("click", "#tr-options-toggle"),
         UPLOAD, ("wait", f"{STATUS}.includes('1')"), ("eval", "refused", STATUS),
         ("click", "#tr-options-toggle"), set_value("#mcp-field-speakers", "3"), ("click", "#tr-options-toggle"),
-        UPLOAD, ("wait", "document.querySelector('#section-mcp-turns')"),
-        ("eval", "turns", "[...document.querySelectorAll('#section-mcp-turns .tr-turn')].map(t => [...t.children].map(c => c.textContent))"),
+        UPLOAD, ("wait", "document.querySelector('.tr-turns .tr-text') && document.querySelector('.tr-audio')"),
+        ("eval", "turns", "[...document.querySelectorAll('.tr-turns .tr-turn')].map(t => [t.querySelector('.tr-who').textContent, t.querySelector('.tr-text').textContent])"),
         ("eval", "files", "[...document.querySelectorAll('.mcp-files a')].map(a => [a.textContent, a.getAttribute('download')])"),
         ("eval", "mcpBottom", BOTTOM),
         set_value("#section-mcp-tool", ""), ("eval", "back", LANGUAGE),
@@ -81,7 +81,8 @@ def test_tool_schema_fields_appear_and_reach_the_call(browser, live, width):
     assert v["nativeLanguage"] == v["retainedLanguage"] == "Русский"
     assert v["language"] == v["back"] == "English"
     assert v["refused"] == "Значение «Говорящих» — от 1 до 10"               # вне границ — до вызова
-    assert v["turns"] == [["Собеседник 1", "Добрый день."], ["Собеседник 2", "Начнём."]]   # без времени — без него
+    assert [text for _, text in v["turns"]] == ["Добрый день.", "Начнём."]
+    assert [label.split(' · ')[0] for label, _ in v["turns"]] == ["Собеседник 1", "Собеседник 2"]
     assert v["files"] == [["protocol.md", "protocol.md"]] and v["fits"], v
     sent = [args for name, args in calls if name == "audio_transcribe"]
     assert sent == [{"protocol": True, "speakers": 3, "language": "en-US", "topic": "Планёрка", "artifact_id": UPLOADED}]

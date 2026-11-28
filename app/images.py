@@ -673,9 +673,11 @@ SELECT COALESCE(m.id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server AS mc
        substr(json_extract(j.result, '$.text'), 1, 100) AS report
 FROM mcp_section_jobs j
 LEFT JOIN mcp_section_files f ON f.job_id = j.id AND f.user_id = j.user_id
+  AND f.media_id IS NOT json_extract(j.result, '$.photo.source_media_id')
 LEFT JOIN media m ON m.id = f.media_id AND m.user_id = j.user_id AND m.mime LIKE 'image/%'
 WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate_image','edit_image','upscale_image')
   AND (m.id IS NOT NULL OR (f.media_id IS NULL AND j.status <> 'completed'))
+  AND NOT EXISTS (SELECT 1 FROM mcp_gallery_trash g WHERE g.id = COALESCE(m.id, j.id) AND g.user_id = j.user_id)
 """
 
 
@@ -688,7 +690,7 @@ def _mcp_photo_out(row):
             "seed": seed, "mcp_job_id": row["mcp_job_id"], "created": row["created"], "media_id": row["media_id"]}
     status = row["status"]
     progress = {"queued": "В очереди", "waiting_gpu": "Ожидает GPU", "running": "Генерирую", "saving": "Сохраняю"}
-    shown = "done" if row["media_id"] else "queued" if status in progress else "error"
+    shown = "done" if row["media_id"] else "queued" if status in progress else "cancelled" if status == "cancelled" else "error"
     return {**step, "id": row["id"], "mcp_server": row["mcp_server"], "mcp_server_id": row["server_id"],
             "mcp_tool": row["tool"], "state": shown, "detail": row["error"] or progress.get(status, ""),
             "elapsed": 0, "strength": metadata.get("strength"), "source_media_id": metadata.get("source_media_id"), "mask_media_id": None,
@@ -906,6 +908,10 @@ async def cancel_job(job_id: str, request: Request):
     """Запрос к шлюзу не обрывается (обрыв до slot-gate не доходит): задание ждёт его конца,
     выбрасывает картинку и освобождает карту само — см. run_job. Описание отменяется так же."""
     uid = request.state.user.id
+    if remote := _mcp_photo_row(uid, job_id, status=True):
+        from mcp_sections import cancel_gallery
+        await cancel_gallery(uid, "photo", remote["mcp_job_id"])
+        return {"state": _mcp_photo_out(_mcp_photo_row(uid, job_id, status=True))["state"]}
     _prune()
     job = JOBS.get(job_id)
     if job is None or job.user_id != uid:
@@ -923,8 +929,8 @@ async def delete_image(image_id: str, request: Request):
     uid = request.state.user.id
     remote = _mcp_photo_row(uid, image_id)
     if remote is not None:
-        from mcp_sections import delete_gallery_file
-        await delete_gallery_file(remote, share_kind="images")
+        from mcp_sections import trash_gallery
+        trash_gallery(remote, "photo", source_id=_mcp_photo_out(remote)["source_media_id"])
         return Response(status_code=204)
     row = _row(uid, image_id)
     if row["state"] not in TERMINAL:

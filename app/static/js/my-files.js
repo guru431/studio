@@ -5,7 +5,8 @@ import { locale, tr } from './i18n.js';
  * по адресу с ticket (докачка браузером — Range), удаление — в корзину сервера, «Корзина сервера» с «Вернуть».
  * «Ссылка на сутки» — POST .../links: адрес `/f#<token>` показывается один раз (в базе — только хеш); «Мои ссылки» —
  * действующие ссылки с «Отозвать». Каждый видит только свою папку, администратор — тоже свою. */
-import { api } from './api.js';
+import { api, unknownOutcome } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { chooseProject, projectEditor, projectName, PROJECTS_API } from './chat-projects.js';
 import { icon } from './icons.js';
 import { sectionName } from './sections-meta.js';
@@ -15,13 +16,20 @@ import { renderTrash } from './trash.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const RETRIES = 3;                           // попыток одного куска при обрыве связи
-const RETRY_STATUS = [0, 502, 503, 504];
 const SELECTION_MAX = 100;
 const PROTECTED = tr("Сервер MCP — защищённый источник: ссылкой на его файл поделиться нельзя");   // как my_files.PROTECTED
 let controller = null;
 
 const moment = (ts) => dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const fileDate = (ts) => Number.isFinite(ts)
+  ? dateTime(ts, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 const join = (path, name) => (path ? `${path}/${name}` : name);
+
+function folderFacts({ size, files, folders }) {
+  return [tr("Размер: {0}", sizeText(size)),
+    Number.isSafeInteger(files) ? tr("Файлов: {0}", files.toLocaleString(locale())) : null,
+    Number.isSafeInteger(folders) ? tr("Подпапок: {0}", folders.toLocaleString(locale())) : null];
+}
 
 /** Скачивание по адресу службы: ответ — вложением, страница остаётся на месте. */
 function fetchFile(url, name) {
@@ -60,7 +68,8 @@ export function mount(view, ctx) {
   const projectUpload = button(tr("Загрузить"), { class: 'btn btn-accent' }, () => projectPicker.click());
   const projectImport = button(tr("Импортировать папку"), { class: 'btn', id: 'project-files-import' }, () => projectDirPicker.click());
   const projectMkdir = button(tr("Новая папка"), { class: 'btn' }, () => projectFolderDialog());
-  const projectToolbar = el('div', { class: 'row myfiles-actions', hidden: true }, projectUpload, projectImport, projectMkdir,
+  const projectToolbar = el('div', { class: 'row myfiles-actions', role: 'group', 'aria-label': tr("Действия"), hidden: true },
+    projectUpload, projectImport, projectMkdir,
     button(tr("Скачать ZIP"), { class: 'btn' }, () => {
       const parent = folder();
       fetchFile(`${projectBase()}/zip${parent ? `?parent=${parent}` : ''}`, '');
@@ -341,12 +350,17 @@ export function mount(view, ctx) {
   function paintCrumbs() {
     if (state.project) {
       const names = [projectName(state.project), ...state.folders.map((entry) => entry.name)];
-      crumbs.replaceChildren(button(tr("Проекты"), { class: 'btn btn-sm' }, () => selectSection('projects')),
-        ...names.map((name, index) => button(name, { class: 'btn btn-sm',
-        'aria-current': index === names.length - 1 ? 'location' : null }, () => {
-        state.folders = state.folders.slice(0, index);
-        load();
-      })));
+      const root = el('li', {}, button(tr("Проекты"), { class: 'btn-link' }, () => selectSection('projects')));
+      const locations = names.map((name, index) => {
+        const item = index === names.length - 1
+          ? el('span', { class: 'small', 'aria-current': 'location' }, name)
+          : button(name, { class: 'btn-link' }, () => {
+            state.folders = state.folders.slice(0, index);
+            load();
+          });
+        return el('li', {}, el('span', { class: 'muted', 'aria-hidden': 'true' }, '›'), item);
+      });
+      crumbs.replaceChildren(el('ol', { class: 'row myfiles-project-path' }, root, ...locations));
       return;
     }
     const parts = state.path ? state.path.split('/') : [];
@@ -419,22 +433,27 @@ export function mount(view, ctx) {
       ? button('', { class: `myfiles-file-info btn-link${openFolder ? ' myfiles-folder' : ''}`,
         title: openFile ? tr("Предпросмотр") : null }, openFolder || openFile)
       : el('div', { class: 'myfiles-file-info' });
+    const dates = entry.dir && entry.from_chat ? null : el('span', { class: 'muted small myfiles-dates' },
+      el('span', {}, entry.dir ? tr("Создано: {0}", fileDate(entry.created)) : tr("Загружено: {0}", fileDate(entry.created))),
+      el('span', {}, tr("Изменено: {0}", fileDate(entry.mtime))));
     info.append(tile, el('span', {}, el('span', { class: 'myfiles-name' }, entry.name),
-      el('span', { class: 'muted small myfiles-meta' }, facts.filter(Boolean).join(' · '))));
+      el('span', { class: 'muted small myfiles-meta' }, facts.filter(Boolean).join(' · ')), dates));
     return el('div', { class: 'session-info' }, info);
   }
 
   function studioRow(entry) {
-    const facts = [sectionName(entry.section), sizeText(entry.size), moment(entry.mtime)];
+    const name = entry.title || entry.name;
+    const transcript = entry.section === 'transcribe' && entry.title;
+    const facts = [transcript ? tr("Диалог") : sectionName(entry.section), transcript ? 'JSON' : null, sizeText(entry.size)];
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': 'false' },
-      fileInfo(entry, facts, entry.preview ? () => entry.preview : null),
+      fileInfo({ ...entry, name }, facts, entry.preview ? () => entry.preview : null),
       el('div', { class: 'session-actions' },
-        editableProjects().length && entry.section !== 'chat' ? button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () =>
+        editableProjects().length && entry.section !== 'chat' && !entry.protected ? button(tr("Добавить в проект"), { class: 'btn btn-sm' }, () =>
           chooseProject(host, tr("Добавить в проект"), editableProjects(), async (pid) => {
             await api('POST', `${PROJECTS_API}/${pid}/files/from-section`, { media_id: entry.id, section: entry.section }, { signal });
             say(tr("Файл добавлен в проект"), 'ok');
           })) : null,
-        button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", entry.name) },
+        button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", name) },
           () => fetchFile(entry.download, entry.name))));
   }
 
@@ -456,7 +475,7 @@ export function mount(view, ctx) {
       });
     }));
     return el('li', { class: 'agent session myfiles-item', 'data-name': name, 'data-dir': String(entry.dir) },
-      fileInfo({ ...entry, name }, [entry.dir ? tr("папка") : sizeText(entry.size)], entry.preview ? () => entry.preview : null,
+      fileInfo({ ...entry, name }, entry.dir ? folderFacts(entry) : [sizeText(entry.size)], entry.preview ? () => entry.preview : null,
         entry.dir ? () => {
           state.folders.push({ id: entry.id, name });
           say('');
@@ -490,7 +509,7 @@ export function mount(view, ctx) {
     const path = join(state.path, entry.name);
     const endpoint = `${base()}/ticket`;
     const actions = el('div', { class: 'session-actions' });
-    const facts = [entry.dir ? tr("папка") : null, sizeText(entry.size), entry.mtime ? moment(entry.mtime) : null];
+    const facts = entry.dir ? folderFacts(entry) : [sizeText(entry.size)];
     if (entry.dir) {
       actions.append(button(tr("ZIP"), { class: 'btn btn-sm', 'aria-label': tr("ZIP: {0}", entry.name) }, () => zip(path)));
     } else {
@@ -659,21 +678,27 @@ export function mount(view, ctx) {
       return;
     }
     let start = 0;
+    let corrections = 0;
     while (start < file.size) {
       const end = Math.min(start + chunk, file.size) - 1;
       for (let tries = 1; ; tries += 1) {
         try {
           const reply = await send(file.slice(start, end + 1), `bytes ${start}-${end}/${file.size}`);
-          if (!reply.done && reply.size <= start) throw new Error(tr("Сервер MCP не принял кусок"));
+          if (!Number.isSafeInteger(reply.size) || reply.size < end + 1 || reply.size > file.size
+              || reply.done !== (reply.size === file.size)) throw new Error(tr("Сервер MCP не принял кусок"));
           start = reply.done ? file.size : reply.size;
+          corrections = 0;
           break;
         } catch (err) {
           if (signal.aborted) throw err;
-          if (err.code === 'gap' && Number.isInteger(err.detail?.size)) {
-            start = err.detail.size;                // сервер принял меньше — продолжить с его места
+          const offset = err.detail?.size;
+          if (err.code === 'gap' && Number.isSafeInteger(offset) && offset >= 0 && offset < file.size
+              && offset !== start && corrections < RETRIES) {
+            start = offset;
+            corrections += 1;
             break;
           }
-          if (tries >= RETRIES || !(RETRY_STATUS.includes(err.status) || err.name === 'TimeoutError')) throw err;
+          if (tries >= RETRIES || !unknownOutcome(err)) throw err;
         }
       }
       if (target === place()) say(tr("Загрузка «{0}»: {1}%", file.name, Math.floor((start * 100) / file.size)));
@@ -682,10 +707,12 @@ export function mount(view, ctx) {
 
   let uploading = false;
   const uploadButtons = [uploadFiles, uploadFolder, projectUpload, projectImport];
-  async function receive(input, project, directory) {
-    const files = [...input.files];
-    input.value = '';
-    if (!files.length || uploading || (project && (!state.project || !writable()))) return;
+  const canUpload = () => !trash && !uploading && (state.project ? writable() : server()?.sid > 0);
+  document.addEventListener('studio-before-auto-refresh', (event) => {
+    if (uploading) event.preventDefault();
+  }, { signal });
+  async function receive(files, project, directory) {
+    if (!files.length || !canUpload()) return;
     const target = place();
     const source = server();
     const url = project ? projectBase() : base();
@@ -712,8 +739,10 @@ export function mount(view, ctx) {
           }
           parent = await folders.get(prefix);
         }
+        if (target === place()) say(tr("Загружаю {0}…", file.name));
         if (project) {
           await api('POST', `${url}/upload`, file, { signal, headers: { 'x-studio-name': encodeURIComponent(filename),
+            ...(Number.isFinite(file.lastModified) ? { 'x-studio-mtime': String(file.lastModified) } : {}),
             ...(parent ? { 'x-studio-folder': parent } : {}) } });
         } else {
           await uploadOne(file, join(parent, filename), url, source, target);
@@ -728,10 +757,13 @@ export function mount(view, ctx) {
       uploadButtons.forEach((control) => { control.disabled = false; });
     }
   }
-  picker.addEventListener('change', () => receive(picker, false, false));
-  dirPicker.addEventListener('change', () => receive(dirPicker, false, true));
-  projectPicker.addEventListener('change', () => receive(projectPicker, true, false));
-  projectDirPicker.addEventListener('change', () => receive(projectDirPicker, true, true));
+  for (const [input, project, directory] of [[picker, false, false], [dirPicker, false, true],
+    [projectPicker, true, false], [projectDirPicker, true, true]]) input.addEventListener('change', () => {
+    const files = [...input.files];
+    input.value = '';
+    receive(files, project, directory);
+  });
+  dropFiles(browser, (files) => receive(files, Boolean(state.project), false), canUpload);
 
   function mkdirDialog() {
     const input = el('input', { class: 'input', id: 'myfiles-folder-name', maxlength: '255', autocomplete: 'off' });

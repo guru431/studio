@@ -141,7 +141,7 @@ async def _post(conn, url: str, timeout: float, **kw) -> httpx.Response:
 
 
 def _seconds(value) -> float:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+    return float(value) if type(value) in (int, float) and 0 <= value <= 86400 else 0.0
 
 
 def _segments(body: dict) -> list[Segment]:
@@ -209,11 +209,11 @@ def _text(r: httpx.Response) -> str:
     return text.strip() if isinstance(text, str) else ""
 
 
-async def transcribe(conn, model: str, audio: Path, mime: str, language: "str | None" = None) -> list[Segment]:
-    """Расшифровка сжатой записи (audio.compress) — сегменты по порядку; `language` — из LANGUAGES, None — «Авто»."""
+async def read_recording(audio: Path) -> bytes:
+    """Дочитать временную запись перед её уборкой даже при отмене задания."""
     reading = asyncio.create_task(asyncio.to_thread(audio.read_bytes))
     try:
-        data = await asyncio.shield(reading)
+        return await asyncio.shield(reading)
     finally:
         # Отмена ожидания не закрывает файл в потоке. Уборка MP3 должна дождаться close,
         # иначе Windows откажет в unlink; повторная отмена тоже не обрывает ожидание.
@@ -222,6 +222,11 @@ async def transcribe(conn, model: str, audio: Path, mime: str, language: "str | 
                 await asyncio.shield(reading)
             except asyncio.CancelledError:
                 pass
+
+
+async def transcribe(conn, model: str, audio: Path, mime: str, language: "str | None" = None) -> list[Segment]:
+    """Расшифровка сжатой записи (audio.compress) — сегменты по порядку; `language` — из LANGUAGES, None — «Авто»."""
+    data = await read_recording(audio)
     if conn.s06:
         r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
                         data={"model": model, **_lang(language), "diarize": "true"},

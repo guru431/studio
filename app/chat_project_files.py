@@ -9,8 +9,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import auth
 import chat_projects
 import clock
+import forms
 import lock_policy
 import media
 import my_files
@@ -19,12 +21,13 @@ import state
 
 router = APIRouter(prefix="/api/chat-projects/{pid}/files")
 CHAT_FILES = "chats"
-UPLOAD_MAX = 20 * 1024**2  # Shared request limit on the web entry points.
+UPLOAD_MAX = media.LARGE_UPLOAD_MAX
 DEPTH_MAX = 20
 NAME_MAX = 180
 PAGE = 100
 SELECTION_MAX = 100
 _ID = re.compile(r"[0-9a-f]{32}")
+_MILLISECONDS = re.compile(r"-?[0-9]{1,16}")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f-\x9f]')
 _RESERVED = re.compile(r"(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)", re.IGNORECASE)
 
@@ -82,16 +85,27 @@ def _folder(pid: str, parent: str | None, *, mkdir=False) -> None:
         raise _error(422, "invalid", "достигнут предел вложенности папок")
 
 
-def _insert(uid, pid, parent, name, mid=None, section=None):
+def _touch_folder(pid, parent, when):
+    if parent is not None:
+        state.DB.execute("UPDATE chat_project_files SET mtime = ? WHERE id = ? AND project_id = ? AND media_id IS NULL",
+                         (when, parent, pid))
+
+
+def _insert(uid, pid, parent, name, mid=None, section=None, *, mtime=None):
     item_id = uuid.uuid4().hex
+    now = clock.NOW()
+    state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO chat_project_files(id, project_id, user_id, parent_id, name, name_key, created,"
-                         " media_id, source_section) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (item_id, pid, uid, parent, name, name.casefold(), clock.NOW(), mid, section))
-    except sqlite3.IntegrityError as exc:
-        if exc.sqlite_errorcode != sqlite3.SQLITE_CONSTRAINT_UNIQUE:
-            raise
-        raise _error(409, "exists", "файл или папка с таким именем уже есть") from None
+                         " media_id, source_section, mtime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (item_id, pid, uid, parent, name, name.casefold(), now, mid, section, now if mid is None else mtime))
+        _touch_folder(pid, parent, now)
+        state.DB.execute("COMMIT")
+    except BaseException as exc:
+        state.DB.execute("ROLLBACK")
+        if isinstance(exc, sqlite3.IntegrityError) and exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+            raise _error(409, "exists", "файл или папка с таким именем уже есть") from None
+        raise
     return {"id": item_id}
 
 
@@ -136,11 +150,38 @@ def _readable(uid, author, mid):
         (mid, author)).fetchone())
 
 
-def _file(pid, item_id, name, size, mime, *, from_chat=False):
+def _folder_totals(uid, pid, parent, children):
+    totals = {row["id"]: {"size": 0, "files": 0, "folders": 0} for row in children if row["media_id"] is None}
+    if not totals:
+        return totals
+    rows = state.DB.execute(
+        "WITH RECURSIVE tree(folder, id, user_id, media_id) AS ("
+        " SELECT id, id, user_id, media_id FROM chat_project_files"
+        " WHERE project_id = :pid AND parent_id IS :parent AND media_id IS NULL"
+        " UNION ALL SELECT tree.folder, f.id, f.user_id, f.media_id FROM tree JOIN chat_project_files f"
+        " ON f.parent_id = tree.id AND f.project_id = :pid WHERE tree.media_id IS NULL)"
+        " SELECT tree.folder, tree.user_id, tree.media_id, m.size FROM tree"
+        " LEFT JOIN media m ON m.id = tree.media_id AND m.user_id = tree.user_id WHERE tree.id != tree.folder",
+        {"pid": pid, "parent": parent})
+    for row in rows:
+        total = totals.get(row["folder"])
+        if total is None:
+            continue
+        mid = row["media_id"]
+        if mid is None:
+            total["folders"] += 1
+        elif row["size"] is not None and _readable(uid, row["user_id"], mid):
+            total["files"] += 1
+            total["size"] += row["size"]
+    return totals
+
+
+def _file(pid, item_id, name, size, mime, *, created, mtime=None, from_chat=False):
     kind = my_files.local_kind(name, mime)
     source = f"/api/chat-projects/{pid}/files/content/{item_id}"
     preview = f"/api/chat-projects/{pid}/files/preview/{item_id}" if kind in ("pdf", "text") else source
     return {"id": item_id, "name": name, "dir": False, "size": size, "from_chat": from_chat,
+            "created": created, "mtime": mtime,
             "download": source + "?download=1", "preview": {"url": preview, "kind": kind} if kind else None}
 
 
@@ -150,19 +191,25 @@ async def list_files(pid: str, request: Request, parent: str | None = None, afte
     chat_projects.access(uid, pid)
     if parent == CHAT_FILES:
         rows = _chat_files(uid, pid, after=after, limit=PAGE + 1)
-        entries = [_file(pid, f"chat-{r['id']}", r["download_name"], r["size"], r["mime"], from_chat=True)
+        entries = [_file(pid, f"chat-{r['id']}", r["download_name"], r["size"], r["mime"], created=r["created"], from_chat=True)
                    for r in rows[:PAGE] if _visible(r["user_id"], r["id"])]
         return {"entries": entries, "next": rows[PAGE - 1]["id"] if len(rows) > PAGE else None}
     _folder(pid, parent)
+    children = _children(pid, parent)
+    totals = _folder_totals(uid, pid, parent, children)
     entries = []
-    for row in _children(pid, parent):
+    for row in children:
         mid = row["media_id"]
         if mid is None:
-            entries.append({"id": row["id"], "name": row["name"], "dir": True})
+            entries.append({"id": row["id"], "name": row["name"], "dir": True,
+                            "created": row["created"], "mtime": row["mtime"], **totals[row["id"]]})
         elif _readable(uid, row["user_id"], mid):
-            entries.append(_file(pid, row["id"], row["name"], row["size"], row["mime"]))
-    if parent is None and _chat_files(uid, pid, limit=1):
-        entries.insert(0, {"id": CHAT_FILES, "dir": True, "from_chat": True})
+            entries.append(_file(pid, row["id"], row["name"], row["size"], row["mime"], created=row["created"], mtime=row["mtime"]))
+    if parent is None:
+        chat_files = [row for row in _chat_files(uid, pid, limit=-1) if _visible(row["user_id"], row["id"])]
+        if chat_files:
+            entries.insert(0, {"id": CHAT_FILES, "dir": True, "from_chat": True,
+                               "size": sum(row["size"] for row in chat_files), "files": len(chat_files), "folders": 0})
     return {"entries": entries, "next": None}
 
 
@@ -194,15 +241,23 @@ async def upload(pid: str, request: Request):
         raise _error(422, "invalid", "недопустимое имя файла") from None
     length = request.headers.get("content-length", "")
     if length.isascii() and length.isdecimal() and (len(length) > 10 or int(length) > UPLOAD_MAX):
-        raise _error(413, "too_large", "файл больше 20 МиБ")
+        raise _error(413, "too_large", "файл больше 1 ГиБ")
     kind = my_files.preview_kind(name)
     mime = kind if kind in my_files.PREVIEW_MEDIA.values() else "application/octet-stream"
-    mid = await media.save_stream(uid, request.stream(), mime, name, UPLOAD_MAX)
+    raw_mtime = request.headers.get("x-studio-mtime", "")
+    mtime = my_files.file_timestamp(int(raw_mtime) / 1000) if _MILLISECONDS.fullmatch(raw_mtime) else None
     try:
+        mid = await media.save_stream(uid, request.stream(), mime, name, UPLOAD_MAX)
+    except media.TooBig:
+        raise _error(413, "too_large", "файл больше 1 ГиБ") from None
+    except media.StorageError:
+        raise HTTPException(503, forms.STORAGE) from None
+    try:
+        auth.recheck(request)
         operations.check(uid)
         chat_projects.access(uid, pid, write=True)
         _folder(pid, parent)
-        return _insert(uid, pid, parent, name, mid)
+        return _insert(uid, pid, parent, name, mid, mtime=mtime)
     except BaseException:
         await media.delete_async(uid, mid)
         raise
@@ -220,7 +275,10 @@ async def add_from_section(pid: str, body: SourceIn, request: Request):
     rows = my_files.studio_files(uid, section=body.section, mid=body.media_id, limit=1)
     if not rows:
         raise _error(404, "gone", "файл не найден")
-    return _insert(uid, pid, body.parent, _source_name(rows[0]["download_name"]), body.media_id, body.section)
+    if rows[0]["protected"]:
+        raise _error(409, "protected", my_files.PROTECTED)
+    return _insert(uid, pid, body.parent, _source_name(rows[0]["download_name"]), body.media_id, body.section,
+                   mtime=rows[0]["created"])
 
 
 def _require_deletable(uid, row):
@@ -244,7 +302,8 @@ async def remove_selection(pid: str, body: SelectionIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
     chat_projects.access(uid, pid, write=True)
-    ids = [row["id"] for row in _selection(pid, body.ids)]
+    selected = _selection(pid, body.ids)
+    ids = [row["id"] for row in selected]
     marks = ",".join("?" * len(ids))
     state.DB.execute("BEGIN")
     try:
@@ -257,6 +316,7 @@ async def remove_selection(pid: str, body: SelectionIn, request: Request):
         for row in rows:
             _require_deletable(uid, row)
         state.DB.execute(f"DELETE FROM chat_project_files WHERE project_id = ? AND id IN ({marks})", (pid, *ids))
+        _touch_folder(pid, selected[0]["parent_id"], clock.NOW())
         for author, mid, path in {tuple(row) for row in rows}:
             if not media.referenced(author, mid):
                 media.queue(author, [(mid, path)])
@@ -278,7 +338,14 @@ async def remove(pid: str, item_id: str, request: Request):
     if mid is None and state.DB.execute("SELECT 1 FROM chat_project_files WHERE parent_id = ? LIMIT 1",
                                         (item_id,)).fetchone():
         raise _error(409, "not_empty", "сначала удалите содержимое папки")
-    state.DB.execute("DELETE FROM chat_project_files WHERE id = ?", (item_id,))
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("DELETE FROM chat_project_files WHERE id = ?", (item_id,))
+        _touch_folder(pid, row["parent_id"], clock.NOW())
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
     if mid and not media.referenced(row["user_id"], mid):
         await media.delete_async(row["user_id"], mid)
 

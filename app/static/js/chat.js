@@ -988,7 +988,7 @@ function build(view, ctx) {
   let forkNote = null;         // { id, text } — слова для #chat-error ветки после её загрузки
   let idleTimer = 0;
   // вставка и перетаскивание файлов в поле — тем же путём, что скрепка
-  fileDrop(form, (files) => addFiles(files));
+  fileDrop(form, (files) => addFiles(files), main);
   // «Новый диалог с итогом» у отказа по длине (chat-continue.js) — строкой под #chat-error
   const offer = continueOffer({ chatId: () => chatId, openWith, busy: summaryBusy,
     failed: (err) => { notice.textContent = words(err); } });

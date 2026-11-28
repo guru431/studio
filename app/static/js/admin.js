@@ -19,15 +19,30 @@ import { smtpDeliveryText } from './smtp-settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 const COLUMNS = [['login', tr("Логин")], ['email', 'Email'], ['name', tr("Имя")], ['admin', tr("Админ")], ['disabled', tr("Отключён")],
-  ['connections', tr("Подключений")], ['groups', tr("Группы")]];
+  ['activity', tr("Активность")], ['connections', tr("Подключений")], ['groups', tr("Группы")]];
 const USER_ERRORS = { login: 'login', taken: 'login', name: 'name', short: 'password' };
+const ACTIVITY_POLL_MS = 15000;
+let stopActivity = null;
 
 function yesNo(value) {
   return value ? tr("да") : tr("нет");
 }
 
+function activityCell(user) {
+  const label = { working: tr("Активные задания"), recent: tr("Менее часа назад"),
+    inactive: user.disabled ? tr("Отключён") : user.last_activity === null ? tr("Нет данных об активности") : tr("Час назад или раньше") };
+  const stamp = user.last_activity;
+  const last = Number.isFinite(stamp) ? el('time', { datetime: new Date(stamp * 1000).toISOString() },
+    dateTime(stamp, { dateStyle: 'short', timeStyle: 'short' })) : null;
+  return el('div', { class: 'user-activity' }, el('span', { class: 'user-activity-state', 'data-activity': user.activity },
+    label[user.activity]), user.online ? el('span', { class: 'muted small' }, tr("Сейчас в Studio")) : null, last);
+}
+
 function usersBlock(host) {
   const tbody = el('tbody');
+  const controller = new AbortController();
+  const { signal } = controller;
+  let version = 0, polling = false;
   let ldapConfigured = false;
   const note = el('p', { class: 'status error', id: 'admin-status', 'aria-live': 'polite' });
   const table = el('table', { class: 'users', id: 'users' },
@@ -35,14 +50,37 @@ function usersBlock(host) {
       el('th', { scope: 'col' }, el('span', { class: 'sr' }, tr("Действия"))))), tbody);
 
   async function reload() {
+    const mine = ++version;
     try {
-      const { items, ldap_configured } = await api('GET', '/api/admin/users');
+      const { items, ldap_configured } = await api('GET', '/api/admin/users', undefined, { signal });
+      if (mine !== version || signal.aborted) return;
       ldapConfigured = ldap_configured;
       tbody.replaceChildren(...items.map(row));
     } catch (err) {
-      fail(words(err));
+      if (!signal.aborted && mine === version) fail(words(err));
     }
   }
+
+  async function refreshActivity() {
+    if (polling || document.visibilityState !== 'visible') return;
+    polling = true;
+    const mine = version;
+    try {
+      const { items } = await api('GET', '/api/admin/users', undefined, { signal, unlock: false });
+      if (mine !== version || signal.aborted) return;
+      const users = new Map(items.map(user => [String(user.id), user]));
+      for (const row of tbody.rows) {
+        const user = users.get(row.dataset.userId);
+        if (user) row.querySelector('[data-col="activity"]').replaceChildren(activityCell(user));
+      }
+    } catch {
+      // The next poll can recover from a temporary loss of connection.
+    } finally {
+      polling = false;
+    }
+  }
+  const timer = setInterval(refreshActivity, ACTIVITY_POLL_MS);
+  document.addEventListener('visibilitychange', refreshActivity, { signal });
 
   function fail(text) {
     note.className = 'status error';
@@ -217,8 +255,8 @@ function usersBlock(host) {
   function row(user) {
     const self = user.id === me.id;
     const values = { login: user.login, email: user.email || tr("Требует подтверждения"), name: user.name, admin: yesNo(user.is_admin), disabled: yesNo(user.disabled),
-      connections: String(user.connections), groups: (user.group_names || []).join(', ') || '—' };
-    return el('tr', { 'data-login': user.login, class: user.disabled ? 'off' : null },
+      activity: activityCell(user), connections: String(user.connections), groups: (user.group_names || []).join(', ') || '—' };
+    return el('tr', { 'data-login': user.login, 'data-user-id': user.id, class: user.disabled ? 'off' : null },
       ...COLUMNS.map(([key, title]) => el('td', { 'data-col': key, 'data-label': title }, values[key])),
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
         button(tr("Изменить"), { class: 'btn btn-sm user-edit' }, () => edit(user)),
@@ -242,6 +280,7 @@ function usersBlock(host) {
     el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, tr("Пользователи"))),
       el('div', { class: 'table-wrap' }, table), note),
     reload,
+    stop: () => { clearInterval(timer); controller.abort(); },
   };
 }
 
@@ -966,6 +1005,7 @@ export function mount(view, ctx) {
   }
   const root = el('div', { class: 'page wide' });
   const users = usersBlock(root);
+  stopActivity = users.stop;
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const cleaner = cleanerBlock();
@@ -986,4 +1026,7 @@ export function mount(view, ctx) {
   storage.load();
 }
 
-export function unmount() {}
+export function unmount() {
+  stopActivity?.();
+  stopActivity = null;
+}

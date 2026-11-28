@@ -1,7 +1,7 @@
 import { message, tr } from './i18n.js';
 /* Подключение: форма и окно правки — общие для настроек и панели администратора.
  *
- * connectionForm(initial?, { cleaner, everywhere }) → { el, value(), sections(), showError(err) }: название, вид
+ * connectionForm(initial?, { cleaner, offerCleaner, everywhere }) → { el, value(), sections(), showError(err) }: название, вид
  * (OpenAI-совместимый / шлюз srvllm), адрес, токен (при правке пустой — «не менять»). Разделы подключения ставят
  * настройки раздела (settings.js), а не эта форма; `everywhere` (true/false — начальное состояние) добавляет
  * у видов шлюза галочку «Добавить во все разделы», её разделы — sections(). Отказ сохранения — словами под полем: токен (в
@@ -34,7 +34,7 @@ export function sectionsText(sections) {
   return Object.keys(SECTION_NAMES).filter((s) => sections.includes(s)).map((s) => SECTION_NAMES[s]).join(', ');
 }
 
-export function connectionForm(initial, { cleaner = false, everywhere = null, shared = false } = {}) {
+export function connectionForm(initial, { cleaner = false, offerCleaner = false, everywhere = null, shared = false } = {}) {
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', required: true });
   const kind = el('select', { class: 'input', name: 'kind' },
     ...Object.entries(KINDS).filter(([value]) => cleaner ? value === 'cleaner' : !shared || value !== 'cleaner')
@@ -48,27 +48,37 @@ export function connectionForm(initial, { cleaner = false, everywhere = null, sh
   const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, расшифровка WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
   const all = el('input', { type: 'checkbox', name: 'everywhere', checked: !!everywhere });
   const allBox = el('label', { class: 'check', hidden: true }, all, tr("Добавить во все разделы этого шлюза"));
+  const viaCleaner = el('input', { type: 'checkbox', name: 'via_cleaner' });
+  const viaCleanerBox = el('label', { class: 'check' }, viaCleaner, tr("Через Cleaner"));
+  const addressHelp = shared ? tr("Укажите адрес из списка разрешённых. Studio использует ключ на сервере.")
+    : tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.");
+  const addressNote = el('p', { class: 'muted small' }, addressHelp);
   const box = el('form', { class: 'conn-form', novalidate: true },
     field(tr("Название"), name, 'name'), field(tr("Вид"), kind, 'kind'),
-    field(tr("Адрес"), url, 'base_url'),
-    el('p', { class: 'muted small' }, shared ? tr("Укажите адрес из списка разрешённых. Studio использует ключ на сервере.")
-      : tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.")),
-    field(tr("Токен"), token, 'token'), cleanerNote, s06Note, everywhere === null ? null : allBox);
+    field(tr("Адрес"), url, 'base_url'), addressNote,
+    field(tr("Токен"), token, 'token'), offerCleaner ? viaCleanerBox : null,
+    cleanerNote, s06Note, everywhere === null ? null : allBox);
   box.addEventListener('submit', (event) => event.preventDefault());
 
   kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.s06 ? 's06' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
   name.value = initial ? initial.name : (cleaner ? 'Cleaner' : '');
   url.value = initial ? initial.base_url : '';
-  url.placeholder = KINDS[kind.value].placeholder;
-  cleanerNote.hidden = kind.value !== 'cleaner';
-  s06Note.hidden = kind.value !== 's06';
-  allBox.hidden = !GATEWAY_SECTIONS[kind.value];
-  kind.addEventListener('change', () => {
+  function updateAddressNote() {
+    addressNote.textContent = !viaCleanerBox.hidden && viaCleaner.checked
+      ? tr("Укажите публичный HTTPS-адрес провайдера. Cleaner очистит текст, ключ API останется в Studio.") : addressHelp;
+  }
+
+  function updateKind() {
     url.placeholder = KINDS[kind.value].placeholder;
     cleanerNote.hidden = kind.value !== 'cleaner';
     s06Note.hidden = kind.value !== 's06';
     allBox.hidden = !GATEWAY_SECTIONS[kind.value];
-  });
+    viaCleanerBox.hidden = !offerCleaner || kind.value !== 'openai';
+    updateAddressNote();
+  }
+  kind.addEventListener('change', updateKind);
+  viaCleaner.addEventListener('change', updateAddressNote);
+  updateKind();
 
   return {
     el: box,
@@ -76,6 +86,7 @@ export function connectionForm(initial, { cleaner = false, everywhere = null, sh
       const out = { name: name.value.trim(), kind: ['cleaner', 's06'].includes(kind.value) ? 'openai' : kind.value,
         cleaner: kind.value === 'cleaner', s06: kind.value === 's06', base_url: url.value.trim() };
       if (!initial || token.value.trim()) out.token = token.value.trim();
+      if (!viaCleanerBox.hidden && viaCleaner.checked) out.via_cleaner = true;
       return out;
     },
     /** Разделы галочки «Добавить во все разделы»: она видна и отмечена — все разделы вида, иначе []. */

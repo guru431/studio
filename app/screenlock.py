@@ -56,6 +56,7 @@ router = APIRouter(prefix="/api")
 class Alive(BaseModel):
     touch: bool = False          # основной указатель — палец (matchMedia('(pointer: coarse)'))
     active: bool = True
+    interacted: bool = False
     section: str | None = Field(None, max_length=32)
 
 
@@ -115,6 +116,17 @@ def _seen(request: Request, value: float | None) -> None:
     """seen — срок отпирания (запирание обнуляет); active — последняя активность для списка сессий."""
     state.DB.execute("UPDATE sessions SET seen = ?, active = COALESCE(?, active) WHERE digest = ?",
                      (value, value, request.state.digest))
+
+
+def _present(request: Request, now: float, interacted: bool) -> None:
+    state.DB.execute("UPDATE sessions SET present = ? WHERE digest = ?", (now, request.state.digest))
+    if interacted:
+        auth.mark_activity(request.state.user.id, now)
+
+
+def _unlocked(request: Request, now: float) -> None:
+    _seen(request, now)
+    _present(request, now, True)
 
 
 def _journal(request: Request, kind: str, detail: str | None = None) -> None:
@@ -198,15 +210,19 @@ async def alive(body: Alive, request: Request):
                              auth.device_class(request.headers.get("user-agent")))
     now = clock.NOW()
     expired = lock_policy.expired(row, now)
+    locked = expired and lock_policy.protected(row, body.section)
     if not expired and body.active:
         _seen(request, now)
-    return {"locked": expired and lock_policy.protected(row, body.section), "expired": expired}
+    if not locked:
+        _present(request, now, body.interacted)
+    return {"locked": locked, "expired": expired}
 
 
 @router.post("/lock/now", status_code=204)
 async def lock_now(request: Request):
     """Таймер страницы истёк: запереть доступ выбранной политикой, сохраняя срок PIN компьютера."""
     _seen(request, None)
+    state.DB.execute("UPDATE sessions SET present = NULL WHERE digest = ?", (request.state.digest,))
     _forget_code(request)
     log.info("пользователь %d: заперто", request.state.user.id)
     return Response(status_code=204)
@@ -222,7 +238,7 @@ async def open_with_password(body: Password, request: Request):
             _journal(request, "unlock_fail", "password")
         raise
     state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ?", (uid,))    # PIN снова работает везде
-    _seen(request, clock.NOW())
+    _unlocked(request, clock.NOW())
     _forget_code(request)
     _journal(request, "unlock", "password")
     log.info("пользователь %d: открыто (пароль)", uid)
@@ -250,7 +266,7 @@ async def open_with_pin(body: Pin, request: Request):
     right = bool(PIN_RE.fullmatch(body.pin)) and await asyncio.to_thread(security.verify_password, body.pin, stored)
     if right and state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ? AND pin_hash = ? AND disabled = 0",
                                   (uid, stored)).rowcount == 1:
-        _seen(request, clock.NOW())
+        _unlocked(request, clock.NOW())
         _forget_code(request)
         _journal(request, "unlock", "pin")
         log.info("пользователь %d: открыто (PIN)", uid)
@@ -281,7 +297,7 @@ async def set_screen_lock(body: ScreenLock, request: Request):
                            or timeout != current["screen_lock_timeout"]):
         _journal(request, "screen_lock_change")
     if body.enabled:
-        _seen(request, clock.NOW())
+        _unlocked(request, clock.NOW())
     log.info("пользователь %d: блокировка %s", uid, "включена" if body.enabled else "выключена")
     return {"screen_lock": body.enabled, "screen_lock_sections": sections, "screen_lock_timeout": timeout}
 
@@ -427,7 +443,7 @@ async def open_with_passkey(body: Answer, request: Request):
     now = clock.NOW()
     state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",
                      (verified.new_sign_count, now, row["id"]))
-    _seen(request, now)
+    _unlocked(request, now)
     _forget_code(request)
     _journal(request, "unlock", "passkey")
     log.info("пользователь %d: открыто (passkey)", uid)

@@ -28,6 +28,7 @@ import { tr } from './i18n.js';
  * тема меняется сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
 import { api, loadMe, me, watchSession } from './api.js';
+import { isFileDrag } from './chat-drop.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock, lockImmediately } from './lock.js';
@@ -443,6 +444,9 @@ async function enter(worker) {
   mobileNavigation = setupMobileNavigation(me);
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', sectionKey);
+  for (const type of ['dragover', 'drop']) window.addEventListener(type, (event) => {
+    if (isFileDrag(event)) event.preventDefault();
+  });
   await render();
   offerReceived();           // принятое листом «Поделиться» (sw.js) — окно выбора раздела
   if (claimRequested) {

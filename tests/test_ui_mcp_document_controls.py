@@ -1,7 +1,7 @@
 """Chat and document controls keep their regular Studio affordances with MCP sources."""
 import pytest
 
-from fakes import PNG_REAL
+from scans import scan_pdf
 from test_mcp_sections import service
 from test_ui_browser import API, NO_OVERFLOW, browser, go, live, problems, put_files, set_value
 from test_ui_section_limits import SERVICE, choose, ready, serve, start
@@ -51,7 +51,7 @@ def test_chat_mcp_attachment_reason_and_translation_in_regular_history(browser, 
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_scan_mcp_shows_options_and_refuses_nonimages_before_upload(browser, live, width):
+def test_scan_mcp_recognizes_both_pdf_pages_in_the_regular_document_view(browser, live, width):
     login = f"mcp-scan-options-{width}"
     live.add_user(login)
     scan = {"properties": {"artifact_id": {"type": "string"}, "engine": {"type": "string", "enum": ["default", "paddle"]}},
@@ -59,7 +59,7 @@ def test_scan_mcp_shows_options_and_refuses_nonimages_before_upload(browser, liv
     calls = serve(live.gw, {**SERVICE, "document_read": scan})
     result = browser.drive(live.url + "/", [
         *start(login), *go("ocr"), ("wait", ready("document_read")), choose("document_read"),
-        ("wait", "!document.querySelector('#ocr-mcp-hint')?.hidden && document.querySelector('#mcp-field-engine')?.isConnected"),
+        ("wait", "document.querySelector('#mcp-field-engine')?.isConnected && document.querySelector('#ocr-file').multiple"),
         ("eval", "lower", """(() => {
           const dock = document.querySelector('#ocr-composer');
           return dock.contains(document.querySelector('#ocr-upload')) &&
@@ -68,15 +68,12 @@ def test_scan_mcp_shows_options_and_refuses_nonimages_before_upload(browser, liv
             dock.getBoundingClientRect().bottom <= document.querySelector('.ocr .split-main').getBoundingClientRect().bottom;
         })()"""),
         set_value("#mcp-field-engine", "paddle"),
-        put_files("#ocr-file", [("scan.pdf", b"test")], "application/pdf"),
-        ("wait", "document.querySelector('.ocr .tr-error')?.textContent"),
-        ("eval", "refusal", "document.querySelector('.ocr .tr-error').textContent"),
-        put_files("#ocr-file", [("page.png", PNG_REAL)]),
-        ("wait", "document.querySelector('#section-mcp-result pre')?.textContent === 'ok'"),
+        put_files("#ocr-file", [("scan.pdf", scan_pdf("ink", "ink"))], "application/pdf"),
+        ("wait", "document.querySelector('.ocr-text')?.textContent.trim() === 'ok' && document.querySelector('#ocr-download')"),
+        ("eval", "pages", f"(async () => (await {API}.api('GET', '/api/ocr')).items[0].done_pages)()"),
     ], width=width, mobile=width == 320)
     assert not result.get("failed"), result
-    assert "PNG, JPEG или WebP" in result["values"]["refusal"]
-    assert result["values"]["lower"]
-    assert [tool for tool, _ in calls] == ["artifact_upload", "document_read"]
+    assert result["values"]["lower"] and result["values"]["pages"] == 2
+    assert [tool for tool, _ in calls] == ["artifact_upload", "document_read"] * 2
     assert calls[-1][1]["engine"] == "paddle"
     assert not problems(result), result.get("log")

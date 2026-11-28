@@ -80,6 +80,7 @@ LEFT JOIN (
 LEFT JOIN media source ON source.id = json_extract(j.result, '$.video.source_media_id') AND source.user_id = j.user_id
 WHERE j.section = 'video' AND j.tool IN {tuple(sorted(mcp_sections.VIDEO_TOOLS))}
   AND (f.media_id IS NOT NULL OR j.status <> 'completed')
+  AND NOT EXISTS (SELECT 1 FROM mcp_gallery_trash g WHERE g.id = COALESCE(f.media_id, j.id) AND g.user_id = j.user_id)
 """
 MCP_VIDEO_STATES = {"queued": ("queued", "В очереди"), "waiting_gpu": ("queued", "Ожидает GPU"),
                     "running": ("in_progress", "Генерирую"), "saving": ("in_progress", "Сохраняю"),
@@ -637,6 +638,9 @@ def share_row(uid, video_id):
 async def cancel_video(video_id: str, request: Request):
     """Снять у шлюза и пометить отменённым; шлюз недоступен — 502, ролик идёт дальше."""
     uid = request.state.user.id
+    if remote := _mcp_video(uid, video_id, job=True):
+        await mcp_sections.cancel_gallery(uid, "video", remote["mcp_job_id"])
+        return _mcp_video_out(_mcp_video(uid, video_id, job=True))
     row = _row(uid, video_id)
     if row["state"] in ACTIVE:
         words = await _drop(row)
@@ -654,7 +658,10 @@ async def delete_video(video_id: str, request: Request):
     uid = request.state.user.id
     remote = _mcp_video(uid, video_id)
     if remote is not None:
-        await mcp_sections.delete_gallery_file(remote, source_id=remote["source_media_id"], share_kind="videos")
+        await mcp_sections.cancel_gallery(uid, "video", remote["mcp_job_id"])
+        remote = _mcp_video(uid, video_id)
+        if remote is not None:
+            mcp_sections.trash_gallery(remote, "video", source_id=remote["source_media_id"])
         return Response(status_code=204)
     row = _row(uid, video_id)
     if row["state"] in ACTIVE:

@@ -28,6 +28,7 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me, toLogin } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
@@ -50,7 +51,6 @@ const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю з
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const ACCEPT = ['application/pdf', '.pdf', ...IMAGE_TYPES].join(',');
-const MCP_PAGE = tr("Для MCP выберите изображение одной страницы");
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx'], ['pdf', tr("PDF со слоем")]];
 // таблицы документа (`tables` ответа) — книгой и CSV: одна таблица — файл, несколько — ZIP
@@ -133,13 +133,12 @@ function build(view, ctx) {
   // Выбор «как у Агентов» (picker.js) — рядом с загрузкой, после выбора инструмента MCP.
   const engine = el('select', { id: 'ocr-model' });
   const head = el('header', { class: 'head' }, title, toggle);
-  const mcpHint = el('p', { class: 'muted small', id: 'ocr-mcp-hint', hidden: true }, MCP_PAGE);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
   const pane = el('div', { class: 'ocr-documents' }, nativeHint, mcp.output, body);
   const controls = el('div', { class: 'split-toolbar' }, mcp.control, upload, add);
-  const composer = el('footer', { id: 'ocr-composer', class: 'composer ocr-composer', hidden: !!ctx.hint }, mcpHint, progress, controls);
+  const composer = el('footer', { id: 'ocr-composer', class: 'composer ocr-composer', hidden: !!ctx.hint }, progress, controls);
   const main = el('section', { class: 'split-main' }, head, pane, error, composer);
   const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
   view.append(root);
@@ -343,9 +342,11 @@ function build(view, ctx) {
    * новый документ со всеми страницами (ocr.again), он и открывается. */
   function retryDialog(item) {
     if (root.querySelector('#ocr-retry-dialog')) return;
+    const choices = [...engines, ...mcp.sources().map(choice => ({ ...choice, same: item.mcp?.server_id === choice.server_id
+      && item.mcp?.tool === choice.tool.name, mcp: { server_id: choice.server_id, tool: choice.tool.name } }))];
     const pick = el('select', { class: 'input', id: 'ocr-retry-model' },
-      ...engines.map((e, i) => el('option', { value: String(i) }, e.label)));
-    pick.selectedIndex = Math.max(0, engines.findIndex((e) => e.connection_id === item.connection_id && e.model === item.model));
+      ...choices.map((e, i) => el('option', { value: String(i) }, e.label)));
+    pick.selectedIndex = Math.max(0, choices.findIndex(e => e.same || (e.connection_id === item.connection_id && e.model === item.model)));
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
     const yes = el('button', { type: 'button', class: 'btn btn-accent', id: 'ocr-retry-confirm' }, tr("Распознать"));
     const dialog = openDialog(root, { id: 'ocr-retry-dialog', title: tr("Распознать заново"), actions: [yes],
@@ -353,12 +354,12 @@ function build(view, ctx) {
         el('p', { class: 'muted small' }, tr("Той же моделью — только нераспознанные страницы. Другой — новый документ со всеми страницами, прежний остаётся.")),
         fail] });
     yes.addEventListener('click', async () => {
-      const { connection_id, model } = engines[pick.selectedIndex];
+      const { connection_id, model, mcp: source, same } = choices[pick.selectedIndex];
       yes.disabled = pick.disabled = true;
       fail.textContent = '';
       let answer;
       try {
-        answer = await api('POST', `/api/ocr/${item.id}/retry`, { connection_id, model });
+        answer = await api('POST', `/api/ocr/${item.id}/retry`, same ? {} : source ? { mcp: source } : { connection_id, model });
       } catch (err) {
         fail.textContent = words(err);
         yes.disabled = pick.disabled = false;
@@ -546,7 +547,7 @@ function build(view, ctx) {
    * нажатия (docs.current: опрос его заменяет). */
   function actions(item) {
     const running = RUNNING.has(item.state);
-    const choose = engines.length > 1;
+    const choose = engines.length + mcp.sources().length > 1;
     const again = !running && (choose || item.pages.some((p) => p.state === 'waiting' || p.state === 'failed'));
     const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running, !!item.tables]);
     if (acts && acts.key === key) return acts.box;
@@ -568,17 +569,18 @@ function build(view, ctx) {
       });
       const read = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-read' }, tr("Прочитать"));
       read.addEventListener('click', () => readAloud(asMarkdown(docs.current.pages), { kind: 'ocr', id: docs.current.id }, readBox));
-      box.append(copy, read,
+      box.append(copy,
         menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), [...FORMATS, ...(item.tables ? TABLE_FORMATS : [])]
-          .map(([f, label]) => [f, label, 'data-format', download])),
+          .map(([f, label]) => [f, label, 'data-format', download])));
+      if (!item.mcp?.protected) box.append(read,
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
       // ссылка «Поделиться» на скан (chat_shares.ITEMS): текст страниц, исходный файл — по выбору
       const share = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-share' }, tr("Поделиться"));
       share.addEventListener('click', () => shareDialog(root, `/api/ocr/${encodeURIComponent(docs.current.id)}/share`,
         docs.current.name, api, { kind: 'scans', source: true }));
-      box.append(share);
-      if (item.state === 'done') {
+      if (!item.mcp?.protected) box.append(share);
+      if (item.state === 'done' && !item.mcp?.protected) {
         const translate = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-translate' }, tr("Перевести"));
         translate.addEventListener('click', () => translateDialog(docs.current));
         box.append(translate);
@@ -660,11 +662,7 @@ function build(view, ctx) {
     paintEngine();
     composer.hidden = !!ctx.hint && !active;
     if (nativeHint) nativeHint.hidden = active;
-    input.multiple = !active;
-    input.accept = active ? IMAGE_TYPES.join(',') : ACCEPT;
-    mcpHint.hidden = !active;
-    if (active) upload.setAttribute('aria-describedby', mcpHint.id);
-    else upload.removeAttribute('aria-describedby');
+    paintView();
   }
 
   function paintBusy() {
@@ -672,7 +670,7 @@ function build(view, ctx) {
   }
 
   /** PDF длиннее предела: «страницы 1–50 из 187» с правкой диапазона, затем тот же файл заново с ним. */
-  function rangeDialog(files, total, max) {
+  function rangeDialog(files, total, max, settings) {
     const number = (id, value) => el('input', { type: 'number', class: 'input', id, min: '1', max: String(total),
       step: '1', inputmode: 'numeric', value: String(value) });
     const first = number('ocr-range-first', 1);
@@ -697,16 +695,20 @@ function build(view, ctx) {
     go.addEventListener('click', () => {
       const [a, b] = range();
       dialog.close();
-      send(files, { first: a, last: b });
+      send(files, { first: a, last: b }, settings);
     });
   }
 
-  async function send(chosen, range = null) {
+  async function send(chosen, range = null, settings = null) {
     if (chosen.length > FILES_MAX) {
       error.textContent = tr("Больше {0} файлов за раз", FILES_MAX);
       return;
     }
     error.textContent = '';
+    if (!settings) {
+      try { settings = { source: mcp.selection(), engine: engines.length > 1 ? engines[engine.selectedIndex] : null }; }
+      catch (err) { error.textContent = words(err); return; }
+    }
     uploading = true;
     paintBusy();
     const files = [];
@@ -727,8 +729,9 @@ function build(view, ctx) {
     xhr.open('POST', '/api/ocr');
     holdRefresh(xhr);                // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
-    const pick = engines.length > 1 ? engines[engine.selectedIndex] : null;
-    if (pick) {
+    const { source, engine: pick } = settings;
+    if (source) xhr.setRequestHeader('X-Studio-MCP', encodeURIComponent(JSON.stringify(source)));
+    else if (pick) {
       xhr.setRequestHeader('x-studio-connection', String(pick.connection_id));
       xhr.setRequestHeader('x-studio-model', pick.model);
     }
@@ -760,11 +763,11 @@ function build(view, ctx) {
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): те же файлы — после отпирания
-        send(files, range);
+        send(files, range, settings);
         return;
       }
       if (xhr.status === 422 && detail && detail.code === 'pages' && detail.pages && !range) {
-        rangeDialog(files, detail.pages, detail.max);      // PDF длиннее предела — выбрать страницы
+        rangeDialog(files, detail.pages, detail.max, settings);      // PDF длиннее предела — выбрать страницы
         return;
       }
       error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
@@ -776,13 +779,9 @@ function build(view, ctx) {
     const files = [...input.files];
     input.value = '';
     if (!files.length || input.disabled) return;
-    error.textContent = '';
-    if (!mcp.tool) send(files);
-    else if (files.length !== 1) error.textContent = MCP_PAGE;
-    else if (files[0].type ? !IMAGE_TYPES.includes(files[0].type) : !/\.(png|jpe?g|webp)$/i.test(files[0].name)) {
-      error.textContent = tr("Выберите фото PNG, JPEG или WebP");
-    } else mcp.run({}, { files: { artifact_id: files[0] } });
+    send(files);
   });
+  dropFiles(main, send, () => !composer.hidden && !input.disabled);
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   /** ?id адреса («Открыть» в «В работе», «Поиск») — при сборке и при переходе внутри раздела (update). */

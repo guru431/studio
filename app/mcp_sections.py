@@ -8,13 +8,14 @@ uploading a source or collecting the result of a permitted tool.
 import asyncio
 import base64
 import binascii
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 import hashlib
 import json
 import math
 import re
 from types import SimpleNamespace
 import uuid
+from urllib.parse import unquote
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
@@ -40,6 +41,7 @@ import voices
 
 router = APIRouter(prefix="/api/mcp-tools")
 VIDEO_TOOLS = {"video_create", "generate_video"}
+PHOTO_SOURCE_TOOLS = {"image_edit", "edit_image", "upscale_image"}
 TOOLS = {
     "chat": {"llm_ask"},
     "photo": {"image_generate", "image_edit", "image_describe", "generate_image", "edit_image", "describe_image", "upscale_image"},
@@ -74,6 +76,7 @@ SRT_MIME = "application/x-subrip"
 # A queued Studio part has no upstream job ID yet. Only the watcher uses this sentinel.
 SPEECH_QUEUE = "studio:speech-queue"
 SPEECH_PARTS_MAX = 256
+TRANSCRIBE_PART_MAX = 45 * 60  # 32 kbit/s fits the inline file budget even without chunked upload.
 
 
 def section_tools(section: str) -> set[str]:
@@ -117,11 +120,17 @@ def supported(section, tools, *, uid=None, sid=None, item=None):
             schema = json.loads(encoded)
         except (ValueError, RecursionError):
             continue
+        if section == "transcribe" and schema.get("properties", {}).get("diarization", {}).get("type") == "boolean":
+            schema["properties"]["diarization"]["default"] = True
+        limits = speech.tool_limits(tool)
+        seconds = limits.max_seconds if limits else None
+        if section == "transcribe":
+            seconds = min(seconds, TRANSCRIBE_PART_MAX) if seconds else TRANSCRIBE_PART_MAX
         yield {"name": name, "title": clean_text(tool.get("title"), 160),
                "description": clean_text(tool.get("description"), 2000),
                "files": {key: kind for key, kind in file_fields.items() if has_upload and key in properties},
                "schema": schema, "jobs": {"job_status", "job_result"} <= by_name.keys(),
-               "limits": {"max_seconds": found.max_seconds} if (found := speech.tool_limits(tool)) else None}
+               "limits": {"max_seconds": seconds} if seconds else None}
 
 
 def model_catalog(payload):
@@ -327,6 +336,62 @@ class RunIn(BaseModel):
     origin: speeches.Origin | None = None
 
 
+class MediaSource(BaseModel):
+    server_id: int = Field(gt=0)
+    tool: str = Field(max_length=128)
+    arguments: dict = Field(default_factory=dict, max_length=32)
+    voice_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern)
+
+
+def media_source_header(request):
+    value = request.headers.get("x-studio-mcp")
+    if value is None:
+        return None
+    try:
+        if len(value) <= PARAMS_MAX:
+            return MediaSource.model_validate_json(unquote(value))
+    except ValidationError:
+        pass
+    raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422)
+
+
+def media_source_item(uid, section, source):
+    sid, name = source["server_id"], source["tool"]
+    item = mcp.row(uid, sid)
+    if (not item["enabled"] or name not in section_tools(section) or not access.tool_allowed(uid, sid, name)
+            or ("stamp" in source and source["stamp"] != mcp_sources.stamp(item["secret_enc"]))
+            or (item["protected"] and source.get("protected") is False)):
+        raise mcp.refused("Подключение или права MCP изменились")
+    if item["protected"] and mcp.has_url(source["arguments"]):
+        raise mcp.refused("Защищённый источник MCP не принимает адреса")
+    return item
+
+
+def pin_media_source(uid, section, selection: MediaSource):
+    source = selection.model_dump(exclude_none=True)
+    item = media_source_item(uid, section, source)
+    try:
+        packed = json.dumps(source, allow_nan=False)
+    except (ValueError, RecursionError):
+        packed = ""
+    if not packed or len(packed) > PARAMS_MAX:
+        raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422)
+    return {**source, "stamp": mcp_sources.stamp(item["secret_enc"]), "protected": bool(item["protected"])}
+
+
+def public_media_source(raw):
+    if not raw:
+        return None
+    source = json.loads(raw)
+    return {key: source[key] for key in ("server_id", "tool", "arguments", "protected", "voice_id") if key in source}
+
+
+def require_media_share(row):
+    source = public_media_source(row["mcp_source"])
+    if source and source["protected"]:
+        raise mcp.refused("Защищённый источник MCP", "protected")
+
+
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
     return security.encrypt(json.dumps([session.uid, session.sid, security.digest(session.stamp.decode()),
                                        section, kind, clock.NOW(), *payload], ensure_ascii=False)).decode()
@@ -476,6 +541,157 @@ async def shown(session, section, result):
     if section == "transcribe" and (found := await turns(session, result, out["text"])):
         out["turns"] = found
     return out
+
+
+@asynccontextmanager
+async def media_tool(uid, section, source):
+    item = media_source_item(uid, section, source)
+    session = mcp.Session(item, uid=uid)
+    try:
+        try:
+            found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)
+        except TimeoutError:
+            raise mcp.refused("MCP не успел вернуть список инструментов") from None
+        tool = next((tool for tool in supported(section, found.tools, uid=uid, sid=session.sid, item=item)
+                     if tool["name"] == source["tool"]
+                     and (section in ("speech", "translate") or "artifact_id" in tool["files"])), None)
+        if tool is None:
+            raise mcp.refused("Инструмент недоступен в этом разделе MCP")
+        yield session, tool, found.tools
+    finally:
+        await session.close()
+
+
+def media_arguments(section, tool, values, supplied):
+    properties = tool["schema"].get("properties", {})
+    args = {key: value for key, value in values.items() if key in properties and key not in supplied}
+    if section == "transcribe" and properties.get("diarization", {}).get("type") == "boolean":
+        args.setdefault("diarization", args.get("engine") != "dictation" or "num_speakers" in args)
+    for key in tool["schema"].get("required", []):
+        if key not in supplied and key not in args:
+            prop = properties[key]
+            if "const" in prop or "default" in prop:
+                args[key] = prop.get("const", prop.get("default"))
+            else:
+                raise mcp.refused(f"Для MCP заполните поле «{clean_text(key, 80)}»", "invalid", 422)
+    check_bounds(tool, args)
+    return args
+
+
+async def run_media(uid, section, source, session, tool, listed, data, mime, name, values=None):
+    args = media_arguments(section, tool, source["arguments"] | (values or {}), {"artifact_id"})
+    item = media_source_item(uid, section, source)
+    if item["protected"] and mcp.has_url(args):
+        raise mcp.refused("Защищённый источник MCP не принимает адреса")
+    await session.ensure()
+    transfer = next((entry for entry in listed if entry.get("name") == ASR_PREPARE_UPLOAD), None)
+    args["artifact_id"] = (await upload_artifact(session, data, mime, name if accepts_name(listed) else None,
+                                                transfer=transfer if section == "transcribe" else None))["id"]
+    return await media_result(uid, section, source, session, tool, listed, args)
+
+
+async def media_result(uid, section, source, session, tool, listed, args):
+    item = media_source_item(uid, section, source)
+    if item["protected"] and mcp.has_url(args):
+        raise mcp.refused("Защищённый источник MCP не принимает адреса")
+    operations.check(uid)
+    await session.ensure()
+    result = await call(session, tool["name"], args, timeout=speech.ASR_TIMEOUT_SEC)
+    data = result.get("structuredContent")
+    jid = data.get("id") if isinstance(data, dict) else None
+    if not tool["jobs"] or not isinstance(jid, str) or not JOB_ID.fullmatch(jid):
+        return result
+    job_args = {"job_id": jid}
+    try:
+        async with asyncio.timeout(speech.ASR_TIMEOUT_SEC):
+            while True:
+                job = (await call(session, "job_status", job_args)).get("structuredContent")
+                status = job.get("status") if isinstance(job, dict) else None
+                if status == "completed":
+                    response = (await call(session, "job_result", job_args)).get("structuredContent")
+                    if isinstance(response, dict) and isinstance(response.get("result"), dict):
+                        return {"structuredContent": response["result"]}
+                    raise mcp.refused("MCP не вернул результат задания")
+                if not isinstance(status, str) or status not in ACTIVE:
+                    error = job.get("error") if isinstance(job, dict) else None
+                    words = clean_text(error.get("message"), 600) if isinstance(error, dict) else ""
+                    raise mcp.refused(words or "Задание MCP не завершилось")
+                await clock.SLEEP(3)
+    except TimeoutError:
+        raise mcp.refused("Истекло время ожидания задания MCP") from None
+    except asyncio.CancelledError:
+        if any(entry.get("name") == "job_cancel" for entry in listed):
+            try:
+                await call(session, "job_cancel", job_args, timeout=DISCOVERY_TIMEOUT)
+            except HTTPException:
+                pass
+        raise
+
+
+async def transcript_segments(session, result):
+    data = result.get("structuredContent")
+    text = (result_text(data) if isinstance(data, dict) else "") or first_text(result, RESULT_MAX)
+    raw = speech._segments({"segments": data.get("segments")} if isinstance(data, dict) else {})
+    if raw:
+        return [speech.Segment(s.start, s.end, s.speaker, clean_text(s.text, RESULT_MAX)) for s in raw]
+    parsed = speech.segments_from_srt(text) or speech.segments_from_labeled(text)
+    if not parsed and isinstance(data, dict):
+        parsed = speech.segments_from_srt(await _srt_file(session, data))
+    return parsed or speech._segments({"text": clean_text(text, RESULT_MAX)})
+
+
+async def transcript_files(session, result):
+    """Keep provider-generated protocols and subtitles beside the Studio transcript."""
+    remaining = 32 << 20
+    for aid, mime, name in artifacts(result.get("structuredContent")):
+        if remaining <= 0 or (mime not in TICKET_MIME and mime != SRT_MIME):
+            continue
+        try:
+            reply = await relay(session, aid, mime, SimpleNamespace(headers={}), name=name)
+            if not isinstance(reply, ArtifactStream):
+                continue
+            try:
+                if reply.status_code != 200:
+                    continue
+                mid = await media.save_stream(session.uid, reply.body_iterator, mime,
+                                              name.replace("\\", "/").rsplit("/", 1)[-1] or "result", remaining)
+            finally:
+                await reply.stack.aclose()
+        except (HTTPException, media.StorageError, ConnectionError):
+            continue
+        remaining -= state.DB.execute("SELECT size FROM media WHERE id = ?", (mid,)).fetchone()[0]
+        yield mid
+
+
+async def speech_audio(session, result):
+    for block in blocks(result):
+        mime, encoded = block.get("mimeType"), block.get("data")
+        if block.get("type") == "audio" and mime in {"audio/wav", "audio/mpeg"} and isinstance(encoded, str):
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error):
+                break
+            if data:
+                return data, mime
+    for aid, mime, name in artifacts(result.get("structuredContent")):
+        if mime not in {"audio/wav", "audio/mpeg"}:
+            continue
+        response = await relay(session, aid, mime, SimpleNamespace(headers={}), name=name)
+        if not isinstance(response, ArtifactStream):
+            break
+        data = bytearray()
+        try:
+            async for chunk in response.body_iterator:
+                data += chunk
+                if len(data) > 64 << 20:
+                    raise mcp.refused("Аудио MCP превышает предел загрузки")
+        except ConnectionError:
+            raise mcp.refused("Не удалось скачать звук MCP") from None
+        finally:
+            await response.stack.aclose()
+        if data:
+            return bytes(data), mime
+    raise mcp.refused("MCP не вернул аудио озвучки")
 
 
 async def upload_artifact(session, data, mime, name=None, *, transfer=None):
@@ -706,7 +922,7 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
     if body.tool not in names or len(arguments) > PARAMS_MAX or not access.tool_allowed(uid, sid, body.tool):
         raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
     session = mcp.Session(item, uid=uid)
-    video_source = new_source = None
+    gallery_source = new_source = None
     try:
         if body.photo_job_id:
             prior = history_row(uid, "photo", body.photo_job_id)
@@ -747,13 +963,16 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
         else:
             check_bounds(tool, args)
             for key, file in body.files.items():
-                if body.record and section == "video" and body.tool in VIDEO_TOOLS and key == "artifact_id":
-                    image, mime, name = await prepare_upload(session, "image", file, named=named)
+                keep_source = (section == "video" and body.tool in VIDEO_TOOLS
+                               or section == "photo" and body.tool in PHOTO_SOURCE_TOOLS)
+                if body.record and keep_source and key == "artifact_id":
+                    image, mime, name = await prepare_upload(session, "image", file, named=named,
+                                                             original_size=body.tool == "upscale_image")
                     args[key] = (await upload_artifact(session, image, mime, name))["id"]
-                    video_source = file.media_id
-                    if video_source is None:
+                    gallery_source = file.media_id
+                    if gallery_source is None:
                         operations.check(uid)
-                        new_source = video_source = await media.save_async(uid, image, mime, "studio-video-source.png", thumb=True)
+                        new_source = gallery_source = await media.save_async(uid, image, mime, "studio-source.png", thumb=True)
                 else:
                     args[key] = await upload(session, tool["files"][key], file, named=named,
                                              original_size=body.tool == "upscale_image", transfer=transfer)
@@ -765,7 +984,7 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
         if len(parts) > 1:
             batch = {"parts": parts, "args": {key: val for key, val in args.items() if key != "text"},
                      "jobs": tool["jobs"]}
-            return await record_result(session, section, item["name"], body.tool, args, None, SPEECH_QUEUE, body.files,
+            return await record_result(session, section, item["name"], body.tool, args, None, SPEECH_QUEUE,
                                        speech_batch=batch)
         if body.origin is not None:
             _check_read_source(uid, body.origin, session.url)
@@ -774,8 +993,8 @@ async def run_tool(section: str, sid: int, uid: int, body: RunIn, *, stamp=None)
         jid = data.get("id") if isinstance(data, dict) else None
         if body.record:
             remote_id = jid if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid) else None
-            return await record_result(session, section, item["name"], body.tool, args, result, remote_id, body.files,
-                                       video_source=video_source)
+            return await record_result(session, section, item["name"], body.tool, args, result, remote_id,
+                                       gallery_source=gallery_source)
         if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid):
             return {"job": ticket(session, section, "job", jid), "status": "queued"}
         return await shown(session, section, result)
@@ -834,7 +1053,7 @@ def history_view(row, *, details=True):
     return output
 
 
-async def record_result(session, section, server, tool, args, result, remote_id, input_files, *, video_source=None, speech_batch=None):
+async def record_result(session, section, server, tool, args, result, remote_id, *, gallery_source=None, speech_batch=None):
     operations.check(session.uid)
     rid = uuid.uuid4().hex
     stamp = mcp_sources.stamp(session.stamp)
@@ -843,9 +1062,8 @@ async def record_result(session, section, server, tool, args, result, remote_id,
     model = clean_text(args.get("model"), MODEL_ID_MAX)
     metadata = {}
     if section == "photo":
-        source = input_files.get("artifact_id")
-        if source is not None and source.media_id is not None:
-            metadata["source_media_id"] = source.media_id
+        if gallery_source is not None:
+            metadata["source_media_id"] = gallery_source
         size = args.get("size")
         if isinstance(size, str) and re.fullmatch(r"[1-9][0-9]{0,4}x[1-9][0-9]{0,4}", size):
             metadata["size"] = size
@@ -862,7 +1080,7 @@ async def record_result(session, section, server, tool, args, result, remote_id,
         if translation := translate.mcp_metadata(args, session.sid):
             initial["translate"] = translation
     if section == "video" and tool in VIDEO_TOOLS:
-        initial["video"] = {"source_media_id": video_source,
+        initial["video"] = {"source_media_id": gallery_source,
                             "arguments": {key: value for key, value in args.items() if key not in {"artifact_id", "prompt"}}}
     state.DB.execute("BEGIN")
     try:
@@ -870,9 +1088,9 @@ async def record_result(session, section, server, tool, args, result, remote_id,
                          "created, stamp, remote_id, status, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (rid, session.uid, section, session.sid, server, tool, model, prompt, clock.NOW(), stamp,
                           remote_id, "queued" if remote_id else "saving", json.dumps(initial) if initial else None))
-        if video_source and media.alive(session.uid, video_source):
+        if gallery_source and media.alive(session.uid, gallery_source):
             state.DB.execute("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
-                             (rid, session.uid, video_source))
+                             (rid, session.uid, gallery_source))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
@@ -891,6 +1109,32 @@ def end_history(rid, status, error=""):
                      " result = CASE WHEN section = 'speech' THEN json_remove(result, '$.speech_batch') ELSE result END"
                      " WHERE id = ?",
                      (status, error, rid))
+
+
+async def cancel_gallery(uid, section, rid):
+    row = history_row(uid, section, rid)
+    if row["status"] not in GALLERY_ACTIVE:
+        return
+    if rid in HISTORY_ACTIVE or not row["remote_id"]:
+        raise mcp.refused("Задание обновляется — попробуйте ещё раз")
+    if section == "photo":
+        # Like direct image generation, Studio discards the result of a cancelled request.
+        end_history(rid, "cancelled", "отменено")
+        return
+    item = media_source_item(uid, section, {"server_id": row["server_id"], "tool": row["tool"],
+                                           "stamp": row["stamp"], "arguments": {}})
+    session = mcp.Session(item, uid=uid)
+    HISTORY_ACTIVE.add(rid)
+    try:
+        await session.ensure()
+        result = await call(session, "job_cancel", {"job_id": row["remote_id"]})
+        status = result.get("structuredContent")
+        if not isinstance(status, dict) or status.get("status") != "cancelled":
+            raise mcp.refused("Сервер MCP пока не подтвердил отмену")
+        end_history(rid, "cancelled", "отменено")
+    finally:
+        HISTORY_ACTIVE.discard(rid)
+        await session.close()
 
 
 async def save_history(session, section, rid, result):
@@ -1102,7 +1346,8 @@ async def history(section: str, request: Request, before: str = "", without_clip
     if section == "translate":
         extra += " AND json_extract(j.result, '$.translation_id') IS NULL"
     rows = state.DB.execute("SELECT j.*, EXISTS (SELECT 1 FROM mcp_section_files f JOIN media m ON m.id = f.media_id"
-                            " WHERE f.job_id = j.id AND m.mime LIKE 'image/%') AS has_photo,"
+                            " WHERE f.job_id = j.id AND m.mime LIKE 'image/%'"
+                            " AND f.media_id IS NOT json_extract(j.result, '$.photo.source_media_id')) AS has_photo,"
                             f" {has_video} AS has_video FROM mcp_section_jobs j WHERE user_id = ? AND section = ?"
                             + extra + " ORDER BY created DESC, rowid DESC LIMIT ?",
                             (uid, section, *(tuple(cursor) if cursor else ()), HISTORY_PAGE + 1)).fetchall()
@@ -1156,6 +1401,23 @@ async def delete_history(section: str, rid: str, request: Request):
     return Response(status_code=204)
 
 
+def trash_gallery(row, section, *, source_id=None):
+    if row["status"] in GALLERY_ACTIVE:
+        raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
+    state.DB.execute("INSERT INTO mcp_gallery_trash(id, user_id, mcp_job_id, section, media_id, source_media_id,"
+                     " prompt, created, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (row["id"], row["user_id"], row["mcp_job_id"], section, row["media_id"], source_id,
+                      row["prompt"], row["created"], clock.NOW()))
+
+
+async def purge_gallery(uid, item_id):
+    row = state.DB.execute("SELECT g.*, j.status FROM mcp_gallery_trash g JOIN mcp_section_jobs j ON j.id = g.mcp_job_id"
+                           " WHERE g.id = ? AND g.user_id = ?", (item_id, uid)).fetchone()
+    if row is not None:
+        await delete_gallery_file(row, source_id=row["source_media_id"],
+                                  share_kind="images" if row["section"] == "photo" else "videos")
+
+
 async def delete_gallery_file(row, *, source_id=None, share_kind=None):
     """Drop one result, retaining the job and source while another output still refers to them."""
     uid, job_id, mid = row["user_id"], row["mcp_job_id"], row["media_id"]
@@ -1163,6 +1425,7 @@ async def delete_gallery_file(row, *, source_id=None, share_kind=None):
         raise HTTPException(409, {"code": "running", "message": "Дождитесь завершения задания MCP"})
     state.DB.execute("BEGIN")
     try:
+        state.DB.execute("DELETE FROM mcp_gallery_trash WHERE id = ? AND user_id = ?", (row["id"], uid))
         if share_kind and mid:
             state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? AND item_kind = ? AND item_id = ?",
                              (uid, share_kind, mid))

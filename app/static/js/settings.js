@@ -1487,7 +1487,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   const checkErrors = new Map();  // подключение → отказ последней проверки (в блоке паспорта)
   const checking = new Set();     // подключения, которые проверяются сейчас
   const opened = new Set();       // `<раздел>:<подключение>` — паспорт раскрыт
-  let data = [];
+  let data = { sections: [] };
   let dictationHost = null;
   const start = moved(section);
   let current = ids.includes(start) ? start : null;
@@ -1521,7 +1521,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   }
 
   function sectionOf(id) {
-    return data.find((s) => s.id === id);
+    return data.sections.find((s) => s.id === id);
   }
 
   async function saveModels(s, conn, names, box) {
@@ -1781,7 +1781,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
       el('option', { value: 'new' }, tr("Новый адрес…")));
     select.value = conns.length ? String(conns[0].id) : 'new';
-    const form = connectionForm(null, { cleaner, everywhere: cleaner ? null : first, shared });
+    const form = connectionForm(null, { cleaner, offerCleaner: !cleaner && data.cleaner_sections?.includes(s.id),
+      everywhere: cleaner ? null : first, shared });
     form.el.hidden = select.value !== 'new';
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
     const box = el('div', {}, field(tr("Подключение"), select, 'existing'), form.el);
@@ -1912,7 +1913,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
 
   async function reload() {
     try {
-      data = (await api('GET', base)).sections;
+      data = await api('GET', base);
     } catch (err) {
       say(note, words(err), 'error');
     }

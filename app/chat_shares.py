@@ -37,6 +37,7 @@ import clock
 import images
 import media
 import lock_policy
+import mcp_sections
 import ocr
 import operations
 import owui
@@ -556,6 +557,7 @@ async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False)
     item, title, attach = {"kind": kind}, "", None
     if kind == "transcripts":
         row = transcripts._done(uid, item_id)
+        mcp_sections.require_media_share(row)
         segments = transcripts.view(row, await transcripts.result_of(uid, row))
         item |= {"duration": row["duration"], "segments": [
             {key: s[key] for key in ("start", "end", "speaker", "text")} | ({"system": True} if s.get("system") else {})
@@ -575,9 +577,12 @@ async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False)
         title, attach = row["name"], row["source_media_id"]
     elif kind == "scans":
         row = ocr._readable(uid, item_id)
+        mcp_sections.require_media_share(row)
         item["pages"] = [{"n": p["n"], "state": p["state"], "text": p["text"]} for p in ocr._page_list(item_id)]
         title, attach = row["name"], row["source_media_id"]
     elif kind == "speech_chats":
+        for speech_row in row:
+            mcp_sections.require_media_share(speech_row)
         if any(r["state"] not in speeches.TERMINAL for r in row):
             raise _not_ready("дождитесь озвучки или отмените её")
         records = [{"text": r["text"], "voice": r["voice_name"] or r["voice"], "duration": r["duration"], "file": shown}

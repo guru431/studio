@@ -220,7 +220,8 @@ def test_language_sent_per_connection_kind_and_omitted_for_auto(studio, fake_aud
 
 
 def test_mcp_transcribe_tool_limits_reach_the_page(studio):
-    """У MCP Studio запись не режет — только сверяет предел: `_meta["studio/limits"]` инструмента — в каталоге раздела."""
+    """Предел части учитывает объявление инструмента и запас для загрузки сжатой записи."""
+    import mcp_sections
     from test_mcp import add
     from test_mcp_sections import service
     add(studio)
@@ -238,5 +239,5 @@ def test_mcp_transcribe_tool_limits_reach_the_page(studio):
         return httpx.Response(reply.status_code, json=body)
     studio.gw.on["/mcp"] = rpc
     tools = {t["name"]: t for s in studio.c.get("/api/mcp-tools/transcribe").json()["items"] for t in s["tools"]}
-    assert tools["audio_transcribe"]["limits"] == {"max_seconds": 3600}
+    assert tools["audio_transcribe"]["limits"] == {"max_seconds": mcp_sections.TRANSCRIBE_PART_MAX}
     assert speech.tool_limits({"_meta": {"studio/limits": {"max_seconds": "3600"}}}) is None

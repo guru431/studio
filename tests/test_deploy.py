@@ -171,7 +171,7 @@ def test_apache_bounds_the_time_a_request_body_may_take():
     для расшифровки (transcripts.UPLOAD_MAX) на 1 Мбит/с в него укладывается."""
     first, most, rate = map(int, re.search(r"^\s*RequestReadTimeout body=(\d+)-(\d+),MinRate=(\d+)$",
                                            uncommented(VHOST), re.M).groups())
-    assert first <= 20 and rate >= 500 and most <= 3600
+    assert first <= 20 and rate >= 500 and most <= 150 * 60
     assert most * 125_000 >= transcripts.UPLOAD_MAX
 
 
@@ -1535,6 +1535,16 @@ def test_apache_lets_a_recording_through_only_on_its_route():
     assert limit >= transcripts.UPLOAD_MAX
     general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
     assert general < transcripts.UPLOAD_MAX
+
+
+def test_apache_allows_large_project_uploads_on_the_upload_route():
+    import chat_project_files
+    v = uncommented(VHOST)
+    route = r"^/api/chat-projects/[^/]+/files/upload$"
+    block = re.search(rf'<LocationMatch "{re.escape(route)}">(.*?)</LocationMatch>', v, re.S)
+    assert block and re.search(route, "/api/chat-projects/inbox-1/files/upload")
+    limit = int(re.search(r"LimitRequestBody (\d+)", block.group(1)).group(1))
+    assert limit >= chat_project_files.UPLOAD_MAX > (500 << 20)
 
 
 def test_apache_lets_dialog_media_through_only_on_its_route():

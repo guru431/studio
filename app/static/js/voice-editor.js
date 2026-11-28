@@ -5,6 +5,7 @@
  * («Отмена», Escape, Android back) asks first (`#voice-unsaved`); so does any address change (the iOS back swipe,
  * a section tab, «Открыть» in «В работе»): the screen's `hold()` calls `holdVoiceEditor()`. */
 import { api } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { tr } from './i18n.js';
 import { cancelRecording, recordingName, startRecording } from './mic.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -277,6 +278,7 @@ export async function editVoice(host, voice, onSaved) {
     file.value = '';
     if (files.length) addFiles(files);
   });
+  dropFiles(dialog, addFiles, () => !file.disabled);
   rec.addEventListener('click', async () => {
     if (recording) { recording.stop(); return; }
     starting = true;

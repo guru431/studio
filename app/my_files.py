@@ -156,10 +156,20 @@ async def _post(session, route, body, reply_max=mcp_contracts.REPLY_MAX, timeout
     return reply if isinstance(reply, (dict, list)) else {}
 
 
+def file_timestamp(value):
+    """Unix seconds in the range supported by the browser's Date."""
+    return value if type(value) in (int, float) and -8_640_000_000_000 <= value <= 8_640_000_000_000 else None
+
+
 def _file_entry(entry, name):
-    mtime = entry.get("mtime")
-    return {"name": name, "dir": entry.get("dir") is True, "size": _size(entry.get("size")),
-            "mtime": mtime if type(mtime) in (int, float) and mtime >= 0 else None}
+    mtime = file_timestamp(entry.get("mtime"))
+    created = file_timestamp(entry.get("created"))
+    folder = entry.get("dir") is True
+    counts = {key: entry[key] for key in ("files", "folders")
+              if folder and type(entry.get(key)) is int and entry[key] >= 0}
+    return {"name": name, "dir": folder, "size": _size(entry.get("size")),
+            "mtime": mtime if mtime is not None and mtime >= 0 else None,
+            **({"created": created} if created is not None else {}), **counts}
 
 
 def _listing(reply, path):
@@ -285,29 +295,38 @@ async def _declared(uid):
 
 
 # Files already referenced by the active section histories, including retained MCP results.
-STUDIO_FILE_SOURCES = """
-WITH section_files(id, section) AS (
-    SELECT f.media_id, j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id
+SPEECH_TITLE_CHARS = 80
+STUDIO_FILE_SOURCES = f"""
+WITH section_files(id, section, protected, title) AS (
+    SELECT f.media_id, j.section, COALESCE(s.protected, 0), NULL FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id
+      LEFT JOIN mcp_servers s ON s.id = j.server_id
       WHERE f.user_id = :uid AND f.media_id IS NOT json_extract(j.result, '$.video.source_media_id')
-    UNION ALL SELECT media_id, 'photo' FROM images WHERE user_id = :uid AND deleted IS NULL
-    UNION ALL SELECT media_id, 'video' FROM videos WHERE user_id = :uid AND deleted IS NULL
-    UNION ALL SELECT media_id, 'speech' FROM speeches WHERE user_id = :uid AND deleted IS NULL
-    UNION ALL SELECT result_media_id, 'transcribe' FROM transcripts WHERE user_id = :uid AND deleted IS NULL
-    UNION ALL SELECT source_media_id, 'ocr' FROM scans WHERE user_id = :uid AND deleted IS NULL AND origin = 'section'
-    UNION ALL SELECT source_media_id, 'translate' FROM translations WHERE user_id = :uid AND deleted IS NULL
+      AND f.media_id IS NOT json_extract(j.result, '$.photo.source_media_id')
+      AND NOT EXISTS (SELECT 1 FROM mcp_gallery_trash g WHERE g.id = f.media_id AND g.user_id = f.user_id)
+    UNION ALL SELECT media_id, 'photo', 0, NULL FROM images WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT media_id, 'video', 0, NULL FROM videos WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT media_id, 'speech', COALESCE(json_extract(mcp_source, '$.protected'), 0),
+      substr(text, 1, {SPEECH_TITLE_CHARS + 1}) FROM speeches WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT result_media_id, 'transcribe', COALESCE(json_extract(mcp_source, '$.protected'), 0), name
+      FROM transcripts WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT f.media_id, 'transcribe', COALESCE(json_extract(t.mcp_source, '$.protected'), 0), NULL
+      FROM transcript_files f JOIN transcripts t ON t.id = f.transcript_id
+      WHERE f.user_id = :uid AND t.deleted IS NULL
+    UNION ALL SELECT source_media_id, 'ocr', 0, NULL FROM scans WHERE user_id = :uid AND deleted IS NULL AND origin = 'section'
+    UNION ALL SELECT source_media_id, 'translate', 0, NULL FROM translations WHERE user_id = :uid AND deleted IS NULL
 ), chat_files(id, project_id, protected) AS (
     SELECT a.media_id, c.project_id, c.protected_used FROM attachments a JOIN messages m ON m.id = a.message_id
       JOIN chats c ON c.id = m.chat_id WHERE a.user_id = :uid AND c.user_id = :uid AND c.deleted IS NULL
     UNION ALL SELECT f.media_id, c.project_id, c.protected_used FROM chat_media f JOIN chats c ON c.id = f.chat_id
       WHERE f.user_id = :uid AND c.user_id = :uid AND c.deleted IS NULL
-), files(id, section, project_id, protected) AS (
-    SELECT id, section, NULL, 0 FROM section_files
-    UNION ALL SELECT id, 'chat', project_id, protected FROM chat_files
+), files(id, section, project_id, protected, title) AS (
+    SELECT id, section, NULL, protected, title FROM section_files
+    UNION ALL SELECT id, 'chat', project_id, protected, NULL FROM chat_files
 )
 """
 STUDIO_FILES = STUDIO_FILE_SOURCES + """
 SELECT m.id, m.download_name, m.mime, m.size, m.created, m.rel_path, MIN(f.section) AS section,
-       MAX(f.protected) AS protected FROM files f
+       MAX(f.protected) AS protected, MAX(f.title) AS title FROM files f
 JOIN media m ON m.id = f.id AND m.user_id = :uid
 {where}
 GROUP BY m.id ORDER BY m.created DESC, m.id DESC LIMIT :limit
@@ -344,9 +363,16 @@ def studio_file_entries(uid, after, section=""):
     for row in rows[:STUDIO_PAGE]:
         source = f"/api/media/{row['id']}"
         name = row["download_name"]
+        title = row["title"]
+        if title and row["section"] == "speech":
+            prefix = " ".join(title[:SPEECH_TITLE_CHARS].split())
+            title = prefix + "…" if prefix and len(title) > SPEECH_TITLE_CHARS else prefix
         kind = local_kind(name, row["mime"])
         url = f"/api/my-files/0/preview/{row['id']}" if kind in ("pdf", "text") else source
-        entries.append({"id": row["id"], "name": name, "dir": False, "size": row["size"], "mtime": row["created"], "section": row["section"],
+        entries.append({"id": row["id"], "name": name, "dir": False, "size": row["size"], "section": row["section"],
+                        "created": row["created"], "mtime": row["created"],
+                        **({"title": title} if title else {}),
+                        **({"protected": True} if row["protected"] else {}),
                         "download": source + "?download=1", "preview": {"url": url, "kind": kind} if kind else None})
     return {"path": "", "entries": entries, "next": rows[STUDIO_PAGE - 1]["id"] if len(rows) > STUDIO_PAGE else None}
 

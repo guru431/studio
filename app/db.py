@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 85
+VERSION = 88
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1213,6 +1213,48 @@ END;
 """
 SCHEMA += CHAT_PROJECT_MEMBERS_85
 
+MCP_MEDIA_86 = """
+ALTER TABLE transcripts ADD COLUMN mcp_source TEXT;
+ALTER TABLE scans ADD COLUMN mcp_source TEXT;
+ALTER TABLE speeches ADD COLUMN mcp_source TEXT;
+ALTER TABLE translations ADD COLUMN mcp_source TEXT;
+CREATE TABLE transcript_files (
+    transcript_id TEXT NOT NULL REFERENCES transcripts ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    media_id TEXT NOT NULL,
+    PRIMARY KEY (transcript_id, media_id)
+);
+CREATE INDEX transcript_files_media ON transcript_files(user_id, media_id);
+CREATE TABLE mcp_gallery_trash (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    mcp_job_id TEXT NOT NULL REFERENCES mcp_section_jobs ON DELETE CASCADE,
+    section TEXT NOT NULL CHECK (section IN ('photo','video')),
+    media_id TEXT,
+    source_media_id TEXT,
+    prompt TEXT,
+    created REAL NOT NULL,
+    deleted REAL NOT NULL
+);
+CREATE INDEX mcp_gallery_trash_user ON mcp_gallery_trash(user_id, deleted);
+CREATE VIEW mcp_photo_trash AS SELECT * FROM mcp_gallery_trash WHERE section = 'photo';
+CREATE VIEW mcp_video_trash AS SELECT * FROM mcp_gallery_trash WHERE section = 'video';
+CREATE TRIGGER mcp_photo_trash_restore INSTEAD OF UPDATE OF deleted ON mcp_photo_trash
+WHEN new.deleted IS NULL BEGIN DELETE FROM mcp_gallery_trash WHERE id = old.id; END;
+CREATE TRIGGER mcp_video_trash_restore INSTEAD OF UPDATE OF deleted ON mcp_video_trash
+WHEN new.deleted IS NULL BEGIN DELETE FROM mcp_gallery_trash WHERE id = old.id; END;
+"""
+SCHEMA += MCP_MEDIA_86
+
+PROJECT_FILE_DATES_87 = "ALTER TABLE chat_project_files ADD COLUMN mtime REAL;"
+SCHEMA += PROJECT_FILE_DATES_87
+
+USER_ACTIVITY_88 = """ALTER TABLE users ADD COLUMN last_activity REAL;
+ALTER TABLE sessions ADD COLUMN present REAL;
+CREATE INDEX sessions_user ON sessions(user_id);
+UPDATE users SET last_activity = (SELECT MAX(active) FROM sessions WHERE user_id = users.id);"""
+SCHEMA += USER_ACTIVITY_88
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1377,6 +1419,9 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     83: TRANSCRIPT_CONSENT_83,
     84: CHAT_PROJECTS_84,
     85: CHAT_PROJECT_MEMBERS_85,
+    86: MCP_MEDIA_86,
+    87: PROJECT_FILE_DATES_87,
+    88: USER_ACTIVITY_88,
 }
 
 

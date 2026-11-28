@@ -60,6 +60,7 @@ PURGE_SEC = 300
 #: видел бы 502 вместо слов службы. Правка фото пишет два файла подряд (исходник и маску): 2×45 = 90 с
 #: оставляют ~60 с на чтение тела и разбор фото. Сверяет test_deploy.
 SAVE_TIMEOUT_SEC = 45
+LARGE_UPLOAD_MAX = 1 << 30                   # streaming source files for transcripts and project folders
 STALLED = "не удалось сохранить файл: хранилище не отвечает"
 #: Сколько «Удалить» ждёт удаления своих файлов: строки уже нет, путь в очереди — дальше ответ не ждёт шару.
 DELETE_WAIT_SEC = 5
@@ -467,6 +468,8 @@ REFERENCES = {
     "scan_pages": ("media_id",),
     "translations": ("source_media_id",),
     "mcp_section_files": ("media_id",),
+    "transcript_files": ("media_id",),
+    "mcp_gallery_trash": ("media_id", "source_media_id"),
     "chat_share_files": ("media_id",),          # своего user_id нет — владелец у chat_shares
 }
 #: `*media_id`, которые не ссылки: очередь удаления держит путь файла, чьей строки уже нет; загрузка на MCP

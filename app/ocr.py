@@ -62,6 +62,7 @@ import db
 import documents
 import exports
 import lock_policy
+import mcp_sections
 import media
 import operations
 import ocr_pdf
@@ -138,6 +139,7 @@ class Job:
     id: str
     user_id: int
     conn: object
+    mcp_source: "dict | None" = None
     stage: str = QUEUED
     stage_at: float = 0.0
     cancel: bool = False          # «Отменить»: доделать идущую страницу, выбросить, освободить карту
@@ -359,11 +361,12 @@ def holding(user_id: int, key: "str | None" = None) -> bool:
 
 
 def create(user_id: int, conn, model: str, name: str, *, origin: str, source_media_id: "str | None",
-           pages: list[dict], attachment_id: "str | None" = None) -> str:
+           pages: list[dict], attachment_id: "str | None" = None, mcp_source=None) -> str:
     """Документ в очередь пользователя (раннер — `kick`). `pages`: `{"n", "state": "waiting"|"layer",
     "media_id", "text"}`. Ждущих уже QUEUE_MAX — 409 busy."""
     operations.check(user_id)
-    cleaner_route.refuse_ocr(conn, attachment_id is not None and cleaner_route.attachment_routed(attachment_id))
+    if mcp_source is None:
+        cleaner_route.refuse_ocr(conn, attachment_id is not None and cleaner_route.attachment_routed(attachment_id))
     waiting = state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                                (user_id,)).fetchone()[0]
     if waiting >= QUEUE_MAX:
@@ -374,17 +377,18 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
     state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO scans(id, user_id, connection_id, model, name, source_media_id, origin,"
-                         " attachment_id, pages, done_pages, state, detail, created)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-                         (sid, user_id, conn.id, model, name, source_media_id, origin, attachment_id, len(pages),
-                          ready, QUEUED, now))
+                         " attachment_id, pages, done_pages, state, detail, created, mcp_source)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                         (sid, user_id, conn.id if conn else None, model, name, source_media_id, origin, attachment_id,
+                          len(pages), ready, QUEUED, now, json.dumps(mcp_source) if mcp_source else None))
         state.DB.executemany("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text) VALUES (?, ?, ?, ?, ?, ?)",
                              [(sid, user_id, p["n"], p.get("media_id"), p["state"], p.get("text")) for p in pages])
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[sid] = Job(id=sid, user_id=user_id, conn=conn, stage_at=now, epoch=operations.capture(user_id))
+    JOBS[sid] = Job(id=sid, user_id=user_id, conn=conn, mcp_source=mcp_source, stage_at=now,
+                    epoch=operations.capture(user_id))
     log.info("распознавание %s: в очереди, %d стр.", sid[:8], len(pages))
     return sid
 
@@ -405,7 +409,7 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     прежний. У документа из чата текст вложения до итога пуст — ход ждёт документ, как при первой загрузке;
     итог пересобирает его (`attachment_text`). Идёт — 409 `running`, нечего — 409 `nothing`, подключения нет —
     409 `no_connection`, очередь полна — 409 `busy`."""
-    row = state.DB.execute("SELECT state, connection_id, attachment_id FROM scans WHERE id = ? AND user_id = ?"
+    row = state.DB.execute("SELECT state, connection_id, attachment_id, mcp_source FROM scans WHERE id = ? AND user_id = ?"
                            " AND deleted IS NULL", (scan_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
@@ -415,11 +419,9 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     pages = state.DB.execute(f"SELECT n, state FROM scan_pages WHERE scan_id = ? AND {where}", (scan_id, *args)).fetchall()
     if not pages:
         raise HTTPException(409, {"code": "nothing", "message": "распознавать заново нечего"})
-    try:
-        conn = connections.get(user_id, row["connection_id"])
-    except HTTPException:
-        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
-    cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
+    conn, source = _saved_source(user_id, row)
+    if conn is not None:
+        cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
     operations.check(user_id)
     if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                         (user_id,)).fetchone()[0] >= QUEUE_MAX:
@@ -439,12 +441,12 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW(),
+    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, mcp_source=source, stage_at=clock.NOW(),
                         epoch=operations.capture(user_id))
     log.info("распознавание %s: заново, %d стр.", scan_id[:8], len(numbers))
 
 
-def again(user_id: int, scan_id: str, conn, model: str) -> str:
+def again(user_id: int, scan_id: str, conn, model: str, *, mcp_source=None) -> str:
     """«Распознать заново» другим движком (подключение и модель раздела): новый документ раздела из тех же файлов —
     исходного PDF (и уже нарисованных PNG страниц) или фото страниц; ждут все страницы, кроме страниц текстового
     слоя (их текст — без правок, `edit_page`). Номера страниц — прежние. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
@@ -463,8 +465,25 @@ def again(user_id: int, scan_id: str, conn, model: str) -> str:
     files = [source] if source else [p["media_id"] for p in pages if p["state"] == "waiting"]
     if not all(f is not None and media.alive(user_id, f) for f in files):
         raise HTTPException(404, media.GONE)
-    cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
-    return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages)
+    if mcp_source is None:
+        cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
+    elif _private_scan(scan_id):
+        item = mcp_sections.media_source_item(user_id, "ocr", mcp_source)
+        if cleaner_route.is_external_url(item["url"]):
+            raise HTTPException(409, {"code": "cleaner_ocr", "message": cleaner_route.OCR_PRIVATE})
+    return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages,
+                  mcp_source=mcp_source)
+
+
+def _saved_source(user_id, row, *, gate=True):
+    if row["mcp_source"]:
+        source = json.loads(row["mcp_source"])
+        mcp_sections.media_source_item(user_id, "ocr", source)
+        return None, source
+    try:
+        return connections.get(user_id, row["connection_id"], gate=gate), None
+    except HTTPException:
+        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
 
 
 def _lines_conn(user_id: int, row):
@@ -643,6 +662,20 @@ async def _card(job: Job) -> None:
     LEASED[job.conn.base_url] = job.conn
 
 
+async def _mcp_page(job: Job, png: bytes) -> str:
+    try:
+        async with mcp_sections.media_tool(job.user_id, "ocr", job.mcp_source) as (session, tool, listed):
+            if cleaner_route.is_external_url(session.url) and _private_scan(job.id):
+                raise OcrError(cleaner_route.OCR_PRIVATE)
+            result = await mcp_sections.run_media(job.user_id, "ocr", job.mcp_source, session, tool, listed,
+                                                  png, "image/png", "page.png")
+    except HTTPException as exc:
+        raise PageFailed(exc.detail.get("message", "сбой MCP") if isinstance(exc.detail, dict) else "сбой MCP") from None
+    data = result.get("structuredContent")
+    text = mcp_sections.result_text(data) if isinstance(data, dict) else mcp_sections.first_text(result, PAGE_TEXT_MAX)
+    return documents.nfc(mcp_sections.clean_text(text.strip(), PAGE_TEXT_MAX))
+
+
 async def _recognize_pages(job: Job, row) -> str:
     """Страницы `waiting` по порядку; итог — текст документа."""
     stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
@@ -661,11 +694,13 @@ async def _recognize_pages(job: Job, row) -> str:
         elif await asyncio.to_thread(ocr_render.is_blank, png):
             page_state, text, why = "blank", None, None
         else:
-            await _card(job)
+            if job.mcp_source is None:
+                await _card(job)
             job.stage = f"распознаю · стр. {n - first + 1} из {row['pages']}"
             _store(job)
             try:
-                page_state, text, why = "done", await _page_text(job, png), None
+                text = await (_mcp_page(job, png) if job.mcp_source else _page_text(job, png))
+                page_state, why = "done", None
             except PageFailed as e:
                 page_state, text, why = "failed", None, str(e)
             _check(job)                                   # ответ отменённого — выбросить
@@ -889,16 +924,16 @@ def resume_queued() -> None:
     """Старт службы (после recover и state.HTTP): ждущие документы — снова в очередь своего пользователя с
     подключением документа (его нет — ошибка словами), раннер — с поколением истории старта
     (`operations.snapshot`): очистка истории после него их сохранение запрещает."""
-    rows = state.DB.execute("SELECT id, user_id, connection_id FROM scans WHERE state = 'queued'"
+    rows = state.DB.execute("SELECT id, user_id, connection_id, mcp_source FROM scans WHERE state = 'queued'"
                             " ORDER BY created, rowid").fetchall()
     for row in rows:
         try:
             # документ принят до смены правил доступа — доделывается и без доступа к общему подключению
-            conn = connections.get(row["user_id"], row["connection_id"], gate=False)
+            conn, source = _saved_source(row["user_id"], row, gate=False)
         except HTTPException:
             _finish(row["id"], "error", NO_CONNECTION)
             continue
-        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, stage_at=clock.NOW(),
+        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, mcp_source=source, stage_at=clock.NOW(),
                               epoch=operations.snapshot(row["user_id"]))
     users = {JOBS[row["id"]].user_id for row in rows if row["id"] in JOBS}
     for uid in users:
@@ -948,7 +983,7 @@ router = APIRouter(prefix="/api/ocr")
 #: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску); `failed_pages` — страниц,
 #: которые модель не прочла: «готово» их не скрывает
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, origin, attachment_id, pages, done_pages,"
-           " state, detail, created, finished,"
+           " state, detail, created, finished, mcp_source,"
            " (SELECT count(*) FROM scan_pages p WHERE p.scan_id = scans.id AND p.state = 'failed') AS failed_pages")
 FORMAT = "нужен один PDF или фото PNG, JPEG, WebP"
 TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — разделите документ"
@@ -969,12 +1004,15 @@ def _row(user_id: int, sid: str):
 
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
-    return card.mark({"id": row["id"], "name": row["name"], "state": row["state"],
+    out = {"id": row["id"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
             "connection_id": row["connection_id"], "model": row["model"], "pages": row["pages"],
             "done_pages": row["done_pages"],
             "failed_pages": row["failed_pages"], "origin": row["origin"], "created": row["created"],
-            "finished": row["finished"]}, "ocr", row)
+            "finished": row["finished"]}
+    if row["mcp_source"]:
+        out["mcp"] = mcp_sections.public_media_source(row["mcp_source"])
+    return card.mark(out, "ocr", row)
 
 
 def _page_list(sid: str) -> list[dict]:
@@ -1040,8 +1078,8 @@ def _int_header(request: Request, key: str) -> "int | None":
 @router.post("", status_code=202)
 async def upload(request: Request):
     uid = request.state.user.id
-    conn, model = sections.resolve(uid, "ocr", _int_header(request, "x-studio-connection"),
-                                   request.headers.get("x-studio-model") or None)
+    conn, model, mcp_source = _source(uid, mcp_sections.media_source_header(request),
+                                      _int_header(request, "x-studio-connection"), request.headers.get("x-studio-model"))
     try:
         files = await documents.read_uploads(request, ocr_render.PAGES_MAX)
         numbers, formats = await asyncio.to_thread(_inspect, files, _int_header(request, "x-studio-first-page"),
@@ -1075,7 +1113,7 @@ async def upload(request: Request):
         pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} for n in numbers]
     try:
         sid = create(uid, conn, model, files[0][0], origin="section",
-                     source_media_id=None if formats else saved[0], pages=pages)
+                     source_media_id=None if formats else saved[0], pages=pages, mcp_source=mcp_source)
     except HTTPException:                                    # очередь полна
         await _drop(uid, saved)
         raise
@@ -1216,6 +1254,16 @@ class RetryIn(BaseModel):
     page: int | None = Field(default=None, ge=1)
     connection_id: int | None = None
     model: str | None = Field(default=None, max_length=200)
+    mcp: mcp_sections.MediaSource | None = None
+
+
+def _source(uid, selection, connection_id=None, model=None):
+    if selection is None:
+        conn, model = sections.resolve(uid, "ocr", connection_id, model)
+        return conn, model, None
+    source = mcp_sections.pin_media_source(uid, "ocr", selection)
+    model = mcp_sections.clean_text(source["arguments"].get("model"), 200) or source["tool"]
+    return None, model, source
 
 
 @router.post("/{sid}/retry", status_code=202)
@@ -1225,12 +1273,12 @@ async def retry_scan(sid: str, body: RetryIn, request: Request):
     он; тот же движок — как без них. Страницу повторяют только движком документа."""
     uid = request.state.user.id
     row = _row(uid, sid)
-    if body.connection_id is not None or body.model:
+    if body.connection_id is not None or body.model or body.mcp:
         if body.page is not None:
             raise HTTPException(422, {"code": "input", "message": "страницу повторяют тем же движком"})
-        conn, model = sections.resolve(uid, "ocr", body.connection_id, body.model)
-        if (conn.id, model) != (row["connection_id"], row["model"]):
-            sid = again(uid, sid, conn, model)
+        conn, model, source = _source(uid, body.mcp, body.connection_id, body.model)
+        if source or (conn.id, model) != (row["connection_id"], row["model"]):
+            sid = again(uid, sid, conn, model, mcp_source=source)
             kick(uid)
             log.info("ocr %s: заново другим движком", sid[:8])
             return _out(_row(uid, sid))
@@ -1374,6 +1422,7 @@ async def to_chat(sid: str, request: Request):
     вложение. Подтверждения для внешней модели нет (спека 6.4): документ — свой."""
     uid = request.state.user.id
     row = _readable(uid, sid)
+    mcp_sections.require_media_share(row)
     text = exports.pages_md(_page_list(sid))
     if len(text) > documents.TEXT_MAX_CHARS:
         raise HTTPException(413, {"code": "too_big", "message": (

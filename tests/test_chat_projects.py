@@ -164,18 +164,21 @@ def test_shared_project_hides_protected_chat_and_its_file_aliases(studio):
     media_id, author = state.DB.execute("SELECT media_id, user_id FROM attachments WHERE id = ?",
                                         (attachment["id"],)).fetchone()
     state.DB.execute("UPDATE chats SET protected_used = 1 WHERE id = ?", (chat_id,))
-    state.DB.execute("INSERT INTO chat_project_files(id, project_id, user_id, name, name_key, created, media_id)"
-                     " VALUES ('alias', ?, ?, 'alias.png', 'alias.png', ?, ?)", (pid, author, T0, media_id))
+    folder = studio.c.post(f"{files}/folders", json={"name": "Docs"}).json()["id"]
+    state.DB.execute("INSERT INTO chat_project_files(id, project_id, user_id, parent_id, name, name_key, created, media_id)"
+                     " VALUES ('alias', ?, ?, ?, 'alias.png', 'alias.png', ?, ?)", (pid, author, folder, T0, media_id))
     assert studio.c.post(f"{base}/members", json={"login": "project-viewer", "role": "viewer"}).status_code == 201
     signin(studio, "project-viewer")
     assert studio.c.get("/api/chats").json()["items"] == []
     assert studio.c.get(f"{base}/chats/{chat_id}").status_code == 404
-    assert studio.c.get(files).json()["entries"] == []
+    visible = studio.c.get(files).json()["entries"]
+    assert [(item["id"], item["files"], item["folders"], item["size"]) for item in visible] == [(folder, 0, 0, 0)]
+    assert studio.c.get(files, params={"parent": folder}).json()["entries"] == []
     assert studio.c.get(f"{files}?parent=chats").json()["entries"] == []
     assert studio.c.get(f"{files}/content/chat-{media_id}").status_code == 404
     assert studio.c.get(f"{files}/content/alias").status_code == 404
     with zipfile.ZipFile(io.BytesIO(studio.c.get(f"{files}/zip").content)) as archive:
-        assert not archive.namelist()
+        assert archive.namelist() == ["Docs/"]
 
 
 def test_project_files_follow_chats_and_zip_nested_storage(studio):
@@ -237,6 +240,10 @@ def test_project_folder_import_reuses_only_folders_and_bulk_actions_keep_the_tre
     sibling = studio.c.post(f"{files}/upload", headers={"x-studio-name": "same.txt"}, content=b"Root").json()["id"]
     foreign = studio.c.post(f"{other}/folders", json={"name": "Foreign"}).json()["id"]
     assert studio.c.post(f"{files}/folders", json={"name": "same.txt", "reuse": True}).status_code == 409
+    root_entry = next(entry for entry in studio.c.get(files).json()["entries"] if entry["id"] == root)
+    assert (root_entry["size"], root_entry["files"], root_entry["folders"]) == (len(b"Nested"), 1, 1)
+    child_entry = studio.c.get(files, params={"parent": root}).json()["entries"][0]
+    assert (child_entry["size"], child_entry["files"], child_entry["folders"]) == (len(b"Nested"), 1, 0)
 
     response = studio.c.get(f"{files}/zip", params={"item": [root, sibling]})
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
@@ -250,3 +257,47 @@ def test_project_folder_import_reuses_only_folders_and_bulk_actions_keep_the_tre
     assert studio.c.post(f"{files}/delete-selection", json={"ids": [root, sibling]}).status_code == 204
     assert studio.c.get(files).json()["entries"] == []
     assert studio.c.get(content).status_code == 404
+
+
+def test_project_dates_preserve_source_mtime_and_track_folder_changes(studio):
+    add_gateway(studio)
+    files = f"{BASE}/{project(studio, 'Dates')}/files"
+    folder = studio.c.post(f"{files}/folders", json={"name": "Docs"}).json()["id"]
+
+    def dates(parent=None):
+        params = {"parent": parent} if parent else {}
+        return {entry["name"]: (entry["created"], entry["mtime"])
+                for entry in studio.c.get(files, params=params).json()["entries"]}
+
+    assert dates() == {"Docs": (T0, T0)}
+    studio.clock[0] += 60
+    original = T0 - 3600.25
+    headers = {"x-studio-folder": folder, "x-studio-name": "new.txt", "x-studio-mtime": str(round(original * 1000))}
+    uploaded = studio.c.post(f"{files}/upload", headers=headers, content=b"New")
+    assert uploaded.status_code == 201, uploaded.text
+    assert dates(folder) == {"new.txt": (T0 + 60, original)}
+    assert dates() == {"Docs": (T0, T0 + 60)}
+
+    studio.clock[0] += 60
+    assert studio.c.post(f"{files}/upload", headers=headers, content=b"Duplicate").status_code == 409
+    assert dates() == {"Docs": (T0, T0 + 60)}
+    older_client = studio.c.post(f"{files}/upload", headers={"x-studio-folder": folder, "x-studio-name": "old.txt"}, content=b"Old")
+    assert older_client.status_code == 201, older_client.text
+    assert dates(folder)["old.txt"] == (T0 + 120, None)
+
+    studio.clock[0] += 60
+    assert studio.c.delete(f"{files}/{uploaded.json()['id']}").status_code == 204
+    assert dates() == {"Docs": (T0, T0 + 180)}
+    studio.clock[0] += 60
+    assert studio.c.post(f"{files}/delete-selection", json={"ids": [older_client.json()["id"]]}).status_code == 204
+    assert dates() == {"Docs": (T0, T0 + 240)}
+
+
+def test_step_87_preserves_upload_dates_without_inventing_source_mtime(tmp_path):
+    with closing(db.connect(tmp_path / "studio.db")) as conn:
+        install_schema(conn, 86)
+        conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'a', 'A', 'hash', ?)", (T0,))
+        conn.execute("INSERT INTO chat_project_files(id, project_id, user_id, name, name_key, created)"
+                     " VALUES ('docs', 'inbox-1', 1, 'Docs', 'docs', ?)", (T0,))
+        db.migrate(conn)
+        assert tuple(conn.execute("SELECT created, mtime FROM chat_project_files WHERE id = 'docs'").fetchone()) == (T0, None)

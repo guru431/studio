@@ -37,6 +37,7 @@ import { locale, tr } from './i18n.js';
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { icon as svgIcon } from './icons.js';
 import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
@@ -287,6 +288,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const chosen = uploadInput.files?.[0];
     if (chosen) sendUpload(uploadTarget, chosen);
   });
+  if (upload) dropFiles(view, ([chosen]) => sendUpload(dir, chosen), () => alive && !operating);
 
   /** Файл в папку `target`: имя занято — окно «Заменить?»; заменить открытый правленый файл нельзя. */
   async function sendUpload(target, chosen, replace = false) {

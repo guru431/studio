@@ -104,7 +104,7 @@ def test_record_pause_leave_and_stop_uploads_the_recording(browser, live, width)
     v = r["values"]
     assert v["fits"] and v["dotFits"], v
     assert v["slice"] == 10000 and v["type"] == "audio/webm;codecs=opus", v      # кусок каждые 10 с
-    # ревью C-M5: речь — 32 кбит/с (сервер всё равно сжимает до 32k); 4 ч AAC по умолчанию браузера — больше 200 МиБ
+    # Речь записывается с заданным битрейтом, чтобы длительные записи занимали меньше места.
     assert v["bits"] == 32000, v
     assert v["paused"] == "Продолжить" and v["unlocked"] >= 1, v                 # на паузе экран может гаснуть
     assert "запись" in v["dictation"] and v["dictation"] != "started", v
@@ -149,13 +149,13 @@ def test_mcp_record_uses_the_shared_language_control_and_keeps_its_result(browse
         ("click", "#transcribe-record"),
         ("wait", f"!{PANEL}.hidden && {LAST}?.state === 'recording'"),
         ("click", "#rec-stop"),
-        ("wait", "document.querySelector('#section-mcp-result').textContent.includes('Запись распознана.')"),
-        ("wait", "document.querySelector('.mcp-history-entry')"),
+        ("wait", "document.querySelector('.tr-text')?.textContent === 'Запись распознана.'"),
+        ("wait", "document.querySelector('.tr-audio') && document.querySelector('.tr-item')"),
         ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()"),
         ("eval", "fits", NO_OVERFLOW)], init=FAKE_RECORDER, width=320, height=900, mobile=True)
     assert not r.get("failed"), r
     assert r["values"]["fits"]
-    assert calls[0][0] == "artifact_upload" and calls[0][1]["mime_type"] == "audio/webm"
+    assert calls[0][0] == "artifact_upload" and calls[0][1]["mime_type"] == "audio/mpeg"
     assert calls[1:] == [("audio_transcribe", {"language": "de", "artifact_id": UPLOADED})]
     assert not problems(r), problems(r)
 

@@ -122,6 +122,8 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
 
 
 def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live, monkeypatch):
+    from scans import photo
+
     login = 'mcp-upload-forms'
     live.add_user(login)
     calls = service(live.gw, uploads=True, clone_models=True, monkeypatch=monkeypatch)
@@ -132,27 +134,27 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live, monkey
         ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
         ('eval', 'speech', "location.hash='#/speech'"), ('wait', "document.querySelector('#speech-composer #section-mcp-tool')?.offsetWidth > 0"),
         ('type', '#speech-text', 'Read this'), set_value('#speech-composer #chip-voice', 'ExampleVoice'), ('click', '#speech-go'),
-        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Synthesized speech'"),
+        ('wait', "document.querySelector('.sp-record .sp-audio')"),
         add_voice(), ('eval', 'resetChoices', "location.hash='#/settings/chat'"),
         ('wait', "document.querySelector('#mcp-add')"), ('eval', 'clone', "location.hash='#/speech'"),
         ('wait', "document.querySelector('#chip-mcp-model')?.offsetWidth > 0 && document.querySelector('#chip-voice option')"),
         set_value('#chip-mcp-model', 'f5-tts'), ('type', '#speech-text', 'Проверка голоса'), ('click', '#speech-go'),
-        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Synthesized speech'"),
+        ('wait', "[...document.querySelectorAll('.sp-record')].some(card => card.textContent.includes('Проверка голоса') && card.querySelector('.sp-audio'))"),
         ('eval', 'transcribe', "location.hash='#/transcribe'"), ('wait', "document.querySelector('#transcribe-upload')?.offsetWidth > 0"),
         put_audio('#transcribe-add input', WAV_FAKE),
-        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Transcribed audio'"),
+        ('wait', "document.querySelector('.tr-text')?.textContent === 'Transcribed audio' && document.querySelector('.tr-audio')"),
         ('eval', 'ocr', "location.hash='#/ocr'"), ('wait', "document.querySelector('#ocr-upload')?.offsetWidth > 0"),
-        ('eval', 'onePage', "!document.querySelector('#ocr-add input').multiple"),
-        put_files('#ocr-add input', [("page.png", PNG_REAL)]),
-        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Recognized page'"),
+        ('eval', 'multiple', "document.querySelector('#ocr-add input').multiple"),
+        put_files('#ocr-add input', [("page.png", photo("PNG"))]),
+        ('wait', "document.querySelector('.ocr-text')?.textContent.includes('Recognized page')"),
         ('eval', 'fits', NO_OVERFLOW)], width=1280)
     assert not result.get('failed'), result
-    assert result['values']['onePage'] and result['values']['fits']
+    assert result['values']['multiple'] and result['values']['fits']
     assert calls[0] == ('speech_synthesize', {'text': 'Read this', 'voice': 'ExampleVoice'})
     assert calls[1][0] == 'artifact_upload' and calls[1][1]['mime_type'] == 'audio/wav'
     assert calls[2][0] == 'speech_synthesize' and calls[2][1]['model'] == 'f5-tts' and calls[2][1]['engine'] == 'clone'
     assert [name for name, _ in calls[3:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
-    assert [calls[i][1]['mime_type'] for i in [3, 5]] == ['audio/wav', 'image/png']
+    assert [calls[i][1]['mime_type'] for i in [3, 5]] == ['audio/mpeg', 'image/png']
     assert not problems(result), result.get('log')
 
 

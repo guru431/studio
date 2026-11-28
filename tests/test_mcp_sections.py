@@ -4,7 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import HTTPException
 import httpx
@@ -15,6 +15,7 @@ import media
 import state
 from conftest import make_user, signin
 from fakes import MP4, PNG_REAL, WAV_FAKE
+from http_checks import wait_http_state
 from test_mcp import TOKEN, URL, add
 
 JOB = "job_" + "1" * 32
@@ -119,6 +120,9 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
                     data = {"result": {"artifacts": [{"id": ARTIFACT, "mime_type": "video/mp4", "name": "video.mp4",
                                                         "download_path": PATH, "download_url": "https://example.net/ignored"}]}}
                 result = {"structuredContent": data}
+                if name == "speech_synthesize" and not (catalog_results and name in catalog_results):
+                    result["content"] = [{"type": "audio", "mimeType": "audio/wav",
+                                          "data": base64.b64encode(WAV_FAKE).decode()}]
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
 
     async def download(request):
@@ -151,6 +155,21 @@ def test_section_tools_discovered_for_owner_and_called_only_in_matching_section(
     assert base64.b64decode(reply.json()["files"][0]["base64"]) == image
     assert calls == [("image_generate", {"prompt": "private prompt"})]
     assert "private prompt" not in caplog.text and TOKEN not in caplog.text
+
+
+def test_mcp_file_translation_runs_in_the_regular_file_queue(studio):
+    sid = add(studio)
+    calls = service(studio.gw)
+    selected = quote(json.dumps({"server_id": sid, "tool": "text_translate"}))
+    queued = studio.c.post("/api/translate/files", files={"file": ("source.txt", b"Translate this", "text/plain")},
+                           headers={"X-Studio-MCP": selected, "X-Studio-Source-Lang": "en", "X-Studio-Target-Lang": "ru"})
+    assert queued.status_code == 202, queued.text
+    item = queued.json()
+    path = f"/api/translate/{item['id']}"
+    done = wait_http_state(studio, path, {"done", "error"})
+    assert done["state"] == "done" and done["kind"] == "file", done
+    assert calls == [("text_translate", {"text": "Translate this", "source_lang": "en", "target_lang": "ru"})]
+    assert "Translated text" in studio.c.get(path + "/export?format=txt").text
 
 
 def test_section_upload_sends_the_file_name_only_to_a_server_that_takes_it(studio):
@@ -487,9 +506,14 @@ def test_background_photo_series_appears_in_gallery_and_deletes_individual_files
     assert studio.c.post("/share/unlock", json=credentials).status_code == 404
     assert studio.c.post(second + "/share", json={"pin": "0123"}).json()["detail"]["code"] == "protected"
     assert studio.c.delete(first).status_code == 204
-    assert not state.DB.execute("SELECT 1 FROM chat_shares WHERE item_id = ?", (photos[0]["id"],)).fetchone()
     assert studio.c.get(first).status_code == 404
     assert studio.c.get(second).json()["state"] == "done"
+    trash = f"/api/trash/mcp_photo_trash/{photos[0]['id']}"
+    assert studio.c.post(trash + "/restore").status_code == 204
+    assert studio.c.get(first).status_code == 200
+    assert studio.c.delete(first).status_code == 204
+    assert studio.c.request("DELETE", trash, json={"password": "password-123"}).status_code == 204
+    assert not state.DB.execute("SELECT 1 FROM chat_shares WHERE item_id = ?", (photos[0]["id"],)).fetchone()
     history = studio.c.get("/api/mcp-tools/photo/history/" + rid).json()
     remaining = "/api/media/" + photos[1]["media_id"]
     assert [f["url"] for f in history["result"]["files"]] == [remaining]
@@ -547,6 +571,11 @@ def test_durable_video_job_copies_artifact_in_background(studio):
     assert opened.json()["item"]["prompt"] == "turn slowly"
     assert studio.c.delete(path).status_code == 204
     assert studio.c.post("/share/unlock", json=credentials).status_code == 404
+    trash = "/api/trash/mcp_video_trash/" + viewed["id"]
+    assert studio.c.post(trash + "/restore").status_code == 204
+    assert studio.c.get(path).status_code == 200
+    assert studio.c.delete(path).status_code == 204
+    assert studio.c.request("DELETE", trash, json={"password": "password-123"}).status_code == 204
     assert studio.c.get("/api/media/" + viewed["media_id"]).status_code == 404
     assert studio.c.get("/api/media/" + viewed["source_media_id"]).status_code == 200  # retained by the repeats
 
@@ -591,6 +620,21 @@ def test_legacy_mcp_video_results_are_listed_and_owner_scoped(studio):
     assert len({clip["source_media_id"] for clip in repeat.json()["items"]}) == 1
     assert [args for name, args in calls if name == "video_create"] == [
         {"artifact_id": ARTIFACT, "prompt": "original prompt", "seconds": 5}] * 2
+
+
+def test_video_mcp_cancel_uses_the_regular_gallery_route(studio):
+    sid = add(studio)
+    calls = service(studio.gw, catalog_results={"job_cancel": {"status": "cancelled"}})
+    payload = {"tool": "video_create", "record": True, "files": {"artifact_id": {
+        "data": base64.b64encode(PNG_REAL).decode(), "mime_type": "image/png",
+    }}}
+    queued = studio.c.post(f"/api/mcp-tools/video/servers/{sid}/run", json=payload)
+    assert queued.status_code == 200, queued.text
+    path = f"/api/videos/{queued.json()['history']['id']}"
+    cancelled = studio.c.post(path + "/cancel")
+    assert cancelled.status_code == 200 and cancelled.json()["state"] == "cancelled", cancelled.text
+    assert calls[-1] == ("job_cancel", {"job_id": JOB})
+    assert studio.c.get(path).json()["state"] == "cancelled"
 
 
 def test_chat_model_uses_mcp_and_saves_normal_conversation(studio):

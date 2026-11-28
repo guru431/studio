@@ -42,6 +42,7 @@ import images
 import knowledge
 import lock_policy
 import mcp_files
+import mcp_sections
 import ocr
 import operations
 import screenlock
@@ -153,13 +154,21 @@ KINDS: dict[str, Kind] = {
     "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"]),
                    "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
                    search="video", column="prompt", fallback="Ролик"),
+    "mcp_photo_trash": Kind("mcp_photo_trash", "photo", mcp_sections.purge_gallery, lambda row: _head(row["prompt"]),
+                            "SELECT media_id FROM mcp_gallery_trash WHERE id = :id"
+                            " UNION SELECT source_media_id FROM mcp_gallery_trash WHERE id = :id", column="prompt", fallback="Картинка"),
+    "mcp_video_trash": Kind("mcp_video_trash", "video", mcp_sections.purge_gallery, lambda row: _head(row["prompt"]),
+                            "SELECT media_id FROM mcp_gallery_trash WHERE id = :id"
+                            " UNION SELECT source_media_id FROM mcp_gallery_trash WHERE id = :id", column="prompt", fallback="Ролик"),
     # чат озвучки, удалённый целиком («Удалить чат»), — одна запись корзины: возвращается и удаляется весь
     "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"]),
                      "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id", column="text",
                      fallback="Озвучка"),
     "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"]),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
-                        " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe", fallback="Запись"),
+                        " UNION SELECT result_media_id FROM transcripts WHERE id = :id"
+                        " UNION SELECT media_id FROM transcript_files WHERE transcript_id = :id",
+                        search="transcribe", fallback="Запись"),
     # скан, что ушёл в корзину со своим переводом, — часть строки перевода: объём — в ней, «Вернуть» перевода
     # возвращает и его (`translate.restoring`), удаляет его `translate.purge`
     "scans": Kind("scans", "ocr", ocr.purge, lambda row: _head(row["name"]),

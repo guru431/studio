@@ -18,13 +18,14 @@ import { message as serverMessage, tr } from './i18n.js';
  * поля текста — подсказка. #/speech?id=<id> («Открыть» в «В работе», jobs.js) выбирает озвучку;
  * принятая озвучка зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { icon } from './icons.js';
 import { NAMES } from './sections-meta.js';
 import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
-import { schemaLimits, sectionMcp } from './mcp-sections.js';
+import { mcpHeaders, schemaLimits, sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { chatPlayer } from './speech-read.js';
@@ -161,10 +162,15 @@ function build(view, ctx) {
   const editNote = el('p', { class: 'muted small', id: 'speech-edit-note', hidden: true }, tr("Изменение записи"));
   const cancelEdit = el('button', { type: 'button', class: 'btn btn-sm', id: 'speech-edit-cancel', hidden: true },
     tr("Отменить изменение"));
+  const textFile = el('input', { type: 'file', id: 'speech-file', class: 'sr', accept: '.txt,.md,text/plain,text/markdown',
+    tabindex: '-1', 'aria-hidden': 'true' });
+  const fileLabel = tr("Загрузить текст из TXT или Markdown");
+  const attach = el('button', { type: 'button', class: 'icon-btn attach', id: 'speech-attach', title: fileLabel,
+    'aria-label': fileLabel }, icon('clip'));
   const mcp = sectionMcp('speech', { native: !ctx.hint, fields: ['text', 'voice', 'model', 'engine', 'reference_text', 'language'],
     onChange: paintMcp, onBusy: paintBusy });
-  const textBox = fieldBox(text, { fit: true });
-  const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
+  const textBox = fieldBox(text, { fit: true, attach });
+  const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textFile, textBox.error, over, hint,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap,
       voiceBox, addVoice, langView.wrap, mcp.fields, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
@@ -298,7 +304,6 @@ function build(view, ctx) {
 
   function paintMcp() {
     const active = !!mcp.tool;
-    if (active && editing) endEdit();
     form.hidden = !!ctx.hint && !active;
     if (nativeHint) {
       nativeHint.hidden = active;
@@ -313,11 +318,13 @@ function build(view, ctx) {
     mcpModelView.wrap.hidden = choices.length < 2;
     modelView.wrap.hidden = modelPick.options.length < 2 || active;
     paintVoice();
+    paintView();
   }
 
   function paintBusy() {
     fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
     addVoice.disabled = fresh.disabled;
+    attach.disabled = fresh.disabled;
     go.disabled = needsVoice || fresh.disabled || text.value.length > limit();
   }
 
@@ -463,9 +470,12 @@ function build(view, ctx) {
 
   function endEdit(restore = true) {
     if (editing && restore) {
+      if (editing.source) mcp.selectSource(`${editing.source.server_id}:${editing.source.tool}`, editing.mcpModel, editing.source.arguments);
+      else mcp.useNative();
       modelPick.value = editing.model;
       paintVoice();
-      voiceBox.querySelector('#chip-voice').value = editing.voice;
+      const voice = voiceBox.querySelector('#chip-voice');
+      if (voice) voice.value = editing.voice;
       langPick.value = editing.language;
       syncPicks();
       setText(editing.draft);
@@ -479,16 +489,23 @@ function build(view, ctx) {
 
   async function startEdit(item) {
     await choicesReady;
-    if (!alive || ctx.hint || records.current?.id !== item.chat_id || fresh.disabled || !voiceBox.querySelector('#chip-voice')) return;
-    mcp.useNative();
+    if (!alive || records.current?.id !== item.chat_id || fresh.disabled) return;
+    let source;
+    try { source = mcp.selection(); }
+    catch (err) { error.textContent = words(err); return; }
     if (!editing) editing = { draft: text.value, model: modelPick.value,
-      voice: voiceBox.querySelector('#chip-voice').value, language: langPick.value };
+      source, mcpModel: mcpModelPick.value, voice: voiceBox.querySelector('#chip-voice')?.value, language: langPick.value };
+    if (item.mcp) {
+      const { server_id, tool, arguments: args } = item.mcp;
+      if (!mcp.selectSource(`${server_id}:${tool}`, args.model, args)) return;
+      if ([...mcpModelPick.options].some(option => option.value === args.model)) mcpModelPick.value = args.model;
+    } else mcp.useNative();
     editing.id = item.id;
     const option = `${item.connection_id}:${item.model}`;
     if ([...modelPick.options].some((o) => o.value === option)) modelPick.value = option;
     paintVoice();
     const pick = voiceBox.querySelector('#chip-voice');
-    pick.value = chosen().kind === 'srvllm' && !voices.some((v) => v.id === item.voice) ? '' : item.voice;
+    if (pick) pick.value = !item.mcp && chosen().kind === 'srvllm' && !voices.some((v) => v.id === item.voice) ? '' : item.voice;
     langPick.value = item.language || 'ru';
     syncPicks();
     setText(item.text);
@@ -504,7 +521,8 @@ function build(view, ctx) {
       card = { box: el('article', { class: 'sp-record', 'data-id': item.id }), busy: null, stamp: '' };
       cards.set(item.id, card);
     }
-    const stamp = JSON.stringify([item.text, item.voice_name, item.state, item.media_id, item.model]);
+    const editable = item.mcp ? !!mcp.option(`${item.mcp.server_id}:${item.mcp.tool}`) : !ctx.hint;
+    const stamp = JSON.stringify([item.text, item.voice_name, item.state, item.media_id, item.model, editable]);
     if (stamp === card.stamp) {
       if (card.busy) busyBlock(card.busy, item, {});
       if (item.parts > 0) {
@@ -546,7 +564,7 @@ function build(view, ctx) {
           try {
             await api('PATCH', `/api/speeches/${item.id}`, {
               text: item.text, voice: item.voice, connection_id: item.connection_id, model: item.model, language: item.language,
-            });
+            }, { headers: mcpHeaders(item.mcp) });
             kick();
             await refresh();
           } catch (err) {
@@ -557,7 +575,7 @@ function build(view, ctx) {
         });
         acts.append(repeat);
       }
-      if (!ctx.hint) {
+      if (editable) {
         const edit = el('button', { type: 'button', class: 'btn btn-sm sp-edit' }, tr("Изменить"));
         edit.addEventListener('click', () => startEdit(item));
         acts.append(edit);
@@ -585,7 +603,7 @@ function build(view, ctx) {
     downloadAll.hidden = items.length < 2 || !items.some((i) => i.media_id && !RUNNING.has(i.state));
     cancelChat.hidden = items.length < 2 || !items.some((i) => RUNNING.has(i.state));
     // ссылка — снимок готовых озвучек (chat_shares `speech_chats`): пока что-то идёт, сервер ответит 409 `running`
-    share.hidden = !items.some((i) => i.state === 'done' && i.media_id) || items.some((i) => RUNNING.has(i.state));
+    share.hidden = !items.some((i) => i.state === 'done' && i.media_id) || items.some((i) => RUNNING.has(i.state) || i.mcp?.protected);
     if (live && !items.some((i) => i.id === live.id && RUNNING.has(i.state))) {
       live.audio.pause();
       live = null;
@@ -646,6 +664,39 @@ function build(view, ctx) {
     if (records.current) el('a', { href: `/api/speeches/chats/${encodeURIComponent(records.current.id)}/audio`, download: '' }).click();
   });
   text.addEventListener('input', paintCount);
+  async function importText([file]) {
+    if (!file || attach.disabled) return;
+    if (!/\.(txt|md)$/i.test(file.name)) {
+      error.textContent = tr("Выберите файл TXT или Markdown");
+      return;
+    }
+    if (file.size > LONG_MAX * 4 + 3) {
+      error.textContent = tr("Текст из файла не помещается в поле озвучки");
+      return;
+    }
+    const target = following;
+    let content;
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()).trim();
+    } catch {
+      if (alive && following === target) error.textContent = tr("Не удалось прочитать файл. Сохраните его в UTF-8");
+      return;
+    }
+    if (!alive || following !== target || attach.disabled) return;
+    const combined = [text.value, content].filter(Boolean).join('\n\n');
+    if (!content || combined.length > limit()) {
+      error.textContent = content ? tr("Текст из файла не помещается в поле озвучки") : tr("В файле нет текста");
+      return;
+    }
+    error.textContent = '';
+    setText(combined);
+  }
+  attach.addEventListener('click', () => textFile.click());
+  textFile.addEventListener('change', () => {
+    importText([...textFile.files]);
+    textFile.value = '';
+  });
+  dropFiles(main, importText, () => !form.hidden && !attach.disabled);
   modelPick.addEventListener('change', paintVoice);
   cancelEdit.addEventListener('click', () => endEdit());
   addVoice.addEventListener('click', async () => {
@@ -682,23 +733,21 @@ function build(view, ctx) {
     const navigation = following;
     try {
       const { connection_id: connectionId, model } = chosen();
-      if (mcp.tool) {
+      const source = mcp.selection();
+      let submittedVoice = voice;
+      if (source) {
         // голос из перечня сервера уходит полем voice, личный — образцом (voiceId)
         const shared = !!voiceField?.selectedOptions?.[0]?.dataset.mcp;
         const voiceId = voiceField?.tagName === 'SELECT' && !shared && mcp.canClone() ? voice : undefined;
         const mcpModel = voiceId || !mcp.canClone() ? mcpModelPick.value || undefined : undefined;
-        const ok = await mcp.run({ text: value, model: mcpModel, language: langView.wrap.hidden ? undefined : langPick.value,
-          voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
-        if (ok) {
-          draft.sent(raw);
-          if (alive && text.value === raw) setText('');
-        }
-        return;
+        source.voice_id = voiceId;
+        if (mcpModel) source.arguments.model = mcpModel;
+        submittedVoice = voiceBox.hidden ? '' : voice;
       }
-      const created = await api(edited ? 'PATCH' : 'POST', edited ? `/api/speeches/${edited}` : '/api/speeches', { text: value, voice,
+      const created = await api(edited ? 'PATCH' : 'POST', edited ? `/api/speeches/${edited}` : '/api/speeches', { text: value, voice: submittedVoice,
         ...(cid ? { chat_id: cid } : {}),
         ...(model ? { connection_id: connectionId, model } : {}),
-        ...(langView.wrap.hidden ? {} : { language: langPick.value }) });
+        ...(langView.wrap.hidden ? {} : { language: langPick.value }) }, { headers: mcpHeaders(source) });
       draft.sent(raw);                 // ушли из раздела до ответа — озвученный текст черновиком не вернётся
       kick();
       if (alive && following === navigation && records.current?.id === cid && text.value === raw && editing?.id === edited) {

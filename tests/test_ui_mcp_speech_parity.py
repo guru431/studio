@@ -21,10 +21,14 @@ def test_speech_common_model_voice_language_and_long_text_on_mobile(browser, liv
         ("eval", "fits", NO_OVERFLOW),
         ("eval", "transport", "!!document.querySelector('#mcp-field-wait_seconds')"),
         ("click", "#speech-go"),
-        ("wait", "document.querySelectorAll('#section-mcp-result audio').length === 3")],
+        ("wait", "document.querySelectorAll('.sp-record .sp-audio').length === 3"),
+        ("wait", "document.querySelector('.sp-record .sp-edit')"),
+        ("click", ".sp-record .sp-edit"),
+        ("eval", "edit", "[document.querySelector('#speech-text').value, document.querySelector('#chip-voice').value]")],
         width=320, mobile=True, timeout=40000)
     assert not result.get("failed"), result
     assert "200 000" in result["values"]["count"] and "3 части" in result["values"]["count"]
     assert result["values"]["fits"] and not result["values"]["transport"]
+    assert result["values"]["edit"] == [PARTS[0], "nova"]
     assert calls == [{"text": part, "voice": "nova", "model": "second", "language": "en"} for part in PARTS]
     assert not problems(result), problems(result)

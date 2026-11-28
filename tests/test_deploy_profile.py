@@ -202,6 +202,8 @@ def test_profile_values_that_contain_another_example_stay_intact(profile):
 
 
 def test_remote_backend_changes_only_the_proxy_destination_and_retains_route_options():
+    from media import LARGE_UPLOAD_MAX
+
     source, destination = io.BytesIO(), io.BytesIO()
     root = Path(__file__).parents[1]
     with tarfile.open(fileobj=source, mode="w") as archive:
@@ -216,7 +218,7 @@ def test_remote_backend_changes_only_the_proxy_destination_and_retains_route_opt
         assert "http://10.77.1.15:9123/api/agent/link upgrade=websocket timeout=300" in proxy
         assert "http://10.77.1.15:9123/api/code/ timeout=600 flushpackets=on" in proxy
         assert "http://10.77.1.15:9123/api/videos timeout=330" in proxy
-        assert "LimitRequestBody 220200960" in proxy
+        assert proxy.count(f"LimitRequestBody {LARGE_UPLOAD_MAX}") == 2
         assert "STUDIO_BACKEND_PORT=9123" in archive.extractfile("deploy/docker/host.conf").read().decode()
 
 

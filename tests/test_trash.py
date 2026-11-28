@@ -226,9 +226,22 @@ def make_kb_document(s, uid: int) -> Made:
     return Made(doc, [], lambda: s.c.delete(f"/api/knowledge/{kb}/documents/{doc}"), visible)
 
 
+def make_mcp_gallery(s, uid: int, section: str) -> Made:
+    photo = section == "photo"
+    mid = save(uid, b"MCP result", "image/png" if photo else "video/mp4", "result.png" if photo else "result.mp4")
+    job = "a" * 32
+    state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, created,"
+                     " stamp, status) VALUES (?, ?, ?, 1, 'MCP', ?, '', '', ?, '', 'completed')",
+                     (job, uid, section, "image_generate" if photo else "video_create", T0))
+    state.DB.execute("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)", (job, uid, mid))
+    return section_made(s, mid, [mid], "/api/images" if photo else "/api/videos")
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
 MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation, "voices": make_voice,
-        "voice_samples": make_voice_sample, "knowledge_bases": make_knowledge_base, "kb_documents": make_kb_document}
+        "voice_samples": make_voice_sample, "knowledge_bases": make_knowledge_base, "kb_documents": make_kb_document,
+        "mcp_photo_trash": lambda s, uid: make_mcp_gallery(s, uid, "photo"),
+        "mcp_video_trash": lambda s, uid: make_mcp_gallery(s, uid, "video")}
 
 
 def owner(s) -> int:

@@ -3,6 +3,7 @@
 import logging
 from types import SimpleNamespace
 
+import auth
 import images
 import jobs
 import ocr
@@ -61,6 +62,41 @@ def get(s, since=None):
 
 def by_id(items):
     return {i["id"]: i for i in items}
+
+
+def test_account_activity_follows_interactions_after_logout_and_running_jobs(studio):
+    make_user(studio, "administrator", is_admin=True)
+    member = make_user(studio, "member")
+    never = make_user(studio, "never-signed-in")
+    admin_csrf = signin(studio, "administrator")
+    admin_cookie = studio.c.cookies.get(auth.COOKIE)
+    studio.c.cookies.clear()
+    signin(studio, "member")
+    assert studio.c.get("/api/admin/users").status_code == 403
+    studio.clock[0] += 30
+    assert studio.c.post("/api/lock/alive", json={"active": False, "interacted": True}).status_code == 200
+    last = studio.clock[0]
+    studio.clock[0] += 15
+    assert studio.c.post("/api/lock/alive", json={"active": True}).status_code == 200
+    studio.c.cookies.clear()
+    studio.c.cookies.set(auth.COOKIE, admin_cookie)
+    studio.c.headers[auth.CSRF_HEADER] = admin_csrf
+
+    def users():
+        items = studio.c.get("/api/admin/users").json()["items"]
+        assert NAME not in repr(items)
+        return {user["id"]: user for user in items}
+
+    visible = users()
+    assert (visible[member]["activity"], visible[member]["online"], visible[member]["last_activity"]) == ("recent", True, last)
+    assert visible[never]["activity"] == "inactive" and visible[never]["last_activity"] is None
+    state.DB.execute("DELETE FROM sessions WHERE user_id = ?", (member,))
+    studio.clock[0] = last + 3600
+    transcript(member, "working")
+    visible = users()
+    assert (visible[member]["activity"], visible[member]["online"], visible[member]["last_activity"]) == ("working", False, last)
+    state.DB.execute("UPDATE transcripts SET state = 'done', finished = ? WHERE id = 'working'", (studio.clock[0],))
+    assert users()[member]["activity"] == "inactive"
 
 
 def test_running_jobs_of_every_section(studio):

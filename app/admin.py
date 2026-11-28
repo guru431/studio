@@ -34,6 +34,7 @@ import cleaner_route
 import clock
 import connections
 import email_accounts
+import jobs
 import knowledge
 import ldap_auth
 import manage
@@ -53,6 +54,8 @@ import state
 import upstream
 
 NAME_MAX = 64
+RECENT_SEC = 3600
+PRESENT_SEC = 45                        # browser heartbeat every 15 seconds
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
@@ -172,7 +175,7 @@ async def check_cleaner_settings():
     return await cleaner_route.check()
 
 
-USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email, u.ldap_guid,"
+USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email, u.ldap_guid, u.last_activity,"
              " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections,"
              " (SELECT json_group_array(json_array(id, name)) FROM (SELECT g.id, g.name FROM access_group_members m"
              "   JOIN access_groups g ON g.id = m.group_id WHERE m.user_id = u.id ORDER BY g.id))"
@@ -220,8 +223,22 @@ def _self(admin: auth.User, uid: int) -> None:
 
 @router.get("/users")
 async def list_users():
-    return {"items": [_user_doc(row) for row in state.DB.execute(USERS_SQL + ' ORDER BY u.id')],
-            "ldap_configured": ldap_auth.configured()}
+    now = clock.NOW()
+    busy = jobs.active_users(now)
+    present = {row[0] for row in state.DB.execute("SELECT DISTINCT user_id FROM sessions WHERE expires > ? AND present > ?",
+                                                  (now, now - PRESENT_SEC))}
+    items = []
+    for row in state.DB.execute(USERS_SQL + ' ORDER BY u.id'):
+        uid, last = row["id"], row["last_activity"]
+        online = not row["disabled"] and uid in present
+        status = "inactive"
+        if not row["disabled"]:
+            if uid in busy:
+                status = "working"
+            elif last is not None and now - last < RECENT_SEC:
+                status = "recent"
+        items.append({**_user_doc(row), "activity": status, "last_activity": last, "online": online})
+    return {"items": items, "ldap_configured": ldap_auth.configured()}
 
 
 @router.post("/users", status_code=201)

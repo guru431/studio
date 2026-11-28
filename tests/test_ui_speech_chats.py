@@ -8,6 +8,27 @@ from test_ui_browser import (API, NO_OVERFLOW, READY, add_gateway, add_voice, br
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 
+def test_drop_text_into_speech_uses_the_composer_draft(browser, live):
+    login = 'speech-drop'
+    live.add_user(login)
+    drop = """(() => {
+      const data = new DataTransfer();
+      const target = document.querySelector('.speech .tr-view');
+      const event = (type) => new DragEvent(type, {bubbles: true, cancelable: true, dataTransfer: data});
+      data.items.add(new File(['Вторая строка.'], 'speech.txt', {type: 'text/plain'}));
+      target.dispatchEvent(event('dragover'));
+      const highlighted = document.querySelector('.speech .file-drop-active') !== null;
+      return highlighted && !target.dispatchEvent(event('drop'));
+    })()"""
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(),
+        *go('speech'), ('wait', "document.querySelector('#speech-attach:not([disabled])')"),
+        ('type', '#speech-text', 'Черновик.'), ('eval', 'drop', drop),
+        ('wait', "document.querySelector('#speech-text').value === 'Черновик.\\n\\nВторая строка.'"),
+        ('eval', 'cleared', "!document.querySelector('.speech .file-drop-active')")], width=1280)
+    assert not result.get('failed') and not problems(result), result
+    assert result['values']['drop'] and result['values']['cleared']
+
+
 @pytest.mark.parametrize('width', [320, 1280])
 def test_continue_and_edit_speech_chat(browser, live, width):
     login = f'speech-chat-{width}'

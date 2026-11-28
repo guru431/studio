@@ -20,9 +20,9 @@
   две — отдача файла, архив выделенного и выгрузка истории рвутся, поток пула не висит вечно; срока
   чтения в коде нет и на этом держится — `hard` в `/etc/fstab` его отнял бы.
 - Звук — `ffmpeg` debian (ставит `install.sh`, если нет): временные файлы — `/var/lib/studio/tmp`
-  (`config.tmp_dir`), чистится при старте службы. Запись для расшифровки — до 200 МиБ телом запроса
-  потоком на шару: `LimitRequestBody` 210 МиБ только на `^/api/transcripts$` (`LocationMatch` vhost),
-  общий предел — прежний.
+  (`config.tmp_dir`), чистится при старте службы. Оригиналы расшифровок и файлы проектов принимаются
+  потоком на шару до `media.LARGE_UPLOAD_MAX` (1073741824). В Apache повышенный `LimitRequestBody`
+  действует на `/api/transcripts` и `/api/chat-projects/<id>/files/upload`. Поток через nginx идёт без буферизации тела.
 - YouTube — общий yt-dlp debian `/usr/local/bin/yt-dlp` (системный `python3`), служба зовёт `yt-dlp` по
   `PATH` (`web.YTDLP`), своей копии в `.venv` нет: она устаревала бы между выкладками, а YouTube ломает
   старые версии. Обновляет root каждую ночь — `/etc/crontab`: `0 1 * * * root /usr/bin/pip3 install -U

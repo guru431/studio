@@ -705,7 +705,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     addImages([...picker.files]);
     picker.value = '';
   });
-  fileDrop(form, addImages);
+  if (!readonly) fileDrop(form, addImages, host, () => alive && !attach.disabled);
 
   /* ---- лента -------------------------------------------------------------------- */
 

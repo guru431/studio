@@ -151,8 +151,7 @@ export async function startMeeting({ onTick } = {}) {
     return null;
   }
   const type = TYPES.find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
-  // речь: 32 кбит/с (сервер всё равно сжимает до 32k) — 4 ч ≈ 58 МБ; умолчание браузера (AAC Safari 128k+) — больше
-  // предела загрузки 200 МиБ
+  // Речь: 32 кбит/с — примерно 58 МБ за 4 ч. Меньше данных хранится локально и передаётся на сервер.
   const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let recorder, releaseRecording;
   try {

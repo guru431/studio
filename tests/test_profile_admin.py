@@ -548,7 +548,7 @@ def test_panel_lists_no_history(studio, env):
         assert word not in text, word
     for item in studio.c.get("/api/admin/users").json()["items"]:
         assert set(item) == {"id", "login", "name", "is_admin", "disabled", "created", "connections", "email",
-                             "groups", "group_names", "ldap"}
+                             "groups", "group_names", "ldap", "activity", "last_activity", "online"}
 
 
 def test_allowlist_round_trip(studio):

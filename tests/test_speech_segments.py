@@ -4,11 +4,13 @@
 import asyncio
 import base64
 import json
+from urllib.parse import quote
 
 import httpx
 
 import speech
 from fakes import WAV_FAKE
+from http_checks import wait_http_state
 from test_connections import conn_of
 from test_mcp import TOKEN, add
 from test_speech import cloud
@@ -132,3 +134,32 @@ def test_mcp_extra_fields_pass_bounds_check(studio):
         reply = run(studio, sid, arguments)
         assert reply.status_code == 422 and reply.json()["detail"]["message"] == words, (arguments, reply.text)
     assert [name for name, _ in calls if name != "artifact_upload"] == []
+
+
+def test_mcp_transcript_uses_the_standard_recording_and_editing_workflow(studio, fake_audio):
+    sid = add(studio)
+    props = {**TRANSCRIBE, "diarization": {"type": "boolean", "default": False}}
+    calls = transcriber(studio.gw, {"segments": [
+        {"speaker": "SPEAKER_00", "start": 0, "end": 1.1, "text": "Hello."},
+        {"speaker": "SPEAKER_01", "start": 1.4, "end": 2.2, "text": "Good morning."},
+    ]}, properties=props)
+    selection = quote(json.dumps({"server_id": sid, "tool": "audio_transcribe"}))
+    added = studio.c.post("/api/transcripts", content=WAV_FAKE, headers={
+        "Content-Type": "audio/wav", "X-Studio-Name": "talk.wav", "X-Studio-MCP": selection, "X-Studio-Language": "en",
+    })
+    assert added.status_code == 202, added.text
+    tid = added.json()["id"]
+    url = f"/api/transcripts/{tid}"
+    record = wait_http_state(studio, url, {"done", "error"})
+    assert record["state"] == "done", record
+    assert record["name"] == "talk.wav" and record["speakers"] == 2
+    assert [s["start"] for s in record["segments"]] == [0, 1.4]
+    assert studio.c.get(f"/api/media/{record['listen_media_id']}").status_code == 200
+    assert calls[-1] == ("audio_transcribe", {"artifact_id": UPLOADED, "language": "en", "diarization": True})
+    rename = studio.c.patch(url, json={"names": {"Собеседник 2": "Editor"}})
+    assert rename.json()["segments"][1]["speaker"] == "Editor"
+    assert "Editor" in studio.c.get(url + "/export?format=srt").text
+    assert studio.c.get("/api/transcripts").json()["items"][0]["id"] == tid
+    again = studio.c.post(url + "/retry", json={})
+    assert again.status_code == 202 and again.json()["id"] != tid
+    assert wait_http_state(studio, f"/api/transcripts/{again.json()['id']}", {"done", "error"})["state"] == "done"

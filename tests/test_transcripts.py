@@ -18,7 +18,7 @@ import state
 import transcripts
 from fastapi import HTTPException
 from conftest import T0, add_gateway, erase_history, make_user, signin
-from http_checks import wait_http_state
+from http_checks import on_http, wait_http_state
 
 NAME = "Звонок Ивану.m4a"
 
@@ -51,6 +51,42 @@ def test_upload_streams_to_the_share_and_reads_by_speakers(studio, env, fake_aud
     assert NAME not in caplog.text and "Здравствуйте" not in caplog.text
     assert not list((env.db_path.parent / "tmp").iterdir())
     assert transcripts.JOBS == {}                     # кончившееся в памяти не живёт
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("project", [False, True], ids=["transcript", "project-file"])
+def test_stream_501_mib_through_normal_upload_routes(studio, fake_audio, monkeypatch, project):
+    add_gateway(studio)
+    uid = studio.c.get("/api/me").json()["id"]
+    base = f"/api/chat-projects/inbox-{uid}/files"
+    endpoint = f"{base}/upload" if project else "/api/transcripts"
+    block = b"x" * (1 << 20)
+
+    async def compress(source, target):
+        assert source.stat().st_size == 501 * len(block)
+        target.write_bytes(block[:1024])
+
+    monkeypatch.setattr(transcripts.audio, "compress", compress)
+
+    async def chunks():
+        for _ in range(501):
+            yield block
+
+    async def send(client):
+        return await client.post(endpoint, content=chunks(), headers={"x-studio-name": "sample.wav",
+                                 "content-type": "audio/wav", "content-length": str(501 * len(block))})
+
+    r = on_http(studio, send)
+    assert r.status_code == (201 if project else 202), r.text
+    fid = r.json()["id"]
+    if project:
+        entries = studio.c.get(base).json()["entries"]
+        assert next(item for item in entries if item["id"] == fid)["size"] == 501 * len(block)
+        tail = studio.c.get(f"{base}/content/{fid}", headers={"Range": "bytes=-1"})
+        assert tail.status_code == 206 and tail.content == block[-1:]
+    else:
+        item = wait_tr(studio, fid, {"done"})
+        assert media.path(uid, item["source_media_id"]).stat().st_size == 501 * len(block)
 
 
 def result_file(tid) -> pathlib.Path:
@@ -564,6 +600,8 @@ def test_rename_keeps_the_extension_and_search_finds_the_new_name(studio, fake_a
     assert r.status_code == 200, r.text
     assert r.json()["name"] == "Встреча с Чайковским.m4a" and len(r.json()["segments"]) == 2
     assert studio.c.get("/api/transcripts").json()["items"][0]["name"] == "Встреча с Чайковским.m4a"
+    files = studio.c.post("/api/my-files/0/list?section=transcribe", json={"path": ""}).json()["entries"]
+    assert [(f["name"], f["title"]) for f in files] == [("transcript.json", "Встреча с Чайковским.m4a")]
     assert found_names(studio, "Чайковским") and not found_names(studio, "Звонок")
     disposition = studio.c.get(f"/api/transcripts/{tid}/export", params={"format": "txt"}).headers["content-disposition"]
     assert "%D0%92%D1%81%D1%82%D1%80%D0%B5%D1%87%D0%B0" in disposition                 # «Встреча…».txt

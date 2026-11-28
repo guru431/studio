@@ -22,12 +22,15 @@ from math import isfinite
 
 from fastapi import APIRouter, Request
 
+import bridge
 import card
 import chat
 import clock
 import lock_policy
 import images
+import mcp_sections
 import ocr
+import owui_link
 import push
 import speeches
 import state
@@ -48,6 +51,29 @@ MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX", "snofs": "SNOFS Krea 2", "b
 TEXT_TITLES = {"description": "Описание фото", "translation": "Перевод промпта"}
 STATES = {"done": "done", "error": "error", "failed": "error", "cancelled": "cancelled"}
 TERMINAL = tuple(STATES)
+RUNNING = {"images": ("working", "cancelling", "queued"), "videos": ("queued", "in_progress"),
+           "transcripts": ("working", "queued", "cancelling"), "scans": ocr.RUNNING,
+           "translations": translate.RUNNING, "speeches": ("working", "queued", "cancelling")}
+
+
+def active_users(now: float) -> set[int]:
+    """Only account IDs, with the same state predicates as the job list. No bridge or upstream calls."""
+    queries = [f"SELECT 1 FROM {table} WHERE user_id = u.id AND deleted IS NULL"
+               f" AND state IN ({', '.join('?' for _ in statuses)})" for table, statuses in RUNNING.items()]
+    queries.extend(("SELECT 1 FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id"
+                    " AND c.deleted IS NULL AND m.status = 'streaming' AND (m.via = 'server' OR m.alive_at > ?)",
+                    "SELECT 1 FROM mcp_section_jobs WHERE user_id = u.id AND status IN ("
+                    + ', '.join('?' for _ in mcp_sections.GALLERY_ACTIVE) + ')'))
+    args = (*(status for statuses in RUNNING.values() for status in statuses), now - chat.ALIVE_SEC,
+            *sorted(mcp_sections.GALLERY_ACTIVE))
+    users = {row[0] for row in state.DB.execute("SELECT u.id FROM users u WHERE EXISTS ("
+                                                + " UNION ALL ".join(queries) + ")", args)}
+    users.update(job.user_id for job in images.JOBS.values() if job.kind in images.TEXT_KINDS and job.finished_at is None)
+    users.update(link.acc.user_id for link in owui_link.LINKS.values() if link.turns)
+    for (aid, _), turn in bridge.INITIATORS.items():
+        if (link := bridge.LINKS.get(aid)) is not None:
+            users.add(link.user_id if turn.user_id is None else turn.user_id)
+    return users
 
 
 #: «Отменить» идущей и ждущей строки — обычный адрес отмены раздела (защита раздела — та же: 423)
@@ -89,7 +115,7 @@ def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*"
 
 
 def _photo(uid: int, after: float) -> list:
-    going, done = _rows("images", uid, ("working", "cancelling", "queued"), after)
+    going, done = _rows("images", uid, RUNNING["images"], after)
     out = []
     for row in going + done:
         job = images.JOBS.get(row["id"])
@@ -121,7 +147,7 @@ def _photo_text(uid: int, after: float) -> list:
 
 
 def _video(uid: int, after: float) -> list:
-    going, done = _rows("videos", uid, ("queued", "in_progress"), after)
+    going, done = _rows("videos", uid, RUNNING["videos"], after)
     out = []
     for row in going + done:
         item = _item("video", row, f"Ролик · {row['seconds']} с", row["detail"], f"video?id={row['id']}")
@@ -131,7 +157,7 @@ def _video(uid: int, after: float) -> list:
 
 
 def _transcribe(uid: int, after: float) -> list:
-    going, done = _rows("transcripts", uid, ("working", "queued"), after)
+    going, done = _rows("transcripts", uid, RUNNING["transcripts"], after)
     out = []
     for row in going + done:
         job = transcripts.JOBS.get(row["id"])
@@ -147,7 +173,7 @@ def _ocr(uid: int, after: float, hidden: set) -> list:
     # и отправленного хода (`ocr.SERVED`) — тоже: строка у них одна — перевода или ответа
     closed, args = lock_policy.hidden_scans(uid, hidden)
     served = f"SELECT id FROM scans WHERE user_id = ? AND {ocr.SERVED}"
-    going, done = _rows("scans", uid, ocr.RUNNING, after,
+    going, done = _rows("scans", uid, RUNNING["scans"], after,
                         hidden=(f"{closed} UNION {served}" if closed else served, (*args, uid)))
     out = []
     unread = push.unread_scans(row["id"] for row in done if row["state"] == "done")
@@ -166,7 +192,7 @@ def _ocr(uid: int, after: float, hidden: set) -> list:
 
 def _translate(uid: int, after: float) -> list:
     # без исходника и перевода: до 300 000 знаков каждой записи на каждый опрос
-    going, done = _rows("translations", uid, translate.RUNNING, after, "id, name, state, detail, created, finished")
+    going, done = _rows("translations", uid, RUNNING["translations"], after, "id, name, state, detail, created, finished")
     out = []
     for row in going + done:
         job = translate.JOBS.get(row["id"])
@@ -179,7 +205,7 @@ def _speech(uid: int, after: float) -> list:
     """Строка на чат озвучки (части длинного текста — записи одного чата), id — id чата (строки прежнего кода без
     чата — своя): идущий — по идущей или первой ждущей записи, готовый — когда в чате ничего не ждёт и не идёт, по
     последней кончившейся; запись чата, не получившаяся за JOBS_RECENT_SEC, делает готовый чат ошибкой (как push)."""
-    going, done = _rows("speeches", uid, ("working", "queued"), after)
+    going, done = _rows("speeches", uid, RUNNING["speeches"], after)
     chats: dict[str, list] = {}
     for row in going:
         chats.setdefault(row["chat_id"] or row["id"], []).append(row)

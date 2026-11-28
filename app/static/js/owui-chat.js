@@ -102,7 +102,6 @@ export function chatView(host, { account, chatId = null, readOnly = false, manag
   const inputBox = fieldBox(input, { attach: clip, fold: true });
   const form = el('form', { class: 'composer owui-composer', id: 'owui-composer', hidden: readOnly }, chips, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), send, stop));
-  if (!readOnly) fileDrop(form, attach);
   const feedHead = el('div', { class: 'owui-feed-head' }, title.label, title.note);
   const findHost = el('div', { class: 'chat-find' });
   const nav = messageNav({ scroller, feed, prefix: 'owui', own: '.owui-msg.user:not(.owui-msg-queued)',
@@ -115,6 +114,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, manag
   const activity = el('div', { class: 'code-activity' }, el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const root = el('div', { class: 'owui-chat-view', id: 'owui-feed', 'data-account': String(account) },
     feedHead, findHost, history, queuedNote, notice, bar, form);
+  if (!readOnly) fileDrop(form, attach, root);
   host.append(root);
   const find = findView(findHost, { scroller, feed, prefix: 'owui', texts: '.owui-msg.user > .bubble, .owui-msg.assistant .md' });
   // «Поделиться и экспортировать» (owui_share.py): ссылка — снимок ветки, файлы — только именами

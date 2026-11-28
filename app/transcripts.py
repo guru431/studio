@@ -34,12 +34,14 @@
    заголовок `X-Studio-Language` загрузки и `language` «Расшифровать ещё раз».
 """
 import asyncio
+from contextlib import asynccontextmanager
+from functools import partial
 import json
 import logging
 import math
 import unicodedata
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -57,6 +59,7 @@ import documents
 import exports
 import forms
 import lock_policy
+import mcp_sections
 import media
 import operations
 import push
@@ -64,7 +67,7 @@ import sections
 import speech
 import state
 
-UPLOAD_MAX = 200 * 1024 * 1024
+UPLOAD_MAX = media.LARGE_UPLOAD_MAX
 DURATION_MAX = 60 * 60                       # предел одного запроса, если источник своего не сообщает
 TOTAL_MAX = 4 * 3600                         # самая длинная запись: дольше — отказ до работы
 #: допуск сверх TOTAL_MAX (с): время записи на странице и длительность, измеренная ffmpeg, расходятся — запись
@@ -84,7 +87,7 @@ QUEUE_MAX = 5
 QUEUED = "в очереди"
 #: столбцы строки для ленты, опроса и ответов — без `text` (весь текст записи, нужен только индексу поиска)
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, result_media_id, duration, speakers, state,"
-           " detail, created, finished, edits, language, listen_media_id")
+           " detail, created, finished, edits, language, listen_media_id, mcp_source")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/transcripts")
@@ -103,6 +106,8 @@ class Job:
     source_media_id: str
     language: "str | None" = None
     listen_media_id: "str | None" = None
+    mcp_source: "dict | None" = None
+    files: list[str] = field(default_factory=list)
     part: str = ""                           # «часть 2 из 4» длинной записи, иначе пусто
     stage: str = "готовлю запись"
     stage_at: float = 0.0
@@ -208,8 +213,16 @@ def _out(row, segments: "list | None" = None) -> dict:
            "listen_media_id": row["listen_media_id"],
            "names": edits["names"], "edited": any(edits[key] for key in ("texts", "names", "speakers")),
            "language": row["language"]}
+    if row["mcp_source"]:
+        out["mcp"] = mcp_sections.public_media_source(row["mcp_source"])
     if segments is not None:
         out["segments"] = segments
+        files = state.DB.execute("SELECT m.id, m.download_name AS name FROM transcript_files f JOIN media m"
+                                 " ON m.id = f.media_id AND m.user_id = f.user_id"
+                                 " WHERE f.user_id = ? AND f.transcript_id = ? ORDER BY f.rowid",
+                                 (row["user_id"], row["id"])).fetchall()
+        if files:
+            out["files"] = [dict(file) for file in files]
     return card.mark(out, "transcribe", row)
 
 
@@ -260,14 +273,17 @@ async def _runner(user_id: int) -> None:
         if not state.DB.execute("UPDATE transcripts SET state = 'working', detail = 'готовлю запись'"
                                 " WHERE id = ? AND state = 'queued'", (row["id"],)).rowcount:
             continue
-        try:
-            # принята до смены правил доступа — доделывается и без доступа к общему подключению
-            conn = connections.get(user_id, row["connection_id"], gate=False)
-        except HTTPException:                        # подключение удалили, пока запись ждала
-            conn = None
+        source = json.loads(row["mcp_source"]) if row["mcp_source"] else None
+        conn = None
+        if source is None:
+            try:
+                # принята до смены правил доступа — доделывается и без доступа к общему подключению
+                conn = connections.get(user_id, row["connection_id"], gate=False)
+            except HTTPException:                    # подключение удалили, пока запись ждала
+                pass
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
                   source_media_id=row["source_media_id"], language=row["language"],
-                  listen_media_id=row["listen_media_id"], stage_at=now)
+                  listen_media_id=row["listen_media_id"], mcp_source=source, stage_at=now)
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
@@ -304,6 +320,31 @@ async def _recognize(job: Job, path) -> list:
             _store(job)
 
 
+@asynccontextmanager
+async def _recognizer(job: Job):
+    if job.mcp_source is None:
+        if job.conn is None:
+            raise JobError("подключение раздела удалено из профиля")
+        yield (await speech.limits(job.conn, job.model)).max_seconds, partial(_recognize, job)
+        return
+    async with mcp_sections.media_tool(job.user_id, "transcribe", job.mcp_source) as (session, tool, listed):
+        step = tool["limits"]["max_seconds"]
+        values = {"language": job.language} if job.language is not None else {}
+
+        async def recognize(path):
+            job.stage, job.stage_at = "распознаю", clock.NOW()
+            _store(job)
+            data = await speech.read_recording(path)
+            result = await mcp_sections.run_media(job.user_id, "transcribe", job.mcp_source, session, tool, listed,
+                                                  data, "audio/mpeg", "audio.mp3", values)
+            segments = await mcp_sections.transcript_segments(session, result)
+            async for mid in mcp_sections.transcript_files(session, result):
+                job.files.append(mid)
+            return segments
+
+        yield step, recognize
+
+
 def _stamp(sec: float) -> str:
     s = int(sec)
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
@@ -313,7 +354,7 @@ def _shift(s: speech.Segment, offset: float) -> speech.Segment:
     return speech.Segment(s.start + offset, s.end + offset, s.speaker, s.text)
 
 
-async def _in_parts(job: Job, whole, duration: float, step: int, tmp) -> tuple[list, list]:
+async def _in_parts(job: Job, whole, duration: float, step: int, tmp, recognize) -> tuple[list, list]:
     """Длинная запись равными частями не длиннее `step` секунд (п. 8 шапки): равные — чтобы хвост в доли секунды
     не стал отдельной частью (внешний сервис ему откажет, и пропадёт вся расшифровка). Режется `whole` — запись,
     уже сжатая `audio.compress` в CBR mp3: поиск по нему точный и дешёвый, а в webm браузера без индекса и в VBR
@@ -330,8 +371,10 @@ async def _in_parts(job: Job, whole, duration: float, step: int, tmp) -> tuple[l
         job.stage, job.stage_at = "готовлю запись", clock.NOW()
         _store(job)
         await audio.cut(whole, start, length if n < total - 1 else duration - start, tmp)
-        part, part_raw = speech.turns([_shift(s, start) for s in await _recognize(job, tmp)])
-        if n:
+        part, part_raw = speech.turns([_shift(s, start) for s in await recognize(tmp)])
+        if not part:
+            continue
+        if replicas:
             replicas.append(speech.Segment(start, start, None, MARKER.format(n + 1, _stamp(start))))
         base = len(replicas)
         replicas += part
@@ -382,8 +425,6 @@ async def run(job: Job) -> None:
     new_copy = None
     try:
         try:
-            if job.conn is None:
-                raise JobError("подключение раздела удалено из профиля")
             try:
                 source = media.path(job.user_id, job.listen_media_id or job.source_media_id)
             except HTTPException:
@@ -392,14 +433,14 @@ async def run(job: Job) -> None:
             state.DB.execute("UPDATE transcripts SET duration = ? WHERE id = ?", (duration, job.id))
             if duration > TOTAL_MAX + TOTAL_SLACK:
                 raise JobError(f"запись длиннее {TOTAL_MAX // 3600} ч — разделите её")
-            step = (await speech.limits(job.conn, job.model)).max_seconds
-            compressed = source if job.listen_media_id else (tmp if duration <= step else whole)
-            if not job.listen_media_id:
-                await audio.compress(source, compressed)
-            if duration <= step:
-                replicas, raw = speech.turns(await _recognize(job, compressed))
-            else:
-                replicas, raw = await _in_parts(job, compressed, duration, step, tmp)
+            async with _recognizer(job) as (step, recognize):
+                compressed = source if job.listen_media_id else (tmp if duration <= step else whole)
+                if not job.listen_media_id:
+                    await audio.compress(source, compressed)
+                if duration <= step:
+                    replicas, raw = speech.turns(await recognize(compressed))
+                else:
+                    replicas, raw = await _in_parts(job, compressed, duration, step, tmp, recognize)
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
             if not job.listen_media_id:
@@ -408,6 +449,8 @@ async def run(job: Job) -> None:
             payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
                                  ensure_ascii=False).encode("utf-8")
             result = await media.save_async(job.user_id, payload, "application/json", "transcript.json")
+            state.DB.executemany("INSERT INTO transcript_files(transcript_id, user_id, media_id) VALUES (?, ?, ?)",
+                                 ((job.id, job.user_id, mid) for mid in job.files))
             outcome = ("done", "готово", {"result_media_id": result,
                                           "listen_media_id": job.listen_media_id or new_copy,
                                           "speakers": len({s.speaker for s in replicas if s.speaker}),
@@ -432,6 +475,9 @@ async def run(job: Job) -> None:
             await audio.remove_temp(tmp, whole)
             if new_copy is not None and outcome[0] != "done":
                 await media.delete_async(job.user_id, new_copy)
+            if outcome[0] != "done":
+                for mid in job.files:
+                    await media.delete_async(job.user_id, mid)
         except asyncio.CancelledError:
             pass
         finally:
@@ -552,12 +598,29 @@ def _language(value) -> "str | None":
         raise _bad("язык распознавания — Авто, русский или английский") from None
 
 
+def _source(uid, selection, connection_id=None, model=None):
+    if selection is None:
+        conn, model = sections.resolve(uid, "transcribe", connection_id, model)
+        return conn, model, None
+    source = mcp_sections.pin_media_source(uid, "transcribe", selection)
+    model = mcp_sections.clean_text(source["arguments"].get("model"), 200) or source["tool"]
+    return None, model, source
+
+
+def _mcp_language(value):
+    if len(value or "") > 200:
+        raise _bad("слишком длинный код языка распознавания")
+    return value or None
+
+
 @router.post("", status_code=202)
 async def upload(request: Request):
     uid = request.state.user.id
-    language = _language(request.headers.get("x-studio-language", "").strip())
-    conn, model = sections.resolve(uid, "transcribe", _int_header(request, "x-studio-connection"),
-                                   request.headers.get("x-studio-model") or None)
+    selection = mcp_sections.media_source_header(request)
+    raw_language = unquote(request.headers.get("x-studio-language", "")).strip()
+    language = (_mcp_language if selection else _language)(raw_language)
+    conn, model, mcp_source = _source(uid, selection, _int_header(request, "x-studio-connection"),
+                                      request.headers.get("x-studio-model") or None)
     if _full_queue(uid):
         raise _busy()
     name = _name(request.headers.get("x-studio-name", ""))
@@ -565,7 +628,7 @@ async def upload(request: Request):
     if mime is None:
         raise HTTPException(415, {"code": "format", "message": forms.NOT_AUDIO})
     length = _int_header(request, "content-length")
-    too_big = {"code": "too_big", "message": f"запись больше {UPLOAD_MAX // (1024 * 1024)} МиБ"}
+    too_big = {"code": "too_big", "message": "запись больше 1 ГиБ"}
     if length is not None and length > UPLOAD_MAX:
         raise HTTPException(413, too_big)
     try:
@@ -587,14 +650,16 @@ async def upload(request: Request):
     except HTTPException:
         await media.delete_async(uid, source)
         raise
-    return _enqueue(uid, conn, model, name, source, language)
+    return _enqueue(uid, conn, model, name, source, language, mcp_source=mcp_source)
 
 
-def _enqueue(uid: int, conn, model: str, name: str, source: str, language: "str | None", *, listen=None) -> dict:
+def _enqueue(uid: int, conn, model: str, name: str, source: str, language: "str | None", *, listen=None,
+             mcp_source=None) -> dict:
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
-                     " created, language, listen_media_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
-                     (tid, uid, conn.id, model, name, source, QUEUED, now, language, listen))
+                     " created, language, listen_media_id, mcp_source) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                     (tid, uid, conn.id if conn else None, model, name, source, QUEUED, now, language, listen,
+                      json.dumps(mcp_source) if mcp_source else None))
     return _start_queued(uid, tid)
 
 
@@ -608,7 +673,8 @@ def _start_queued(uid: int, tid: str) -> dict:
 class RetryIn(BaseModel):
     connection_id: int | None = None
     model: str | None = Field(default=None, max_length=200)
-    language: str | None = Field(default=None, max_length=8)      # None — «Авто»
+    language: str | None = Field(default=None, max_length=200)      # None — «Авто»
+    mcp: mcp_sections.MediaSource | None = None
 
 
 @router.post("/{tid}/retry", status_code=202)
@@ -617,8 +683,14 @@ async def retry(tid: str, body: RetryIn, request: Request):
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "дождитесь завершения расшифровки или отмените её"})
-    language = _language(body.language)
-    conn, model = sections.resolve(uid, "transcribe", body.connection_id, body.model)
+    if row["mcp_source"] and not body.model_fields_set.intersection({"mcp", "connection_id", "model"}):
+        mcp_source = json.loads(row["mcp_source"])
+        mcp_sections.media_source_item(uid, "transcribe", mcp_source)
+        conn, model = None, row["model"]
+    else:
+        conn, model, mcp_source = _source(uid, body.mcp, body.connection_id, body.model)
+    language = (_mcp_language(body.language if "language" in body.model_fields_set else row["language"])
+                if mcp_source else _language(body.language))
     if _full_queue(uid):
         raise _busy()
     source, listen = row["source_media_id"], row["listen_media_id"]
@@ -626,12 +698,13 @@ async def retry(tid: str, body: RetryIn, request: Request):
         raise HTTPException(404, media.GONE)
     operations.check(uid)
     if row["state"] in ("error", "cancelled"):
-        state.DB.execute("UPDATE transcripts SET connection_id = ?, model = ?, language = ?, state = 'queued',"
+        state.DB.execute("UPDATE transcripts SET connection_id = ?, model = ?, language = ?, mcp_source = ?, state = 'queued',"
                          " detail = ?, created = ?, finished = NULL, duration = NULL WHERE id = ? AND user_id = ?",
-                         (conn.id, model, language, QUEUED, clock.NOW(), tid, uid))
+                         (conn.id if conn else None, model, language, json.dumps(mcp_source) if mcp_source else None,
+                          QUEUED, clock.NOW(), tid, uid))
         return _start_queued(uid, tid)
     # Готовый результат остаётся доступен, пока другая попытка с тем же источником выполняется независимо.
-    return _enqueue(uid, conn, model, row["name"], source, language, listen=listen)
+    return _enqueue(uid, conn, model, row["name"], source, language, listen=listen, mcp_source=mcp_source)
 
 
 @router.get("/limits")
@@ -850,8 +923,10 @@ async def purge(user_id: int, item_id: str) -> None:
                            (item_id, user_id)).fetchone()
     if row is None:
         return
+    extras = state.DB.execute("SELECT media_id FROM transcript_files WHERE transcript_id = ? AND user_id = ?",
+                              (item_id, user_id)).fetchall()
     state.DB.execute("DELETE FROM transcripts WHERE id = ?", (item_id,))
-    for media_id in set(row) - {None}:
+    for media_id in (set(row) | {file["media_id"] for file in extras}) - {None, ""}:
         if not media.referenced(user_id, media_id):
             await media.delete_async(user_id, media_id)
     log.info("расшифровка %s: удалена", item_id[:8])
@@ -868,6 +943,7 @@ async def to_chat(tid: str, request: Request):
     `source_transcript_id`; к нелокальной модели его ход пускает только с `external_ok` (chat.create_turn)."""
     uid = request.state.user.id
     row = _done(uid, tid)
+    mcp_sections.require_media_share(row)
     segments = view(row, await result_of(uid, row))
     head = f"Расшифровка «{row['name']}»" + (f" · {exports.stamp(row['duration'])}" if row["duration"] else "")
     text = f"{head}\n\n{exports.txt(segments)}"

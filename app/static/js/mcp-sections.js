@@ -198,6 +198,10 @@ function showResult(host, output, urls, render) {
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
+export function mcpHeaders(source) {
+  return source ? { 'X-Studio-MCP': encodeURIComponent(JSON.stringify(source)) } : undefined;
+}
+
 export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, onHistory, turns, onEmpty, onPhoto, onVideo,
   key: place = section, internalOnly = false }) {
   const base = `/api/mcp-tools/${section}`;
@@ -510,6 +514,15 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
   });
   return { control, output, fields: extras, has, hasFile, run, clear,
+    selection() {
+      const choice = picked();
+      if (!choice) return null;
+      return { server_id: choice.server.id, tool: choice.tool.name, arguments: extra?.values() || {} };
+    },
+    sources() {
+      return [...options].map(([key, { server, tool }]) => ({ key, tool, label: [...select.options]
+        .find(option => option.value === key)?.textContent, server_id: server.id }));
+    },
     option(key) { return options.get(key)?.tool; },
     fileInput(file) { return fileData(file, limit); },
     fileSource(names, sid) {

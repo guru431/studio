@@ -72,6 +72,7 @@ import documents
 import exports
 import images
 import lock_policy
+import mcp_sections
 import media
 import operations
 import ocr
@@ -138,6 +139,7 @@ class Job:
     request: "asyncio.Task | None" = None   # идущий запрос к модели шлюза — его обрывает «Остановить» (`_abortable`)
     glossary: tuple = ()          # пары «термин → перевод» учётки на начало задания (`preferences`)
     tone: str = ""                # тон перевода учётки: ключ `translate_text.TONES` или пусто
+    mcp_source: "dict | None" = None
 
 
 #: записи в очереди и в работе (снимок подключения — для раннера); кончившееся уходит
@@ -171,7 +173,7 @@ def _chunks(source: str) -> list[tuple]:
 
 def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang: str, target_lang: str,
            source: "str | None", source_media_id: "str | None" = None, scan_id: "str | None" = None,
-           blocks: "list[dict] | None" = None, ocr_conn=None) -> str:
+           blocks: "list[dict] | None" = None, ocr_conn=None, mcp_source=None) -> str:
     """Запись в очередь своей полосы (раннер — `kick`). Куски — `blocks` (`{"source", "box"}`) или нарезка
     `source` (уже `normalize`); исходник ещё не известен (скан) — кусков нет. Ждущих уже QUEUE_MAX — 409 busy."""
     operations.check(user_id)
@@ -184,10 +186,11 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
     state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO translations(id, user_id, kind, connection_id, model, source_lang, target_lang,"
-                         " name, source_media_id, scan_id, source, parts, state, detail, created, cleaner_used)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                         (tid, user_id, kind, conn.id, model, source_lang, target_lang, name, source_media_id,
-                          scan_id, source, len(rows), QUEUED, now, int(conn.cleaner or conn.routed)))
+                         " name, source_media_id, scan_id, source, parts, state, detail, created, cleaner_used, mcp_source)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+                         (tid, user_id, kind, conn.id if conn else None, model, source_lang, target_lang, name, source_media_id,
+                          scan_id, source, len(rows), QUEUED, now, int(conn is not None and (conn.cleaner or conn.routed)),
+                          json.dumps(mcp_source) if mcp_source else None))
         state.DB.executemany("INSERT INTO translation_parts(translation_id, n, source, sep, box, state)"
                              " VALUES (?, ?, ?, ?, ?, 'waiting')",
                              [(tid, n, *row) for n, row in enumerate(rows, 1)])
@@ -195,7 +198,7 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[tid] = Job(id=tid, user_id=user_id, conn=conn, model=model, ocr_conn=ocr_conn, stage_at=now)
+    JOBS[tid] = Job(id=tid, user_id=user_id, conn=conn, model=model, ocr_conn=ocr_conn, stage_at=now, mcp_source=mcp_source)
     log.info("перевод %s: в очереди, %d кусков", tid[:8], len(rows))
     return tid
 
@@ -359,9 +362,35 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
             waited = await _busy(job, waited)
 
 
+async def _mcp_chunk(job: Job, text: str, origin: str, lang: str) -> str:
+    source, uid = job.mcp_source, job.user_id
+    try:
+        async with mcp_sections.media_tool(uid, "translate", source) as (session, tool, listed):
+            props = tool["schema"].get("properties", {})
+            maximum = props.get("text", {}).get("maxLength")
+            pieces = translate_text.split(text, maximum) if type(maximum) is int and 0 < maximum < len(text) else [(text, "")]
+            output = []
+            for piece, sep in pieces:
+                values = {**source["arguments"], "text": piece, "source_lang": origin, "target_lang": lang,
+                          "source_language": origin, "target_language": lang}
+                args = mcp_sections.media_arguments("translate", tool, values, set())
+                result = await mcp_sections.media_result(uid, "translate", source, session, tool, listed, args)
+                data = result.get("structuredContent")
+                answer = mcp_sections.result_text(data) if isinstance(data, dict) else mcp_sections.first_text(result)
+                if not answer.strip():
+                    raise translate_text.TranslateError(translate_text.EMPTY)
+                output.append(documents.nfc(answer.strip()) + sep)
+            return "".join(output)
+    except HTTPException as exc:
+        message = exc.detail.get("message") if isinstance(exc.detail, dict) else None
+        raise translate_text.TranslateError(message or "сбой MCP") from None
+
+
 async def _chunk(job: Job, text: str, origin: str, lang: str, context: str = "") -> str:
     """Кусок; обрезанный ответ — пополам, половинки по очереди (их обрезка — ошибка `Cut`): вторая — с концом
     перевода первой как контекстом."""
+    if job.mcp_source:
+        return await _abortable(job, _mcp_chunk(job, text, origin, lang))
     try:
         return await _attempt(job, text, origin, lang, context=context)
     except translate_text.Cut:
@@ -381,7 +410,7 @@ async def _languages(job: Job, row) -> tuple[str, str]:
     origin = row["source_lang"]
     if origin == translate_text.AUTO:
         origin = row["detected_lang"]
-        if origin is None and row["result_lang"] is None:
+        if origin is None and row["result_lang"] is None and job.conn is not None:
             # Cleaner receives every model-bound text through its checked request API, including language detection.
             # The translation prompt already supports AUTO; do not send a separate unreviewed request.
             sample = row["source"] if row["scan_id"] is None else _PAGE_HEAD.sub("", row["source"])
@@ -506,7 +535,7 @@ async def _spotted(job: Job, png: bytes) -> str:
     waited = None
     while True:
         try:
-            protected = job.conn.routed or cleaner_route.dialog_routed(job.user_id, job.conn.id)
+            protected = job.conn is not None and (job.conn.routed or cleaner_route.dialog_routed(job.user_id, job.conn.id))
             cleaner_route.refuse_ocr(job.ocr_conn, protected)
             return await ocr.recognize(job.ocr_conn, png, translate_spot.PROMPT)
         except HTTPException as e:
@@ -533,7 +562,7 @@ async def _spot(job: Job, row):
         content = ""
     except ocr.OcrError as e:
         raise translate_text.TranslateError(f"{PHOTO_FAILED}: {e}") from None
-    if (job.ocr_conn.kind == "srvllm" and job.ocr_conn.base_url == job.conn.base_url
+    if (job.conn is not None and job.ocr_conn.kind == "srvllm" and job.ocr_conn.base_url == job.conn.base_url
             and clock.NOW() - freed_at < FREED_FRESH_SEC):
         job.freed = True                             # free_card того же шлюза только что отпустил модели картинок
     blocks = translate_spot.group(translate_spot.parse(content))
@@ -562,7 +591,7 @@ def _failed(job: Job, n: int, parts: int, e: Exception) -> translate_text.Transl
 def _context(job: Job, n: int, source: str) -> str:
     """Контекст куска n: конец перевода куска n − 1, если он готов (и у «Продолжить» — из базы). Пусто — через
     Cleaner (`_attempt`) и у куска, чей исходник начат последним предложением прежнего (`translate_text.repeats`)."""
-    if n < 2 or job.conn.cleaner:
+    if n < 2 or job.conn is None or job.conn.cleaner:
         return ""
     row = state.DB.execute("SELECT source, text FROM translation_parts WHERE translation_id = ? AND n = ?"
                            " AND state = 'done'", (job.id, n - 1)).fetchone()
@@ -633,16 +662,16 @@ async def _translate(job: Job, row) -> "str | None":
         row = await (_await_scan(job, row) if row["scan_id"] is not None else _spot(job, row))
         if row is None:
             return NO_TEXT
-    elif row["scan_id"] is not None and sections.is_local(job.conn, job.model):
+    elif row["scan_id"] is not None and job.conn is not None and sections.is_local(job.conn, job.model):
         row = await _await_idle(job)
-    if job.conn.kind == "srvllm" and sections.is_local(job.conn, job.model) and not job.freed:
+    if job.conn is not None and job.conn.kind == "srvllm" and sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await images.free_models(job.conn)       # и до определения языка: оно — запрос к той же модели
     _check(job)                                  # «Остановить» до определения языка — без запроса к модели
     origin, lang = await _languages(job, row)
     waiting = state.DB.execute("SELECT n, source FROM translation_parts WHERE translation_id = ? AND state = 'waiting'"
                                " ORDER BY n", (job.id,)).fetchall()
-    if row["kind"] == "photo":
+    if row["kind"] == "photo" and not job.mcp_source:
         await _blocks(job, waiting, row["parts"], origin, lang)
         return None
     for part in waiting:                         # у снимка контекста нет: блоки — отдельные надписи
@@ -661,7 +690,7 @@ async def run(job: Job) -> None:
             job.glossary, job.tone = preferences(job.user_id)
             state.DB.execute("UPDATE translations SET state = 'working', detail = ?,"
                              " cleaner_used = CASE WHEN ? THEN 1 ELSE cleaner_used END WHERE id = ?",
-                             (job.stage, job.conn.cleaner or job.conn.routed, job.id))
+                             (job.stage, job.conn is not None and (job.conn.cleaner or job.conn.routed), job.id))
             outcome = ("done", await _translate(job, row) or DONE)
             log.info("перевод %s: готово", job.id[:8])
         except _Cancelled:
@@ -729,11 +758,7 @@ async def resume(user_id: int, tid: str) -> None:
     row = _row(user_id, tid)
     if not _can_continue(row):
         raise HTTPException(409, {"code": "nothing", "message": "нечего продолжать — переведите заново"})
-    try:
-        connections.get(user_id, row["connection_id"])
-    except HTTPException:                        # 404 gone — «такого перевода нет» для страницы, а запись есть
-        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
-    conn, model = sections.resolve(user_id, "translate", row["connection_id"], row["model"])
+    conn, model, source = _saved_source(user_id, row)
     operations.check(user_id)                    # стирание истории идёт: запись не возвращается в очередь
     _check_queue(user_id, lane_of(row["kind"]))
     state.DB.execute("BEGIN")
@@ -746,7 +771,7 @@ async def resume(user_id: int, tid: str) -> None:
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[tid] = Job(id=tid, user_id=user_id, conn=conn, model=model, stage_at=clock.NOW())
+    JOBS[tid] = Job(id=tid, user_id=user_id, conn=conn, model=model, stage_at=clock.NOW(), mcp_source=source)
     kick(user_id, lane_of(row["kind"]))
 
 
@@ -771,22 +796,19 @@ def resume_queued() -> None:
     """Старт службы (после recover и state.HTTP): ждущие записи — снова в очередь своей полосы с подключением и
     моделью записи (`sections.resolve`, как у «Продолжить»), снимок без исходника — ещё с подключением «Сканов»;
     отказ — ошибка записи его словами. Раннер — с поколением истории старта (`operations.snapshot`)."""
-    rows = state.DB.execute("SELECT id, user_id, kind, connection_id, model, source IS NOT NULL AS has_source"
+    rows = state.DB.execute("SELECT id, user_id, kind, connection_id, model, mcp_source, source IS NOT NULL AS has_source"
                             " FROM translations WHERE state = 'queued' ORDER BY created, rowid").fetchall()
     lanes = set()
     for row in rows:
         uid = row["user_id"]
         try:
-            try:
-                connections.get(uid, row["connection_id"], gate=False)
-            except HTTPException:
-                raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
-            conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"], gate=False)
+            conn, model, source = _saved_source(uid, row, gate=False)
             reader = _photo_reader(uid, gate=False)[0] if row["kind"] == "photo" and not row["has_source"] else None
         except HTTPException as e:
             _finish(row["id"], "error", e.detail["message"])
             continue
-        JOBS[row["id"]] = Job(id=row["id"], user_id=uid, conn=conn, model=model, ocr_conn=reader, stage_at=clock.NOW())
+        JOBS[row["id"]] = Job(id=row["id"], user_id=uid, conn=conn, model=model, ocr_conn=reader,
+                              stage_at=clock.NOW(), mcp_source=source)
         lanes.add((uid, lane_of(row["kind"])))
     for uid, lane in lanes:
         with operations.restore(operations.snapshot(uid)):
@@ -831,12 +853,13 @@ router = APIRouter(prefix="/api/translate")
 _HEAD = ("(SELECT substr({0}, 1, %d) FROM translation_parts WHERE translation_id = translations.id AND n = 1)"
          % HEAD_CHARS)
 MCP_SHARE_BLOCKED = (
-    "EXISTS (SELECT 1 FROM mcp_section_jobs j LEFT JOIN mcp_servers s ON s.id = j.server_id"
+    "(COALESCE(json_extract(translations.mcp_source, '$.protected'), 0) OR"
+    " EXISTS (SELECT 1 FROM mcp_section_jobs j LEFT JOIN mcp_servers s ON s.id = j.server_id"
     " WHERE j.section = 'translate' AND j.user_id = translations.user_id AND j.id = translations.id"
-    " AND json_extract(j.result, '$.translation_id') = translations.id AND (s.id IS NULL OR s.protected))"
+    " AND json_extract(j.result, '$.translation_id') = translations.id AND (s.id IS NULL OR s.protected)))"
 )
 COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang, result_lang, name,"
-           " source_media_id, scan_id, parts, done_parts, state, detail, created, finished, cleaner_used,"
+           " source_media_id, scan_id, parts, done_parts, state, detail, created, finished, cleaner_used, mcp_source,"
            f" {MCP_SHARE_BLOCKED} AS mcp_share_blocked,"
            f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
            f" {_HEAD.format('text')} AS text_head,"
@@ -902,6 +925,7 @@ def _out(row) -> dict:
             "source_head": heads[0], "text_head": heads[1], "can_continue": _can_continue(row),
             "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"]),
             "scan_owned": row["scan_id"] is not None and row["source_media_id"] is not None,
+            **({"mcp": mcp_sections.public_media_source(row["mcp_source"])} if row["mcp_source"] else {}),
             # «готово», но не всё: нераспознанные страницы скана (UNREAD), снимок без текста (NO_TEXT)
             "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None,
             **({"mcp_share_blocked": True} if row["mcp_share_blocked"] else {})}, "translate", row)
@@ -1016,9 +1040,9 @@ async def translate_field(body: TextIn, request: Request):
     if len(text) > translate_text.TEXT_MAX:
         raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
     _langs(body.source_lang, body.target_lang)
-    conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
+    conn, model, source = _source(uid, request, body.connection_id, body.model)
     tid = create(uid, conn, model, kind="text", name=_name(text), source_lang=body.source_lang,
-                 target_lang=body.target_lang, source=text)
+                 target_lang=body.target_lang, source=text, mcp_source=source)
     kick(uid, "text")
     return _out(_row(uid, tid))
 
@@ -1028,15 +1052,16 @@ async def translate_scan(sid: str, body: RepeatIn, request: Request):
     """Готовый документ «Сканов» — новый перевод из распознанного текста, без повторной загрузки."""
     uid = request.state.user.id
     scan = ocr._readable(uid, sid)
+    mcp_sections.require_media_share(scan)
     if scan["state"] != "done":
         raise HTTPException(409, {"code": "scan", "message": "сначала завершите распознавание"})
     _langs(body.source_lang, body.target_lang)
-    conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
+    conn, model, mcp_source = _source(uid, request, body.connection_id, body.model)
     source = _scan_source(sid)
     if len(source) > translate_text.TEXT_MAX:
         raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
     tid = create(uid, conn, model, kind="file", name=scan["name"], source_lang=body.source_lang,
-                 target_lang=body.target_lang, source=source, scan_id=sid)
+                 target_lang=body.target_lang, source=source, scan_id=sid, mcp_source=mcp_source)
     kick(uid, "file")
     return _out(_row(uid, tid))
 
@@ -1044,6 +1069,29 @@ async def translate_scan(sid: str, body: RepeatIn, request: Request):
 def _int_header(request: Request, key: str) -> "int | None":
     value = request.headers.get(key, "").strip()
     return int(value) if value.isdigit() else None
+
+
+def _source(uid, request, connection_id=None, model=None):
+    selection = mcp_sections.media_source_header(request)
+    if selection is None:
+        conn, model = sections.resolve(uid, "translate", connection_id, model)
+        return conn, model, None
+    source = mcp_sections.pin_media_source(uid, "translate", selection)
+    model = mcp_sections.clean_text(source["arguments"].get("model"), 200) or source["tool"]
+    return None, model, source
+
+
+def _saved_source(uid, row, *, gate=True):
+    if row["mcp_source"]:
+        source = json.loads(row["mcp_source"])
+        mcp_sections.media_source_item(uid, "translate", source)
+        return None, row["model"], source
+    try:
+        connections.get(uid, row["connection_id"], gate=gate)
+    except HTTPException:
+        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
+    conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"], gate=gate)
+    return conn, model, None
 
 
 def _stem(name: str) -> str:
@@ -1121,7 +1169,7 @@ def _photo_reader(user_id: int, *, gate: bool = True):
 
 
 def _start_file(user_id: int, conn, model: str, *, name: str, source_lang: str, target_lang: str, media_id: str,
-                text: "str | None", pages: "list[dict] | None", reader, kind: str = "file") -> str:
+                text: "str | None", pages: "list[dict] | None", reader, kind: str = "file", mcp_source=None) -> str:
     """Запись-файл или снимок (`kind`, исходник распознает задание) в полосу `file`; скан — сначала документ
     «Сканов» с тем же файлом. Без await: между проверкой очереди и записью она не изменится, отказ (409 busy любой
     из двух очередей) не оставит половины."""
@@ -1132,7 +1180,7 @@ def _start_file(user_id: int, conn, model: str, *, name: str, source_lang: str, 
                              pages=pages)
     tid = create(user_id, conn, model, kind=kind, name=name, source_lang=source_lang, target_lang=target_lang,
                  source=text, source_media_id=media_id, scan_id=scan_id,
-                 ocr_conn=reader[0] if kind == "photo" else None)
+                 ocr_conn=reader[0] if kind == "photo" else None, mcp_source=mcp_source)
     if scan_id is not None:
         ocr.kick(user_id)
         log.info("перевод %s: скан %s, %d стр. на распознавание", tid[:8], scan_id[:8],
@@ -1151,8 +1199,7 @@ async def translate_file(request: Request):
     source_lang = request.headers.get("x-studio-source-lang", "")
     target_lang = request.headers.get("x-studio-target-lang", "")
     _langs(source_lang, target_lang)
-    conn, model = sections.resolve(uid, "translate", _int_header(request, "x-studio-connection"),
-                                   request.headers.get("x-studio-model") or None)
+    conn, model, source = _source(uid, request, _int_header(request, "x-studio-connection"), request.headers.get("x-studio-model"))
     try:
         name, data = await documents.read_upload(request)
     except documents.DocumentError as e:
@@ -1168,7 +1215,7 @@ async def translate_file(request: Request):
         kind, (text, pages, reader) = "file", await _read_file(uid, name, data)
         mime, stored = chat.DOC_MIME[PurePosixPath(name.lower()).suffix], name
     needs_ocr = pages is not None or kind == "photo"
-    if needs_ocr:
+    if needs_ocr and conn is not None:
         cleaner_route.refuse_ocr(reader[0], conn.routed)
     _check_queue(uid, "file")                        # полная полоса — до записи на шару
     try:
@@ -1179,10 +1226,10 @@ async def translate_file(request: Request):
         await media.delete_async(uid, media_id)
         raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
     try:
-        if needs_ocr:
+        if needs_ocr and conn is not None:
             cleaner_route.refuse_ocr(reader[0], conn.routed or cleaner_route.dialog_routed(uid, conn.id))
         tid = _start_file(uid, conn, model, name=name, source_lang=source_lang, target_lang=target_lang,
-                          media_id=media_id, text=text, pages=pages, reader=reader, kind=kind)
+                          media_id=media_id, text=text, pages=pages, reader=reader, kind=kind, mcp_source=source)
     except HTTPException:                            # очередь заполнилась, пока шла запись
         await media.delete_async(uid, media_id)
         raise
@@ -1258,7 +1305,7 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
     uid = request.state.user.id
     row = _row(uid, tid)
     _langs(body.source_lang, body.target_lang)
-    conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
+    conn, model, mcp_source = _source(uid, request, body.connection_id, body.model)
     langs = {"source_lang": body.source_lang, "target_lang": body.target_lang}
     media_id = row["source_media_id"]
     if _scan_done(uid, row["scan_id"]):
@@ -1268,14 +1315,14 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
         if len(source) > translate_text.TEXT_MAX:
             raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
         new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
-                     scan_id=row["scan_id"], **langs)
+                     scan_id=row["scan_id"], mcp_source=mcp_source, **langs)
         kick(uid, lane_of(row["kind"]))
     elif row["has_source"]:
         source = state.DB.execute("SELECT source FROM translations WHERE id = ?", (tid,)).fetchone()[0]
         blocks = [{"source": p["source"], "box": json.loads(p["box"])} for p in state.DB.execute(
             "SELECT source, box FROM translation_parts WHERE translation_id = ? AND box IS NOT NULL ORDER BY n", (tid,))]
         new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
-                     scan_id=row["scan_id"], blocks=blocks or None, **langs)
+                     scan_id=row["scan_id"], blocks=blocks or None, mcp_source=mcp_source, **langs)
         kick(uid, lane_of(row["kind"]))
     else:
         if media_id is None or not media.alive(uid, media_id):
@@ -1288,10 +1335,10 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
             if not media.alive(uid, media_id):       # удалён, пока читали
                 raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
         if pages is not None or row["kind"] == "photo":
-            cleaner_route.refuse_ocr(reader[0], bool(row["cleaner_used"]) or conn.routed
-                                     or cleaner_route.dialog_routed(uid, conn.id))
+            routed = conn is not None and (conn.routed or cleaner_route.dialog_routed(uid, conn.id))
+            cleaner_route.refuse_ocr(reader[0], bool(row["cleaner_used"]) or routed)
         new = _start_file(uid, conn, model, name=row["name"], media_id=media_id, text=text, pages=pages,
-                          reader=reader, kind=row["kind"], **langs)
+                          reader=reader, kind=row["kind"], mcp_source=mcp_source, **langs)
     log.info("перевод %s: повтор %s", new[:8], tid[:8])
     return _out(_row(uid, new))
 

@@ -39,6 +39,7 @@ import { message as serverMessage, tr } from './i18n.js';
  * «В поле» просмотра — промпт, модель, формат, сила и исходник записи (source_media_id) в поле и чипы. Чип модели
  * в шапке — отбор ленты GET /api/images?model= (views.modelFilter); «Неудачные» режима выделения — select.js. */
 import { api } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu, popupPanel } from './menu.js';
 import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
@@ -617,7 +618,7 @@ function build(view, ctx) {
   }
 
   function canCancel(item) {
-    return !item.mcp_job_id && CANCELLABLE.has(item.state);
+    return CANCELLABLE.has(item.state);
   }
 
   function cancelButton(item) {
@@ -1109,7 +1110,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'photo-delete-confirm' });
     const dialog = openDialog(root, { id: 'photo-delete-dialog', title: tr("Удалить картинку?"),
-      body: [el('p', {}, item.mcp_job_id ? tr("Картинка будет удалена из истории.") : tr("Картинка уйдёт в корзину на 14 дней вместе с файлом — оттуда её можно вернуть. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.")), fail], actions: [confirm] });
+      body: [el('p', {}, tr("Картинка уйдёт в корзину на 14 дней вместе с файлом — оттуда её можно вернуть. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -1388,15 +1389,7 @@ function build(view, ctx) {
     attachSource(selected);
   });
   const unbindImagePaste = imagePaste(file, attachSource);
-  form.addEventListener('dragover', (event) => {
-    if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
-  });
-  form.addEventListener('drop', (event) => {
-    const dropped = event.dataTransfer?.files[0];
-    if (!dropped) return;
-    event.preventDefault();
-    attachSource(dropped);
-  });
+  dropFiles(root, ([selected]) => attachSource(selected), () => !form.hidden && !file.disabled);
   sourceClear.addEventListener('click', () => {
     error.textContent = '';
     setSource(null);

@@ -162,14 +162,15 @@ def test_my_files_sidebar_and_studio_and_mcp_thumbnails(browser, live, width):
     assert not problems(r), problems(r)
 
 
-def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_factory):
-    login = "files-project-tree"
+@pytest.mark.parametrize("width", [320, 1280])
+def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_factory, width):
+    login = f"files-project-tree-{width}"
     live.add_user(login)
     tree = """(() => {
       const input = document.querySelector('#project-files-directory');
       const transfer = new DataTransfer();
       for (const path of ['Отчёты/Sub/2026/notes.txt', 'Отчёты/notes.txt']) {
-        const file = new File([path], 'notes.txt', { type: 'text/plain' });
+        const file = new File([path], 'notes.txt', { type: 'text/plain', lastModified: 1700000000500 });
         Object.defineProperty(file, 'webkitRelativePath', { value: path });
         transfer.items.add(file);
       }
@@ -177,7 +178,12 @@ def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_
       input.dispatchEvent(new Event('change'));
       return input.webkitdirectory;
     })()"""
-    single = UPLOAD.replace('#myfiles-picker', '#project-files-picker')
+    single = f"""(() => {{
+      const data = new DataTransfer();
+      data.items.add(new File([{TEXT!r}], 'отчёт.txt', {{ type: 'text/plain' }}));
+      return !document.querySelector('#myfiles-list').dispatchEvent(new DragEvent('drop',
+        {{ bubbles: true, cancelable: true, dataTransfer: data }}));
+    }})()"""
     folder = '#myfiles-list li[data-name="Отчёты"]'
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
         ("click", ".myfiles-new-project:not(:disabled)"),
@@ -186,20 +192,30 @@ def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_
         ("click", '#myfiles-tabs [data-sid="projects"]'),
         ("wait", "document.querySelectorAll('#myfiles-projects button').length === 2"),
         ("eval", "columns", "getComputedStyle(document.querySelector('#myfiles-projects')).gridTemplateColumns.split(' ').length"),
-        ("screenshot", str(tmp_path_factory.getbasetemp() / "my-files-projects.png")),
+        ("screenshot", str(tmp_path_factory.getbasetemp() / f"my-files-projects-{width}.png")),
         ("click", '#myfiles-project-gallery button[aria-label="Сортировка проектов"]'),
         ("click", '#myfiles-project-gallery button[aria-label="Поиск проектов"]'),
         ("type", ".myfiles-project-search", "Алгебра"),
         ("wait", "document.querySelectorAll('#myfiles-projects button').length === 1"),
         ("click", '#myfiles-projects button[title="Алгебра"]'),
         ("wait", "document.querySelector('#myfiles-none')"),
+        ("eval", "pathGap", """(() => {
+          const path = document.querySelector('#myfiles-path').getBoundingClientRect();
+          const actions = document.querySelector('#project-files-directory').parentElement.getBoundingClientRect();
+          return actions.top - path.bottom;
+        })()"""),
         ("eval", "directoryPicker", tree), ("wait", ITEM.format("Отчёты")),
+        ("eval", "folderDates", f"[...{ITEM.format('Отчёты')}.querySelectorAll('.myfiles-dates > span')].map(s => s.textContent)"),
+        ("eval", "totals", f"{ITEM.format('Отчёты')}.querySelector('.myfiles-meta').textContent"),
         ("click", f"{folder} .myfiles-folder"),
         ("wait", f"{ITEM.format('notes.txt')} && {ITEM.format('Sub')}"),
+        ("eval", "fileDates", f"[...{ITEM.format('notes.txt')}.querySelectorAll('.myfiles-dates > span')].map(s => s.textContent)"),
         ("click", '#myfiles-list li[data-name="Sub"] .myfiles-folder'),
         ("wait", ITEM.format("2026")), ("click", '#myfiles-list li[data-name="2026"] .myfiles-folder'),
         ("wait", ITEM.format("notes.txt")),
-        ("click", "#myfiles-path button:nth-child(2)"),
+        ("eval", "location", "document.querySelector('#myfiles-path [aria-current=location]').textContent"),
+        ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
+        ("click", "#myfiles-path li:nth-child(2) button"),
         ("wait", ITEM.format("Отчёты")), ("eval", "picked", single), ("wait", ITEM.format("отчёт.txt")),
         ("click", "#myfiles-select"), ("click", f"{folder} input[type=checkbox]"),
         ("click", '#myfiles-list li[data-name="отчёт.txt"] input[type=checkbox]'),
@@ -207,11 +223,47 @@ def test_project_grid_folder_import_and_mixed_selection(browser, live, tmp_path_
         ("eval", "skipDownload", NO_DOWNLOAD), ("click", "#myfiles-selection-zip"),
         ("eval", "ids", "new URL(document.documentElement.dataset.clicked, location.href).searchParams.getAll('item').length"),
         ("click", "#myfiles-selection-delete"), ("click", "#myfiles-confirm-selection"),
-        ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent === 'Готово'")],
-        width=1280)
+        ("wait", "document.querySelector('#myfiles-none') && document.querySelector('#myfiles-status').textContent === 'Готово'"),
+        ("click", "#myfiles-path li:first-child button"),
+        ("wait", "document.querySelector('#myfiles-project-gallery:not([hidden])')")],
+        width=width, mobile=width == 320)
     assert not r.get("failed"), r
-    assert r["values"]["columns"] == r["values"]["selected"] == r["values"]["ids"] == 2
+    assert r["values"]["pathGap"] >= 8
+    created, modified = r["values"]["folderDates"]
+    assert created.startswith("Создано: ") and modified.startswith("Изменено: ") and "—" not in created + modified
+    uploaded, modified = r["values"]["fileDates"]
+    assert uploaded.startswith("Загружено: ") and "—" not in uploaded
+    assert modified.startswith("Изменено: ") and "2023" in modified
+    assert r["values"]["totals"].split(" · ")[1:] == ["Файлов: 2", "Подпапок: 2"]
+    assert r["values"]["location"] == "2026" and r["values"]["fits"]
+    assert r["values"]["picked"]
+    assert r["values"]["columns"] == (1 if width == 320 else 2)
+    assert r["values"]["selected"] == r["values"]["ids"] == 2
     assert r["values"]["directoryPicker"] and r["values"]["picked"] == 1
+    assert not problems(r), problems(r)
+
+
+def test_audio_results_are_identified_by_their_recording_and_spoken_text(browser, live):
+    login = "files-audio-titles"
+    uid = live.add_user(login)
+    transcript = media.save(uid, b'{"segments": [], "raw": []}', "application/json", "transcript.json")
+    live_sql(live, "INSERT INTO transcripts(id, user_id, model, name, source_media_id, result_media_id, state, detail, created)"
+             " VALUES ('transcript', ?, 'asr', 'Встреча.m4a', '', ?, 'done', '', 1)", (uid, transcript))
+    speech = media.save(uid, b"MP3", "audio/mpeg", "speech-12345678.mp3")
+    live_sql(live, "INSERT INTO speeches(id, user_id, model, voice, text, media_id, state, detail, created)"
+             " VALUES ('speech', ?, 'tts', 'voice', ?, ?, 'done', '', 1)",
+             (uid, "Первый абзац.\n\nВторой абзац. " + "Продолжение " * 12, speech))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("click", "#myfiles-open"),
+        ("click", '#myfiles-tabs [data-sid="transcribe"]'), ("wait", ITEM.format("transcript.json")),
+        ("eval", "transcript", "document.querySelector('#myfiles-list .myfiles-name').textContent"),
+        ("eval", "transcriptMeta", "document.querySelector('#myfiles-list .myfiles-meta').textContent"),
+        ("click", '#myfiles-tabs [data-sid="speech"]'), ("wait", ITEM.format("speech-12345678.mp3")),
+        ("eval", "speech", "document.querySelector('#myfiles-list .myfiles-name').textContent")])
+    assert not r.get("failed"), r
+    values = r["values"]
+    assert values["transcript"] == "Встреча.m4a" and values["transcriptMeta"].startswith("Диалог · JSON · ")
+    assert values["speech"].startswith("Первый абзац. Второй абзац. ")
+    assert len(values["speech"]) <= 81 and values["speech"].endswith("…")
     assert not problems(r), problems(r)
 
 

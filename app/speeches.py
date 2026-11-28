@@ -34,6 +34,7 @@ import json
 import logging
 import re
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -76,7 +77,8 @@ INTERRUPTED = "прервано перезапуском студии"
 QUEUE_MAX = 5
 QUEUED = "в очереди"
 #: поля записи, которые повторная озвучка заменяет, а отказ и отмена возвращают (п. 5 шапки)
-KEPT = ("text", "connection_id", "model", "voice", "voice_name", "language", "duration", "state", "detail", "finished")
+KEPT = ("text", "connection_id", "model", "voice", "voice_name", "language", "duration", "state", "detail", "finished",
+        "mcp_source")
 KEPT_NOTE = "прежняя озвучка сохранена"
 #: порядок очереди: время постановки, у строк прежнего кода — создания
 QUEUE_KEY = "COALESCE(queued, created)"
@@ -141,6 +143,7 @@ class Job:
     files: list = field(default_factory=list)
     ready: int = 0                                    # частей, уже записанных во временные файлы (слушать до склейки)
     language: "str | None" = None
+    mcp_source: "dict | None" = None
 
 
 JOBS: dict[str, Job] = {}
@@ -244,14 +247,17 @@ def queued_at(row) -> float:
 
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
-    return card.mark({"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
+    out = {"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
             "connection_id": row["connection_id"], "language": row["language"],
             "text": row["text"], "voice": row["voice"], "model": row["model"], "state": row["state"],
             "detail": job.stage if job is not None and row["state"] == "working"
             else waiting(row) if row["state"] == "queued" else row["detail"],
             "media_id": row["media_id"], "duration": row["duration"], "created": row["created"],
-            "finished": row["finished"], "parts": job.ready if job is not None and row["state"] == "working" else 0},
-        "speech", row)
+            "finished": row["finished"], "parts": job.ready if job is not None and row["state"] == "working" else 0}
+    if row["mcp_source"]:
+        import mcp_sections
+        out["mcp"] = mcp_sections.public_media_source(row["mcp_source"])
+    return card.mark(out, "speech", row)
 
 
 def _store(job: Job) -> None:
@@ -269,6 +275,7 @@ def _settle(sid: str, state_: str, detail: str, extra: dict) -> "tuple[bool, str
             dropped = row["previous_media_id"]
         else:
             cols = json.loads(row["previous"]) | {"media_id": row["previous_media_id"]}
+            cols.setdefault("mcp_source", None)
             if state_ == "error":
                 cols |= {"state": "error", "detail": f"{detail} — {KEPT_NOTE}", "finished": now}
         cols |= {"previous": None, "previous_media_id": None}
@@ -343,13 +350,16 @@ async def _runner(user_id: int) -> None:
         if not state.DB.execute("UPDATE speeches SET state = 'working', detail = 'готовлю' WHERE id = ? AND state = 'queued'",
                                 (row["id"],)).rowcount:
             continue
-        try:
-            # принята до смены правил доступа — доделывается и без доступа к общему подключению
-            conn = connections.get(user_id, row["connection_id"], gate=False)
-        except HTTPException:                        # подключение удалили, пока озвучка ждала
-            conn = None
+        source = json.loads(row["mcp_source"]) if row["mcp_source"] else None
+        conn = None
+        if source is None:
+            try:
+                # принята до смены правил доступа — доделывается и без доступа к общему подключению
+                conn = connections.get(user_id, row["connection_id"], gate=False)
+            except HTTPException:                    # подключение удалили, пока озвучка ждала
+                pass
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"], voice=row["voice"], text=row["text"],
-                  language=row["language"])
+                  language=row["language"], mcp_source=source)
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
@@ -383,34 +393,68 @@ async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
             _store(job)
 
 
+async def _mcp_speaker(job: Job, stack: AsyncExitStack):
+    import mcp_sections
+
+    source = job.mcp_source
+    session, tool, listed = await stack.enter_async_context(mcp_sections.media_tool(job.user_id, "speech", source))
+    values = source["arguments"].copy()
+    props = tool["schema"].get("properties", {})
+    if job.language is not None:
+        values["language"] = job.language
+    if source.get("voice_id"):
+        values.pop("voice", None)
+        await session.ensure()
+        values.update(await mcp_sections.voice_arguments(session, "speech", tool, source["voice_id"], {}, values))
+    elif job.voice:
+        values["voice"] = job.voice
+    limit = props.get("text", {}).get("maxLength")
+
+    async def say(piece, label):
+        args = mcp_sections.media_arguments("speech", tool, {**values, "text": piece}, set())
+        result = await mcp_sections.media_result(job.user_id, "speech", source, session, tool, listed, args)
+        return await mcp_sections.speech_audio(session, result)
+
+    maximum = PHRASE_MAX if source.get("voice_id") else TEXT_MAX
+    return phrases(job.text, min(limit, maximum) if type(limit) is int and limit > 0 else maximum), say
+
+
 async def run(job: Job) -> None:
     """Итог — в строку последним, после уборки временных файлов (п. 4 шапки)."""
     outcome = ("error", INTERRUPTED, {})              # остановка службы
     try:
         try:
-            if job.conn is None:
+            if job.conn is None and job.mcp_source is None:
                 raise JobError("подключение раздела удалено из профиля")
-            srvllm = job.conn.kind == "srvllm"
-            pieces = phrases(job.text, PHRASE_MAX if srvllm else EXTERNAL_MAX)
-            if srvllm:
-                try:
-                    voice = await voices.reference(job.user_id, job.voice)
-                except HTTPException:
-                    raise JobError("голос удалён") from None
-                if job.model == "qwen3-tts":
-                    await speech.free_card(job.conn)
-            else:
-                voice = job.voice
-            job.stage_at = clock.NOW()
-            for n, piece in enumerate(pieces, 1):
-                label = f"озвучиваю {n} из {len(pieces)}"
-                job.stage = label
-                _store(job)
-                data, mime = await _say(job, piece, voice, label)
-                part = audio.temp(".wav" if mime == "audio/wav" else ".mp3")
-                job.files.append(part)
-                await audio.file_io(part.write_bytes, data)
-                job.ready = n
+            async with AsyncExitStack() as stack:
+                if job.mcp_source:
+                    pieces, say = await _mcp_speaker(job, stack)
+                else:
+                    srvllm = job.conn.kind == "srvllm"
+                    pieces = phrases(job.text, PHRASE_MAX if srvllm else EXTERNAL_MAX)
+                    if srvllm:
+                        try:
+                            voice = await voices.reference(job.user_id, job.voice)
+                        except HTTPException:
+                            raise JobError("голос удалён") from None
+                        if job.model == "qwen3-tts":
+                            await speech.free_card(job.conn)
+                    else:
+                        voice = job.voice
+
+                    async def say(piece, label):
+                        return await _say(job, piece, voice, label)
+
+                job.stage_at = clock.NOW()
+                for n, piece in enumerate(pieces, 1):
+                    label = f"озвучиваю {n} из {len(pieces)}"
+                    job.stage = label
+                    _store(job)
+                    data, mime = await say(piece, label)
+                    part = audio.temp(".wav" if mime == "audio/wav" else ".mp3")
+                    job.files.append(part)
+                    await audio.file_io(part.write_bytes, data)
+                    job.ready = n
             out = audio.temp(".mp3")
             job.files.append(out)
             await audio.mp3_of(job.files[:-1], out)
@@ -531,23 +575,42 @@ def _room(uid: int, chat_id: "str | None") -> None:
             f"в очереди уже {QUEUE_MAX} озвучек — дождитесь их или отмените")})
 
 
-def _input(uid: int, body: SpeechIn, chat_id: "str | None", *, long: bool):
+async def _input(uid: int, body: SpeechIn, chat_id: "str | None", request: Request, *, long: bool):
     """Одинаковые проверки при новой записи (`long` — текст до LONG_MAX частями) и при её повторной озвучке
     (одна запись, до `part_max`)."""
+    import mcp_sections
+
     text = _text_of(body.text, LONG_MAX) if long else None
+    selection = mcp_sections.media_source_header(request)
+    if selection:
+        source = mcp_sections.pin_media_source(uid, "speech", selection)
+        async with mcp_sections.media_tool(uid, "speech", source) as (_, tool, _):
+            cap = tool["schema"].get("properties", {}).get("text", {}).get("maxLength")
+        limit = min(cap, TEXT_MAX) if type(cap) is int and cap > 0 else TEXT_MAX
+        voice = selection.voice_id or body.voice.strip()
+        name = voices._row(uid, voice)["name"] if selection.voice_id else voice
+        model = mcp_sections.clean_text(source["arguments"].get("model"), 200) or source["tool"]
+        operations.check(uid)
+        _room(uid, chat_id)
+        return text or _text_of(body.text, limit), None, model, voice, name, body.language, source, limit
     conn, model = sections.resolve(uid, "speech", body.connection_id, body.model)
     text = text or _text_of(body.text, part_max(conn))
     voice = body.voice.strip()
     name = _voice_name(uid, conn, voice)
     _room(uid, chat_id)
-    return text, conn, model, voice, name, body.language if conn.kind == "srvllm" else None
+    return text, conn, model, voice, name, body.language if conn.kind == "srvllm" else None, None, part_max(conn)
 
 
 def _enqueue(uid: int, conn, model: str, voice: str, name: str, language: "str | None", text: str,
-             chat=None) -> str:
+             chat=None, *, source=None, limit=None) -> str:
     """Записи текста в конец чата `chat` (нет — новый чат): длиннее `part_max` — частями по порядку
     (`split_text`); итог — id первой."""
-    pieces = split_text(text, part_max(conn)) if len(text) > part_max(conn) else [text]
+    limit = limit or part_max(conn)
+    if source and len(text) > 256 * limit:
+        raise HTTPException(413, {"code": "too_big", "message": "Слишком много частей озвучки для выбранного инструмента"})
+    pieces = split_text(text, limit) if len(text) > limit else [text]
+    if len(pieces) > 256:
+        raise HTTPException(413, {"code": "too_big", "message": "Слишком много частей озвучки для выбранного инструмента"})
     now = clock.NOW()
     chat_id, chat_created = (chat["chat_id"], chat["chat_created"]) if chat else (None, now)
     first = None
@@ -555,9 +618,10 @@ def _enqueue(uid: int, conn, model: str, voice: str, name: str, language: "str |
         sid, at = uuid.uuid4().hex, now + n * PART_STEP
         first, chat_id = first or sid, chat_id or sid
         state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, voice_name, text, state, detail,"
-                         " created, queued, chat_id, chat_created, language)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
-                         (sid, uid, conn.id, model, voice, name, piece, QUEUED, at, at, chat_id, chat_created, language))
+                         " created, queued, chat_id, chat_created, language, mcp_source)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+                         (sid, uid, conn.id if conn else None, model, voice, name, piece, QUEUED, at, at,
+                          chat_id, chat_created, language, json.dumps(source) if source else None))
         EPOCHS[sid] = operations.capture(uid)
     kick(uid)
     log.info("озвучка %s: принята, частей %d", first[:8], len(pieces))
@@ -589,8 +653,10 @@ async def create(body: SpeechIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
     chat = _chat_rows(uid, body.chat_id)[0] if body.chat_id else None
-    text, conn, model, voice, name, language = _input(uid, body, body.chat_id, long=True)
-    return _out(_row(uid, _enqueue(uid, conn, model, voice, name, language, text, chat)))
+    text, conn, model, voice, name, language, source, limit = await _input(uid, body, body.chat_id, request, long=True)
+    if chat:
+        chat = _chat_rows(uid, chat["chat_id"])[0]
+    return _out(_row(uid, _enqueue(uid, conn, model, voice, name, language, text, chat, source=source, limit=limit)))
 
 
 def _read_voice(uid: int, conn, model: str) -> tuple[str, str]:
@@ -693,6 +759,12 @@ def read_restriction(uid: int, origin: Origin) -> dict | None:
         dialog, routed = _dialog_of(uid, origin.id)
         if routed or cleaner_route.dialog_routed(uid, dialog):
             return {"code": "cleaner_dialog", "message": cleaner_route.DIALOG_SPEECH}
+    if origin.kind in ("translate", "ocr"):
+        import mcp_sections
+        table = "translations" if origin.kind == "translate" else "scans"
+        row = state.DB.execute(f"SELECT mcp_source FROM {table} WHERE id = ? AND user_id = ?", (origin.id, uid)).fetchone()
+        if row is not None:
+            mcp_sections.require_media_share(row)
     if origin.kind == "translate" and _translation_used_cleaner(uid, origin.id):
         return {"code": "cleaner_translate", "message":
                 "перевод сделан через Cleaner, а модель речи внешняя — выберите внутреннюю модель речи"}
@@ -865,13 +937,17 @@ async def edit(sid: str, body: SpeechIn, request: Request):
         raise HTTPException(409, {"code": "running", "message": "дождитесь озвучки или отмените её"})
     if body.chat_id is not None and body.chat_id != row["chat_id"]:
         raise HTTPException(422, {"code": "chat", "message": "нельзя перенести запись в другой чат"})
-    text, conn, model, voice, name, language = _input(uid, body, row["chat_id"], long=False)
+    text, conn, model, voice, name, language, source, _ = await _input(uid, body, row["chat_id"], request, long=False)
+    row = _row(uid, sid)
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "дождитесь озвучки или отмените её"})
     # прежние поля и звук — до итога новой озвучки (п. 5 шапки); записи без звука возвращать нечего
     previous = json.dumps({k: row[k] for k in KEPT}, ensure_ascii=False) if row["media_id"] else None
     state.DB.execute("UPDATE speeches SET text = ?, connection_id = ?, model = ?, voice = ?, voice_name = ?, language = ?,"
                      " state = 'queued', detail = ?, media_id = NULL, duration = NULL, finished = NULL, queued = ?,"
-                     " previous = ?, previous_media_id = ? WHERE id = ?",
-                     (text, conn.id, model, voice, name, language, QUEUED, clock.NOW(), previous, row["media_id"], sid))
+                     " previous = ?, previous_media_id = ?, mcp_source = ? WHERE id = ?",
+                     (text, conn.id if conn else None, model, voice, name, language, QUEUED, clock.NOW(), previous,
+                      row["media_id"], json.dumps(source) if source else None, sid))
     EPOCHS[sid] = operations.capture(uid)
     kick(uid)
     return _out(_row(uid, sid))

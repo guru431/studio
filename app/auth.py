@@ -157,7 +157,13 @@ def create_session(user_id: int, device: str | None = None) -> tuple[str, str]:
     state.DB.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, seen, created, device, active)"
                      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (security.digest(value), user_id, csrf, now + SESSION_SEC, now, now, now, device, now))
+    mark_activity(user_id, now)
     return value, csrf
+
+
+def mark_activity(user_id: int, now: float) -> None:
+    state.DB.execute("UPDATE users SET last_activity = ? WHERE id = ?"
+                     " AND (last_activity IS NULL OR last_activity < ?)", (now, user_id, now))
 
 
 def screen_locked(enabled: int, mobile: int, seen: float | None, now: float,

@@ -235,7 +235,7 @@ def test_media_sections_cover_every_file_reference():
     covered = {(table, column) for tables in lock_policy.MEDIA_SOURCES.values()
                for table, columns in tables for column in columns}
     covered |= {("scans", "source_media_id"), ("scan_pages", "media_id"), ("chat_share_files", "media_id"),
-                ("mcp_section_files", "media_id")}
+                ("mcp_section_files", "media_id"), ("mcp_gallery_trash", "media_id"), ("mcp_gallery_trash", "source_media_id")}
     assert covered == {(table, column) for table, columns in media.REFERENCES.items() for column in columns}
 
 

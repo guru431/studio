@@ -45,6 +45,7 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me, toLogin } from './api.js';
+import { dropFiles } from './chat-drop.js';
 import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu, menuItem, popupMenu } from './menu.js';
@@ -54,7 +55,7 @@ import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
-import { sectionMcp } from './mcp-sections.js';
+import { mcpHeaders, sectionMcp } from './mcp-sections.js';
 import { photoView, RTL } from './translate-photo.js';
 import { picker } from './picker.js';
 import { renderMarkdown } from './markdown.js';
@@ -206,7 +207,7 @@ function build(view, ctx) {
   const bar = el('div', { class: 'composer-bar' },
     el('div', { class: 'composer-opts' }, mcp.control, mcp.fields, count), ctx.hint ? null : goBtn);
   const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
-    ...(ctx.hint ? [] : [fileInput, photoInput, attachMenu]));
+    fileInput, photoInput, attachMenu);
 
   /* правое окно */
   const status = el('p', { id: 'tl-status', class: 'tl-status small', 'aria-live': 'polite' });
@@ -387,10 +388,11 @@ function build(view, ctx) {
     const active = !!mcp.tool;
     goBtn.hidden = fresh.hidden = !!ctx.hint && !active;
     if (active && !goBtn.parentNode) bar.append(goBtn);
-    attach.hidden = !!ctx.hint || active;
+    attach.hidden = !!ctx.hint && !active;
     modelPick.wrap.hidden = !model.options.length || active;
     modelPick.sync();
     if (nativeHint) nativeHint.hidden = active;
+    paintRight();
   }
 
   /** Вид записи-снимка над правым окном: новый — на новую запись, та же — новые переводы блоков на слой. */
@@ -469,7 +471,7 @@ function build(view, ctx) {
     scanLink.hidden = !toScan;
     if (toScan) scanLink.href = `#/ocr?id=${encodeURIComponent(rec.scan_id)}`;
     stop.hidden = !running || rec.state === 'cancelling';
-    cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
+    cont.hidden = !(rec && rec.can_continue) || (!!ctx.hint && !rec.mcp);
     acts.hidden = running || !text;
     exportBtn.hidden = !rec;
     shareBtn.hidden = !rec || !!rec.mcp_share_blocked;
@@ -590,7 +592,7 @@ function build(view, ctx) {
     await docs.select(answer.id);
   }
 
-  function upload(file, langs, pick) {
+  function upload(file, langs, pick, transport) {
     sending = true;
     paintGo();
     const form = new FormData();
@@ -604,6 +606,7 @@ function build(view, ctx) {
       xhr.setRequestHeader('x-studio-target-lang', langs.target_lang);
       if (pick.connection_id) xhr.setRequestHeader('x-studio-connection', String(pick.connection_id));
       if (pick.model) xhr.setRequestHeader('x-studio-model', pick.model);
+      for (const [name, value] of Object.entries(mcpHeaders(transport) || {})) xhr.setRequestHeader(name, value);
     } catch {
       sending = false;
       paintGo();
@@ -639,7 +642,7 @@ function build(view, ctx) {
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): тот же файл — после отпирания
-        upload(file, langs, pick);
+        upload(file, langs, pick, transport);
         return;
       }
       error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
@@ -647,11 +650,11 @@ function build(view, ctx) {
     xhr.send(form);
   }
 
-  async function send(method, path, payload) {
+  async function send(method, path, payload, transport) {
     sending = true;
     paintGo();
     try {
-      await started(await api(method, path, payload));
+      await started(await api(method, path, payload, { headers: mcpHeaders(transport) }));
     } catch (err) {
       error.textContent = words(err);
     } finally {
@@ -665,45 +668,24 @@ function build(view, ctx) {
     error.textContent = '';
     const langs = { source_lang: source.value, target_lang: target.value };
     const pick = chosen();
-    if (mcp.tool) {
-      if (pending || (rec && rec.kind !== 'text')) {
-        error.textContent = tr("Уберите вложение и введите текст для перевода через MCP");
-      } else if (!input.value.trim()) {
-        error.textContent = tr("Введите текст");
-        input.focus();
-      } else {
-        const text = input.value;
-        choosing += 1;
-        sentText = text;
-        rec = null;
-        docs.deselect();
-        selection.save(null);
-        clearTimeout(timer);
-        loose = '';
-        paintRight();
-        paintHistory();
-        mcp.run({ text, ...langs, source_language: langs.source_lang, target_language: langs.target_lang })
-          .then(ok => { if (ok) draft.sent(text); });
-      }
-      return;
-    }
+    let transport;
+    try { transport = mcp.selection(); }
+    catch (err) { error.textContent = words(err); return; }
     if (pending) {
-      upload(pending.file, langs, pick);
+      upload(pending.file, langs, pick, transport);
     } else if (rec && rec.kind !== 'text') {
-      send('POST', `/api/translate/${encodeURIComponent(rec.id)}/repeat`, { ...langs, ...pick });
+      send('POST', `/api/translate/${encodeURIComponent(rec.id)}/repeat`, { ...langs, ...pick }, transport);
     } else if (!input.value.trim()) {
       error.textContent = tr("Введите текст");
       input.focus();
     } else {
       sentText = input.value;            // ушедший текст открытая следом запись в черновик не положит
       if (!rec) draft.take();            // черновик — прежняя копия этого же поля
-      send('POST', '/api/translate', { text: input.value, ...langs, ...pick });
+      send('POST', '/api/translate', { text: input.value, ...langs, ...pick }, transport);
     }
   }
 
-  async function choose(inputNode, photo) {
-    let file = inputNode.files[0];
-    inputNode.value = '';
+  async function choose(file, photo) {
     if (!file) return;
     const mine = ++choosing;
     preparing = photo;
@@ -858,8 +840,13 @@ function build(view, ctx) {
     }
   });
   goBtn.addEventListener('click', go);
-  fileInput.addEventListener('change', () => choose(fileInput, false));
-  photoInput.addEventListener('change', () => choose(photoInput, true));
+  for (const [picker, photo] of [[fileInput, false], [photoInput, true]]) picker.addEventListener('change', () => {
+    const file = picker.files[0];
+    picker.value = '';
+    choose(file, photo);
+  });
+  dropFiles(root, ([file]) => choose(file, PHOTO_ACCEPT.split(',').includes(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name)),
+    () => !attach.hidden && !attach.disabled);
   for (const select of [source, target]) {
     select.addEventListener('change', () => {
       touched = true;

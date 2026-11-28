@@ -163,6 +163,7 @@ const readings = new Map(); // один запрос состояния на р�
 let policy = null;       // GET /api/lock доступен раньше профиля
 let activityAt = 0;      // только настоящие действия пользователя, загрузка/возвращение их не подделывают
 let markedAt = 0;
+let interactedAt = 0, reportedAt = 0;
 let checkedAt = Date.now();
 let idleTimer = null;
 let forgotten = false;   // данные защищённых разделов уже забыты за это истечение (forgetGuarded)
@@ -275,9 +276,12 @@ async function mark(allowActivity = true) {
     const expired = currentPolicy().enabled && timeout > 0 && Date.now() - (activityAt || checkedAt) >= timeout * 1000;
     const active = timeout === 0 || (allowActivity && activityAt > markedAt && !expired);
     const sentAt = activityAt;
-    const { locked, expired: lapsed } = await api('POST', '/api/lock/alive', { touch: isTouch(), active, section: visibleSection() },
-      { signal: AbortSignal.timeout(MARK_SEC * 1000) });
+    const interaction = interactedAt;
+    const interacted = allowActivity && interaction > reportedAt && Date.now() - interaction < ALIVE_SEC * 2000;
+    const { locked, expired: lapsed } = await api('POST', '/api/lock/alive',
+      { touch: isTouch(), active, interacted, section: visibleSection() }, { signal: AbortSignal.timeout(MARK_SEC * 1000) });
     if (active) markedAt = Math.max(markedAt, sentAt);
+    if (interacted && !locked) reportedAt = Math.max(reportedAt, interaction);
     if (locked && guarded()) waitOpen();
     else forgetGuarded(!!lapsed);
     return locked;
@@ -300,12 +304,14 @@ function armIdle() {
 function activity(event) {
   if (!event.isTrusted || waiting || covering || document.visibilityState !== 'visible') return;
   const p = currentPolicy();
+  const now = Date.now();
   if (p.enabled && p.timeout > 0 && Date.now() - (activityAt || checkedAt) >= p.timeout * 1000) {
     // Первое нажатие после простоя (в том числе переход из открытого раздела) не продлевает доступ.
     if (guarded()) waitOpen(requestLock());
+    else interactedAt = now;
     return;
   }
-  activityAt = Date.now();
+  activityAt = interactedAt = now;
   if (activityAt - sharedAt >= SHARE_MS) {
     sharedAt = activityAt;
     channel?.postMessage({ t: 'activity', at: activityAt });
@@ -803,7 +809,7 @@ export function installLock() {
   back.addEventListener('click', eraseDigit);
   pinOk.addEventListener('click', openWithPin);
   document.addEventListener('keydown', onKey);
-  for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel']) document.addEventListener(event, activity, { passive: true, capture: true });
+  for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel', 'drop']) document.addEventListener(event, activity, { passive: true, capture: true });
   document.addEventListener('visibilitychange', onVisibility);
   if ('BroadcastChannel' in globalThis) {
     channel = new BroadcastChannel(CHANNEL);
